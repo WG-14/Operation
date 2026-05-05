@@ -487,6 +487,36 @@ def test_profile_promote_fails_when_parent_source_promotion_drifts(
     assert not out_path.exists()
 
 
+def test_profile_promote_small_live_fails_when_parent_source_promotion_drifts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+    paper = _profile(str(promotion_path))
+    live_dry_run = promote_profile_mode(
+        parent_profile=paper,
+        target_mode="live_dry_run",
+        paper_validation_evidence=str(_write_evidence(tmp_path, "paper_validation.json")),
+    )
+    live_dry_run_path = tmp_path / "live_dry_run.json"
+    write_json_atomic(live_dry_run_path, live_dry_run)
+    write_json_atomic(promotion_path, _promotion(repository_version="other-version"))
+    out_path = tmp_path / "small_live.json"
+
+    assert cmd_profile_promote(
+        profile_path=str(live_dry_run_path),
+        mode="small_live",
+        out_path=str(out_path),
+        paper_validation_evidence=None,
+        live_readiness_evidence=str(_write_evidence(tmp_path, "live_ready.json")),
+    ) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["error"] == "source_promotion_content_hash_mismatch"
+    assert not out_path.exists()
+
+
 def test_profile_promote_fails_when_parent_paper_validation_evidence_drifts(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -749,6 +779,37 @@ def test_profile_generation_accepts_managed_data_reports_source_promotion_path(t
     )
 
     assert profile["source_promotion_artifact_path"] == str(promotion_path.resolve())
+
+
+def test_profile_promote_accepts_managed_data_reports_evidence_path(tmp_path: Path) -> None:
+    manager = PathManager(
+        project_root=Path.cwd(),
+        config=PathConfig(
+            mode="paper",
+            env_root=tmp_path / "env_root",
+            run_root=tmp_path / "run_root",
+            data_root=tmp_path / "data_root",
+            log_root=tmp_path / "log_root",
+            backup_root=tmp_path / "backup_root",
+        ),
+    )
+    promotion_path = manager.data_dir() / "reports" / "research" / "promotion.json"
+    evidence_path = manager.data_dir() / "reports" / "profiles" / "paper_validation.json"
+    promotion_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(promotion_path, _promotion())
+    evidence_path.write_text('{"ok":true}\n', encoding="utf-8")
+    parent = _profile(str(promotion_path))
+
+    child = promote_profile_mode(
+        parent_profile=parent,
+        target_mode="live_dry_run",
+        paper_validation_evidence=str(evidence_path),
+        manager=manager,
+    )
+
+    assert child["paper_validation_evidence_path"] == str(evidence_path.resolve())
+    assert child["paper_validation_evidence_content_hash"] == compute_file_content_hash(evidence_path)
 
 
 def test_live_runtime_arming_ambiguity_returns_reason_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

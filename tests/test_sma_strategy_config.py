@@ -225,6 +225,10 @@ def test_approved_profile_selector_is_marked_full_contract_not_legacy(
     assert config.candidate_regime_policy["legacy_candidate_profile_path_used"] is False
     assert config.candidate_regime_policy.get("legacy_profile_contract_scope") is None
     assert config.candidate_regime_policy["approved_profile_contract_scope"] == "full_approved_profile"
+    assert config.candidate_regime_policy.get("legacy_profile_contract_scope") not in {
+        "regime_policy_only",
+        "full_approved_profile",
+    }
     assert config.candidate_regime_policy["approved_profile_verification_ok"] is True
     assert config.candidate_regime_policy["approved_profile_loaded"] is True
     assert config.candidate_regime_policy["approved_profile_schema_hash_valid"] is True
@@ -283,6 +287,7 @@ def test_legacy_candidate_path_to_approved_profile_is_marked_regime_policy_only(
     )
     assert config.candidate_regime_policy["legacy_candidate_profile_path_used"] is True
     assert config.candidate_regime_policy["legacy_profile_contract_scope"] == "regime_policy_only"
+    assert config.candidate_regime_policy["approved_profile_contract_scope"] == "legacy_regime_policy_only"
 
 
 def test_existing_sma_constructor_behavior_is_preserved() -> None:
