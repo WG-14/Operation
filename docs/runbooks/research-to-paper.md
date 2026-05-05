@@ -98,6 +98,8 @@ uv run bithumb-bot profile-verify \
 
 Set `APPROVED_STRATEGY_PROFILE_PATH` in the paper env file only after operator review. `STRATEGY_APPROVED_PROFILE_PATH` is an older approved-profile alias used only when the canonical selector is unset; if both are present, the canonical selector wins. `STRATEGY_CANDIDATE_PROFILE_PATH` is legacy regime-policy-only compatibility and cannot satisfy live approved-profile requirements. Do not automate promotion into paper or live env files. Keep paper and live storage roots separate. `profile-diff` compares profile values to env/runtime values and does not verify source promotion or evidence artifacts. The full `profile-verify` chain checks that the env selector resolves to the exact `--profile` path, then checks strategy name, market, interval, strategy parameters, cost model, source promotion artifact path and content hash, candidate profile hash, manifest hash, dataset content hash, profile mode, evidence artifact hashes, and regime policy.
 
+In runtime and decision telemetry, the approved selector path is reported as `approved_profile_contract_scope=full_approved_profile` with `legacy_candidate_profile_path_used=false` only after full source, evidence, and runtime verification succeeds. Legacy `STRATEGY_CANDIDATE_PROFILE_PATH` usage is reported as `approved_profile_contract_scope=legacy_regime_policy_only` and `legacy_profile_contract_scope=regime_policy_only`; it may load regime policy for compatibility, but it must not be read as approved-profile verification. `approved_profile_verification_ok=true` is reserved for the full approved-profile contract.
+
 10. Run paper observation.
 
 ```bash

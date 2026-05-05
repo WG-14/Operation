@@ -88,6 +88,14 @@ def _candidate_regime_policy_from_configured_profile(
         return {
             "_policy_load_error": "approved_profile_missing",
             "_policy_source": raw_path,
+            "approved_profile_verification_ok": False,
+            "approved_profile_block_reason": "approved_profile_missing",
+            "approved_profile_loaded": False,
+            "approved_profile_schema_hash_valid": False,
+            "approved_profile_source_verified": False,
+            "approved_profile_evidence_verified": False,
+            "approved_profile_runtime_verified": False,
+            "approved_profile_contract_scope": "legacy_regime_policy_only",
             "legacy_candidate_profile_path_used": True,
             "legacy_profile_contract_scope": "regime_policy_only",
             "legacy_profile_selector_env": LEGACY_PROFILE_SELECTOR_ENV,
@@ -117,10 +125,19 @@ def _candidate_regime_policy_from_configured_profile(
         ),
     )
     if policy is not None:
-        policy = {
-            **policy,
-            "legacy_candidate_profile_path_used": True,
-            "legacy_profile_contract_scope": "regime_policy_only",
-            "legacy_profile_selector_env": LEGACY_PROFILE_SELECTOR_ENV,
-        }
+        if raw_path == approved_profile_path:
+            policy = {
+                **policy,
+                "legacy_candidate_profile_path_used": False,
+                "legacy_profile_contract_scope": "full_approved_profile",
+                "approved_profile_contract_scope": "full_approved_profile",
+            }
+        else:
+            policy = {
+                **policy,
+                "legacy_candidate_profile_path_used": True,
+                "legacy_profile_contract_scope": "regime_policy_only",
+                "approved_profile_contract_scope": "legacy_regime_policy_only",
+                "legacy_profile_selector_env": LEGACY_PROFILE_SELECTOR_ENV,
+            }
     return policy

@@ -261,20 +261,44 @@ def test_profile_diff_json_clarifies_artifact_chain_is_not_verified(
     assert payload["use_profile_verify_for_artifact_chain"] is True
 
 
-def test_profile_verify_fails_on_strategy_parameter_mismatch(tmp_path: Path) -> None:
+def test_profile_verify_fails_on_strategy_parameter_mismatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     profile_path = _write_profile_with_source(tmp_path)
     env_path = tmp_path / "paper.env"
     _write_env(env_path, sma_short=99, profile_path=str(profile_path))
 
     assert cmd_profile_verify(profile_path=str(profile_path), env_path=str(env_path)) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["reason"] == "approved_profile_runtime_mismatch"
+    assert payload["approved_profile_loaded"] is True
+    assert payload["approved_profile_schema_hash_valid"] is True
+    assert payload["approved_profile_source_verified"] is True
+    assert payload["approved_profile_evidence_verified"] is True
+    assert payload["approved_profile_runtime_verified"] is False
+    assert payload["approved_profile_mismatch_count"] == 1
 
 
-def test_profile_verify_passes_when_env_matches(tmp_path: Path) -> None:
+def test_profile_verify_passes_when_env_matches(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     profile_path = _write_profile_with_source(tmp_path)
     env_path = tmp_path / "paper.env"
     _write_env(env_path, profile_path=str(profile_path))
 
     assert cmd_profile_verify(profile_path=str(profile_path), env_path=str(env_path)) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["approved_profile_loaded"] is True
+    assert payload["approved_profile_schema_hash_valid"] is True
+    assert payload["approved_profile_source_verified"] is True
+    assert payload["approved_profile_evidence_verified"] is True
+    assert payload["approved_profile_runtime_verified"] is True
+    assert payload["approved_profile_contract_scope"] == "full_approved_profile"
+    assert payload["legacy_candidate_profile_path_used"] is False
 
 
 def test_profile_verify_json_preserves_ambiguous_live_flags_reason(
@@ -329,16 +353,25 @@ def test_profile_verify_fails_when_paper_env_selector_missing(tmp_path: Path) ->
     assert cmd_profile_verify(profile_path=str(profile_path), env_path=str(env_path)) == 1
 
 
-def test_profile_verify_fails_when_source_promotion_hash_drifts(tmp_path: Path) -> None:
+def test_profile_verify_fails_when_source_promotion_hash_drifts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     profile_path = _write_profile_with_source(tmp_path)
     env_path = tmp_path / "paper.env"
     _write_env(env_path, profile_path=str(profile_path))
-    promotion = _promotion()
-    promotion["dataset_content_hash"] = "sha256:other-dataset"
-    promotion["content_hash"] = sha256_prefixed(content_hash_payload(promotion))
+    promotion = _promotion(repository_version="other-version")
     write_json_atomic(tmp_path / "promotion.json", promotion)
 
     assert cmd_profile_verify(profile_path=str(profile_path), env_path=str(env_path)) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["reason"] == "source_promotion_content_hash_mismatch"
+    assert payload["approved_profile_loaded"] is True
+    assert payload["approved_profile_schema_hash_valid"] is True
+    assert payload["approved_profile_source_verified"] is False
+    assert payload["approved_profile_evidence_verified"] is False
+    assert payload["approved_profile_runtime_verified"] is False
 
 
 def test_profile_diff_detects_profile_mode_env_incompatibility(tmp_path: Path) -> None:
@@ -431,7 +464,10 @@ def test_profile_promote_fails_when_live_readiness_evidence_missing(tmp_path: Pa
     ) == 1
 
 
-def test_profile_promote_fails_when_parent_source_promotion_drifts(tmp_path: Path) -> None:
+def test_profile_promote_fails_when_parent_source_promotion_drifts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     profile_path = _write_profile_with_source(tmp_path)
     promotion = _promotion(repository_version="other-version")
     write_json_atomic(tmp_path / "promotion.json", promotion)
@@ -443,9 +479,15 @@ def test_profile_promote_fails_when_parent_source_promotion_drifts(tmp_path: Pat
         paper_validation_evidence=str(_write_evidence(tmp_path, "paper_validation.json")),
         live_readiness_evidence=None,
     ) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["error"] == "source_promotion_content_hash_mismatch"
 
 
-def test_profile_promote_fails_when_parent_paper_validation_evidence_drifts(tmp_path: Path) -> None:
+def test_profile_promote_fails_when_parent_paper_validation_evidence_drifts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     promotion_path = tmp_path / "promotion.json"
     write_json_atomic(promotion_path, _promotion())
     paper = _profile(str(promotion_path))
@@ -466,6 +508,9 @@ def test_profile_promote_fails_when_parent_paper_validation_evidence_drifts(tmp_
         paper_validation_evidence=None,
         live_readiness_evidence=str(_write_evidence(tmp_path, "live_ready.json")),
     ) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["error"] == "paper_validation_evidence_content_hash_mismatch"
 
 
 def test_regime_policy_helper_verify_source_fails_on_source_drift(tmp_path: Path) -> None:
@@ -479,6 +524,11 @@ def test_regime_policy_helper_verify_source_fails_on_source_drift(tmp_path: Path
     assert policy["_policy_load_error"] == "source_promotion_content_hash_mismatch"
     assert policy["approved_profile_verification_ok"] is False
     assert policy["approved_profile_block_reason"] == "source_promotion_content_hash_mismatch"
+    assert policy["approved_profile_loaded"] is True
+    assert policy["approved_profile_schema_hash_valid"] is True
+    assert policy["approved_profile_source_verified"] is False
+    assert policy["approved_profile_evidence_verified"] is False
+    assert policy["approved_profile_runtime_verified"] is False
 
 
 def test_regime_policy_helper_without_verify_source_marks_legacy_scope(tmp_path: Path) -> None:
@@ -494,6 +544,11 @@ def test_regime_policy_helper_without_verify_source_marks_legacy_scope(tmp_path:
     assert policy["approved_profile_verification_ok"] is False
     assert policy["approved_profile_block_reason"] == "legacy_regime_policy_only_source_not_verified"
     assert policy["approved_profile_contract_scope"] == "legacy_regime_policy_only"
+    assert policy["approved_profile_loaded"] is True
+    assert policy["approved_profile_schema_hash_valid"] is True
+    assert policy["approved_profile_source_verified"] is False
+    assert policy["approved_profile_evidence_verified"] is False
+    assert policy["approved_profile_runtime_verified"] is False
 
 
 def test_runtime_contract_settings_supports_approved_profile_alias_with_canonical_precedence(
@@ -557,7 +612,10 @@ def test_changing_evidence_content_changes_child_profile_hash(tmp_path: Path) ->
     assert first_child["profile_content_hash"] != second_child["profile_content_hash"]
 
 
-def test_profile_verify_fails_when_evidence_content_drifts(tmp_path: Path) -> None:
+def test_profile_verify_fails_when_evidence_content_drifts(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     promotion_path = tmp_path / "promotion.json"
     write_json_atomic(promotion_path, _promotion())
     paper = _profile(str(promotion_path))
@@ -574,6 +632,14 @@ def test_profile_verify_fails_when_evidence_content_drifts(tmp_path: Path) -> No
     evidence_path.write_text('{"ok":false}\n', encoding="utf-8")
 
     assert cmd_profile_verify(profile_path=str(child_path), env_path=str(env_path)) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["reason"] == "paper_validation_evidence_content_hash_mismatch"
+    assert payload["approved_profile_loaded"] is True
+    assert payload["approved_profile_schema_hash_valid"] is True
+    assert payload["approved_profile_source_verified"] is True
+    assert payload["approved_profile_evidence_verified"] is False
+    assert payload["approved_profile_runtime_verified"] is False
 
 
 def test_profile_generation_rejects_repo_local_source_promotion_path() -> None:

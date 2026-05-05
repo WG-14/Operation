@@ -1,16 +1,14 @@
 You are working in the GitHub repository `WG-14/bithumb-bot`.
 
-The latest patch appears to have closed most of the previous structural holes: approved profile hashing is now explicit, evidence artifacts are content-hashed, source promotion paths are resolved and checked, env selector mismatch is detected, legacy candidate profile usage is marked, and profile writes are centralized.
+The latest patch appears to have closed most of the approved-profile contract gaps: ambiguous live flag reason codes are now passed through CLI/runtime verification, selector alias precedence is more consistent, `load_profile_or_promotion_regime_policy()` has a `verify_source` option, and `profile-diff` now clarifies that it does not verify the full artifact chain.
 
-Do **not** assume the system is complete. Your task is to directly inspect the repo, verify the hypotheses below, and apply only the additional patches needed to fully close the approved-profile runtime contract.
+Do **not** assume the implementation is complete. Your task is to directly inspect the repo, verify the remaining hypotheses below, and apply only the additional patches needed to preserve accurate runtime auditability and artifact-chain integrity.
 
-The core goal remains:
+The main risk now is not automatic trading safety being bypassed. The main risk is **observability drift**: a normal approved-profile runtime path may still be reported as legacy/regime-policy-only, which undermines the goal of reproducible, auditable operation.
 
-> “Profile verified” must mean the runtime env selects this exact approved profile, the profile’s parent/source/evidence chain is intact, live mode ambiguity is reason-coded, successful and failed runtime decisions expose the active artifact chain, and live execution fails closed on dangerous drift.
+## Core safety and audit objective
 
-Do not weaken the verified manual approval flow. Do not introduce automatic research-to-live propagation.
-
-## Core safety model to preserve
+Preserve this model:
 
 ```text
 research evidence
@@ -24,6 +22,10 @@ approved live-dry-run profile
 approved small-live profile
 ```
 
+The success criterion is:
+
+> A runtime using a full approved profile must be auditable as a full approved profile. A legacy candidate-profile compatibility path must be auditable as legacy/regime-policy-only. These two paths must never be conflated.
+
 Do **not**:
 
 * connect the research registry directly to live execution
@@ -35,325 +37,237 @@ Do **not**:
 * weaken ledger/reconciliation protections
 * require exchange credentials for profile CLI/tests
 * make deterministic hashes depend on timestamps
+* hide legacy compatibility usage behind fields that look like full verification
 
 ## Hypotheses to verify or falsify
 
-Treat these as hypotheses, not facts. Inspect the repo before modifying code.
+Treat each item as a hypothesis, not a fact. Inspect the repo before modifying code.
 
-### Hypothesis A — live arming ambiguity reason codes may be produced but lost before CLI/runtime output
+### Hypothesis A — `strategy_config.py` may mark approved-profile usage as legacy/regime-policy-only
 
-`expected_profile_modes_for_runtime(runtime)` may return both expected modes and a reason, for example:
+In `strategy_config.py`, the code may distinguish approved selector vs legacy selector when loading the profile, but then unconditionally append fields like:
 
 ```python
-(set(), "live_mode_arming_flags_ambiguous")
-(set(), "live_mode_not_dry_run_or_armed")
+policy = {
+    **policy,
+    "legacy_candidate_profile_path_used": True,
+    "legacy_profile_contract_scope": "regime_policy_only",
+    "legacy_profile_selector_env": LEGACY_PROFILE_SELECTOR_ENV,
+}
 ```
 
-But `profile-verify` or runtime verification may pass only the first value into `verify_profile_against_runtime`, causing the precise reason code to be lost and replaced with a generic mode mismatch.
+If this is true, then even a normal approved-profile path where `raw_path == approved_profile_path` may be reported in runtime audit/decision context as legacy/regime-policy-only.
 
-Verify whether this happens in:
-
-* `profile_cli.py`
-* runtime/preflight verification paths
-* tests
+This is a high-priority observability bug. It can make a correctly verified approved profile appear as a legacy path, corrupting postmortem and reproducibility evidence.
 
 Required patch if verified:
 
-* Preserve the explicit reason from `expected_profile_modes_for_runtime`.
-* Pass it into verification as an explicit argument, or return a small dataclass instead of a tuple.
-* Ensure CLI JSON output and runtime/preflight audit output contain the precise reason.
-
-Suggested shape:
-
 ```python
-expected_modes, mode_reason = expected_profile_modes_for_runtime(runtime)
-
-result = verify_profile_against_runtime(
-    profile_path=profile_path,
-    runtime=runtime,
-    require_profile=True,
-    expected_profile_modes=expected_modes,
-    expected_profile_mode_reason=mode_reason,
-    verify_source_promotion=True,
-)
+if policy is not None:
+    if raw_path == approved_profile_path:
+        policy = {
+            **policy,
+            "legacy_candidate_profile_path_used": False,
+            "legacy_profile_contract_scope": "full_approved_profile",
+            "approved_profile_contract_scope": "full_approved_profile",
+        }
+    else:
+        policy = {
+            **policy,
+            "legacy_candidate_profile_path_used": True,
+            "legacy_profile_contract_scope": "regime_policy_only",
+            "approved_profile_contract_scope": "legacy_regime_policy_only",
+            "legacy_profile_selector_env": LEGACY_PROFILE_SELECTOR_ENV,
+        }
 ```
 
-Use repo style and naming.
+Adapt field names to existing repo conventions, but preserve the distinction clearly.
 
 Required tests:
 
-* `MODE=live`, `LIVE_DRY_RUN=true`, `LIVE_REAL_ORDER_ARMED=true` must fail with exact reason `live_mode_arming_flags_ambiguous`.
-* `MODE=live`, `LIVE_DRY_RUN=false`, `LIVE_REAL_ORDER_ARMED=false` must fail with exact reason `live_mode_not_dry_run_or_armed`.
-* These reasons must be visible in `profile-verify` JSON output.
-* If runtime/preflight has separate output, assert the same reason is preserved there.
+* When `APPROVED_STRATEGY_PROFILE_PATH` selects an approved profile:
+
+  * `legacy_candidate_profile_path_used == False`
+  * `legacy_profile_contract_scope == "full_approved_profile"` or the legacy field is absent
+  * `approved_profile_contract_scope == "full_approved_profile"`
+  * `approved_profile_verification_ok == True`
+  * approved profile hash/source/promotion fields remain present
+* When only `STRATEGY_CANDIDATE_PROFILE_PATH` is used in paper/replay compatibility mode:
+
+  * `legacy_candidate_profile_path_used == True`
+  * `legacy_profile_contract_scope == "regime_policy_only"`
+  * `approved_profile_contract_scope == "legacy_regime_policy_only"` or equivalent
+* In live mode with only legacy path and no approved profile selector:
+
+  * live still fails closed before BUY
+  * failure remains `approved_profile_missing` or the repo’s existing equivalent reason
+* No approved-profile success path should be labeled legacy/regime-policy-only.
 
 Priority: **high**.
 
 ---
 
-### Hypothesis B — profile promotion may not re-check parent source/evidence drift before creating the child profile
+### Hypothesis B — `approved_profile_verification_ok` may be overloaded between full verification and legacy regime-only loading
 
-`verify_profile_source_promotion(profile)` may correctly verify:
+`load_profile_or_promotion_regime_policy()` may return:
 
-* source promotion artifact path policy
-* source promotion content hash
-* candidate/profile metadata drift
-* evidence artifact path/hash drift
+```python
+source_verified = bool(verify_source)
+block_reason = "ok" if source_verified else "legacy_regime_policy_only_source_not_verified"
+"approved_profile_verification_ok": source_verified
+```
 
-But `cmd_profile_promote()` may only do:
+This is conservative, but the meaning can become ambiguous if later code also attaches legacy markers incorrectly.
+
+Verify whether the repo cleanly separates:
+
+* profile loaded
+* profile schema hash validated
+* source promotion verified
+* evidence verified
+* runtime/env contract verified
+* full approved-profile contract active
+* legacy regime-policy-only compatibility active
+
+Required patch if verified:
+
+Introduce or standardize explicit audit fields, for example:
+
+```json
+{
+  "approved_profile_loaded": true,
+  "approved_profile_schema_hash_valid": true,
+  "approved_profile_source_verified": true,
+  "approved_profile_evidence_verified": true,
+  "approved_profile_runtime_verified": true,
+  "approved_profile_contract_scope": "full_approved_profile",
+  "legacy_candidate_profile_path_used": false
+}
+```
+
+For legacy/regime-only compatibility paths:
+
+```json
+{
+  "approved_profile_loaded": true,
+  "approved_profile_schema_hash_valid": true,
+  "approved_profile_source_verified": false,
+  "approved_profile_evidence_verified": false,
+  "approved_profile_runtime_verified": false,
+  "approved_profile_contract_scope": "legacy_regime_policy_only",
+  "legacy_candidate_profile_path_used": true
+}
+```
+
+Do not make legacy regime-only paths look like full approved-profile verification.
+
+Required tests:
+
+* Full approved profile path emits clear full-verification fields.
+* Legacy regime-only path emits clear partial/legacy fields.
+* Source/evidence drift on a full approved profile does not produce ambiguous “loaded but ok” telemetry.
+* Runtime mismatch on a full approved profile produces a reason-coded failure.
+
+Priority: **medium-high**.
+
+---
+
+### Hypothesis C — `profile-promote` may still not re-verify parent source/evidence drift before creating a child profile
+
+The CLI may still do:
 
 ```python
 parent = load_approved_profile(profile_path)
 child = promote_profile_mode(...)
 ```
 
-If `promote_profile_mode()` itself does not call `verify_profile_source_promotion(parent_profile)` before constructing the child profile, a paper profile whose source promotion or evidence artifact drifted could still be promoted.
+This is safe only if `promote_profile_mode()` itself calls `verify_profile_source_promotion(parent_profile)` before creating the child profile.
 
 Verify the full implementation of `promote_profile_mode()`.
 
 Required patch if verified:
 
-* At the start of `promote_profile_mode()`, call `verify_profile_source_promotion(parent_profile)`.
-* Ensure this also checks parent evidence drift.
-* If child generation re-loads source promotion, keep that too; do not remove useful checks.
-* Make the failure reason specific, e.g. `source_promotion_content_hash_mismatch`, `paper_validation_evidence_content_hash_mismatch`, etc.
-
-Required tests:
-
-* Generate a paper profile.
-* Mutate the source promotion artifact.
-* Attempt `profile-promote` to `live_dry_run`.
-* It must fail.
-* Generate a live-dry-run profile with paper validation evidence.
-* Mutate the paper validation evidence.
-* Attempt promotion to `small_live`.
-* It must fail.
-* The CLI output must expose the reason code.
-
-Priority: **high**.
-
----
-
-### Hypothesis C — runtime selector alias handling may be inconsistent between env-file verification and settings-based runtime verification
-
-Env-file parsing may accept both:
-
-* `APPROVED_STRATEGY_PROFILE_PATH`
-* `STRATEGY_APPROVED_PROFILE_PATH`
-
-But `runtime_contract_from_settings()` may only read `APPROVED_STRATEGY_PROFILE_PATH`.
-
-This can cause CLI and actual runtime/preflight behavior to diverge.
-
-Verify:
-
-* whether `STRATEGY_APPROVED_PROFILE_PATH` is a supported alias in config/settings
-* whether docs mention it
-* whether env-file contract and settings contract use the same precedence
-* whether tests cover both canonical and alias selectors
-
-Required patch if verified:
-
-Either make alias support consistent:
+At the start of `promote_profile_mode()`:
 
 ```python
-"profile_selector": (
-    str(getattr(cfg, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-    or str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
-)
+verify_profile_source_promotion(parent_profile)
 ```
 
-or remove/deprecate the alias consistently from:
+This must check both:
 
-* env parsing
-* config
-* docs
-* tests
+* source promotion artifact drift
+* parent evidence artifact drift
 
-If both are supported, precedence must be deterministic and documented.
+Do not rely only on `validate_approved_profile(parent_profile)`.
 
 Required tests:
 
-* canonical selector works in env-file verification
-* canonical selector works in settings/runtime verification
-* alias selector works or fails according to documented policy
-* if both are set, precedence is deterministic and tested
+* Generate paper profile.
+* Mutate source promotion artifact.
+* Attempt `profile-promote --mode live_dry_run`.
+* It must fail with `source_promotion_content_hash_mismatch` or equivalent.
+* Generate live-dry-run profile with paper validation evidence.
+* Mutate paper validation evidence.
+* Attempt `profile-promote --mode small_live`.
+* It must fail with `paper_validation_evidence_content_hash_mismatch` or equivalent.
+* Failure must be visible in CLI JSON.
 
-Priority: **medium-high**.
-
----
-
-### Hypothesis D — successful approved profile verification audit fields may not always reach startup logs and decision telemetry
-
-`ProfileVerificationResult.audit_fields()` may include the right fields, but successful verification may not be explicitly merged into runtime policy/context. Failure paths may expose audit fields, while success paths may only expose a subset through `load_profile_or_promotion_regime_policy()`.
-
-Verify actual propagation into:
-
-* startup/preflight output
-* strategy config
-* decision context
-* BUY block telemetry
-* normal BUY decision telemetry
-* paper/replay decision output if applicable
-
-Required patch if verified:
-
-* On successful verification, explicitly merge `result.audit_fields()` into the policy/context that reaches runtime decisions.
-* Startup/preflight success should log or emit:
-
-  * `approved_profile_verification_ok=true`
-  * `approved_profile_path`
-  * `approved_profile_mode`
-  * `approved_profile_hash`
-  * `promotion_content_hash`
-  * `candidate_profile_hash`
-  * `manifest_hash`
-  * `dataset_content_hash`
-  * evidence hash fields when present
-* On failure, emit reason-coded fields, including:
-
-  * `approved_profile_runtime_mismatch`
-  * `profile_mode_mismatch`
-  * `source_promotion_content_hash_mismatch`
-  * `approved_profile_selector_mismatch`
-  * `live_mode_arming_flags_ambiguous`
-* Ensure no secrets are logged.
-
-Required tests:
-
-* Normal successful approved profile path includes profile/source/promotion/hash chain in startup/preflight audit.
-* Normal BUY decision context contains the approved profile hash chain.
-* Blocked BUY decision caused by profile mismatch contains a reason-coded profile failure.
-* SELL/exit behavior is not blocked solely by profile/regime-policy failure unless existing repo safety rules explicitly require it.
-
-Priority: **medium-high**.
+Priority: **high**, unless already implemented and tested.
 
 ---
 
-### Hypothesis E — `load_profile_or_promotion_regime_policy()` validates approved profile structure but may not verify source/evidence drift
+### Hypothesis D — artifact custody path policy may still be only “outside repo,” not “inside data root/reports”
 
-This helper may call `validate_approved_profile()` when the file is an approved profile, but not `verify_profile_source_promotion()`. The primary approved selector path may be safe if verification happens earlier, but helper-level behavior can become dangerous if:
+`resolve_runtime_artifact_path()` may reject repo-local paths and require file existence, but still allow arbitrary external absolute paths such as `/tmp/random.json`.
 
-* another caller uses it directly
-* legacy `STRATEGY_CANDIDATE_PROFILE_PATH` points to an approved profile file
-* paper/replay uses it without source verification
+This is not necessarily wrong, but the policy must be explicit. For a live trading system, artifact custody is part of reproducibility.
 
-Verify all callers.
+Verify current behavior and docs for:
 
-Required patch if verified:
+* source promotion artifact paths
+* paper validation evidence paths
+* live readiness evidence paths
+* approved profile output paths
 
-* Add an option such as `verify_source: bool = False` or stricter default behavior for approved profiles.
-* In `strategy_config.py`, choose source verification policy explicitly for:
+Required action:
 
-  * approved profile selector path
-  * legacy candidate profile path
-  * paper/replay compatibility path
-* If a legacy path points to an approved profile, either verify its source/evidence chain or mark it as legacy/regime-policy-only with a reason-coded audit field.
-* Do not allow helper behavior to silently imply full approved-profile verification when only regime policy was loaded.
+Choose one policy and implement/document it consistently.
 
-Required tests:
+Option 1 — strict custody:
 
-* Approved profile loaded through this helper with source drift fails when `verify_source=True`.
-* Legacy path to approved profile either verifies source/evidence drift or emits explicit legacy-scope audit fields.
-* Live mode with only legacy path still fails approved profile requirement.
-* Paper/replay legacy path behavior is documented and tested.
+* live-dry-run and small-live profile promotion must require source/evidence artifacts under `PathManager.data_dir()` or reports/profile roots.
+* repo-local paths remain rejected.
+* arbitrary external paths are rejected for live transitions.
+* paper profile generation may be looser only if explicitly documented.
 
-Priority: **medium**.
+Option 2 — external absolute paths allowed:
 
----
+* repo-local paths remain rejected.
+* external absolute paths are accepted.
+* all external artifacts are content-hashed.
+* docs clearly state that operators are responsible for custody of external evidence/source artifacts.
+* CLI output should expose absolute paths and hashes clearly.
 
-### Hypothesis F — source/evidence path policy may only require “outside repo,” not “inside data root / reports custody”
+Required tests depending on chosen policy:
 
-Current path policy may block repo-local artifacts but allow arbitrary external absolute paths such as `/tmp/random.json`.
-
-This may be acceptable for compatibility, but it weakens artifact custody if undocumented.
-
-Verify:
-
-* current path policy for source promotion artifacts
-* current path policy for paper validation evidence
-* current path policy for live readiness evidence
-* current path policy for approved profile output
-* docs/runbooks
-
-Required patch if verified and repo policy should be stricter:
-
-* For live profile promotion, require source/evidence/profile artifacts to be under `PathManager.data_dir()` or a reports/profile root.
-* Optionally allow looser external paths in paper mode, but make the mode-specific policy explicit.
-* Add reason codes such as:
-
-  * `source_promotion_artifact_path_outside_data_root`
-  * `paper_validation_evidence_path_outside_data_root`
-  * `live_readiness_evidence_path_outside_data_root`
-
-If strict data-root custody is intentionally not implemented now, update docs clearly:
-
-* external absolute artifact paths are allowed
-* repo-local paths are rejected
-* all external artifacts are content-hashed
-* operators are responsible for custody of external evidence files
-
-Required tests, depending on chosen policy:
-
-* repo-local path rejected
+* repo-local artifact/evidence path rejected
 * missing path rejected
+* data-root/reports path accepted
 * external absolute path accepted or rejected according to documented policy
-* data-root path accepted
-* live promotion path policy is stricter if implemented
+* live promotion follows the stricter policy if implemented
 
 Priority: **medium**.
-
----
-
-### Hypothesis G — `profile-diff` may be misunderstood as full artifact-chain verification
-
-`profile-diff` may only compare profile values against env/runtime values, while source promotion drift and evidence drift are checked by `profile-verify`.
-
-This can be correct, but operator output and docs must not imply that `profile-diff` verifies the full artifact chain.
-
-Required patch if verified:
-
-Either:
-
-* Add fields to `profile-diff` output:
-
-```json
-{
-  "source_promotion_verified": false,
-  "evidence_verified": false,
-  "use_profile_verify_for_artifact_chain": true
-}
-```
-
-or:
-
-* Add `profile-diff --verify-artifact-chain` and wire it to source/evidence verification.
-
-Also update docs/runbooks to distinguish:
-
-* `profile-diff`: env/runtime value comparison
-* `profile-verify`: env selector + runtime contract + source/evidence artifact chain verification
-
-Required tests:
-
-* `profile-diff` output includes the clarification fields, or
-* `profile-diff --verify-artifact-chain` fails on source/evidence drift
-
-Priority: **low-medium**.
 
 ---
 
 ## Required implementation priorities
 
-Unless repo inspection reveals a more severe safety issue, implement in this order:
+Implement in this order unless repo inspection reveals a more severe safety issue:
 
-1. Preserve exact ambiguous live flag reason codes through `profile-verify` and runtime/preflight.
-2. Ensure `profile-promote` re-verifies parent source promotion and evidence drift before child creation.
-3. Ensure successful approved profile verification audit fields reach startup/preflight and decision telemetry.
-4. Make selector alias behavior consistent between env-file verification and settings/runtime verification.
-5. Add explicit source verification policy to `load_profile_or_promotion_regime_policy()`.
-6. Decide and document artifact custody path policy: repo-outside-only vs data-root/reports-only.
-7. Clarify `profile-diff` output or add artifact-chain verification option.
+1. Fix approved-profile audit labeling so approved paths are never marked legacy/regime-policy-only.
+2. Clarify verification audit semantics so full approved-profile verification and legacy regime-only loading are visibly distinct.
+3. Verify `promote_profile_mode()` re-checks parent source/evidence drift; patch if missing.
+4. Decide and document artifact custody path policy.
 
 ## Runtime safety requirements
 
@@ -361,44 +275,53 @@ Live mode:
 
 * Missing approved profile must fail closed before BUY.
 * Legacy candidate profile path must not satisfy approved live profile requirements.
+* Approved profile success path must not be labeled legacy.
 * Profile/env mismatch must fail closed before BUY.
 * Source promotion drift must fail closed before BUY.
 * Evidence drift must fail closed before BUY if evidence is part of the active profile chain.
 * Ambiguous live flags must fail with precise reason codes.
-* Successful verification must leave audit fields sufficient to reproduce active profile chain.
+* Successful verification must leave audit fields sufficient to reproduce the active artifact chain.
 
 Paper/replay mode:
 
-* Prefer the same verification path where an approved profile selector is used.
-* If legacy candidate profile path is still allowed, it must be visibly marked as legacy/regime-policy-only.
-* Drift or missing evidence behavior must be documented and tested.
+* Approved profile selector path should be audited as full approved-profile if source/runtime verification succeeds.
+* Legacy candidate path may remain as compatibility/regime-policy-only, but it must be visibly marked as such.
+* Legacy compatibility must not be confused with full approved-profile verification.
 
 SELL/exit:
 
 * Do not block SELL/exit solely because candidate regime policy or approved profile verification failed, unless existing repo safety rules explicitly require that behavior.
-* Add regression tests if this behavior is not already pinned.
+* Add or preserve regression tests for this.
 
 ## Observability requirements
 
-Expose these fields on successful verification and failure paths wherever runtime/preflight/decision context exists:
+For a full approved-profile path, runtime/preflight/decision context should expose:
 
 * `approved_profile_path`
 * `approved_profile_mode`
 * `approved_profile_hash`
 * `approved_profile_verification_ok`
 * `approved_profile_block_reason`
+* `approved_profile_contract_scope = full_approved_profile`
+* `approved_profile_source_verified`
+* `approved_profile_evidence_verified`
+* `approved_profile_runtime_verified`
+* `legacy_candidate_profile_path_used = false`
 * `source_promotion_artifact_path`
 * `promotion_content_hash`
 * `candidate_profile_hash`
 * `manifest_hash`
 * `dataset_content_hash`
-* `paper_validation_evidence_path`
-* `paper_validation_evidence_content_hash`
-* `live_readiness_evidence_path`
-* `live_readiness_evidence_content_hash`
-* `approved_profile_mismatch_count`
-* `approved_profile_mismatches`
-* exact reason code for mode ambiguity, selector mismatch, source drift, evidence drift, or runtime mismatch
+* evidence paths and evidence hashes when present
+* mismatch count/list on failures
+
+For a legacy/regime-policy-only path, runtime/preflight/decision context should expose:
+
+* `legacy_candidate_profile_path_used = true`
+* `legacy_profile_contract_scope = regime_policy_only`
+* `approved_profile_contract_scope = legacy_regime_policy_only`
+* source/runtime/evidence verification fields should be false or absent, not misleadingly true
+* block reason should make clear that this is not a full approved-profile contract
 
 Do not log secrets.
 
@@ -411,6 +334,7 @@ Ensure or document:
 * profile generation and promotion writes are atomic
 * CLI errors are deterministic and machine-readable where JSON output exists
 * no CLI mutates live env files automatically
+* audit fields make rollback verification reproducible
 
 ## Documentation updates
 
@@ -418,13 +342,13 @@ Update README, research validation docs, runbooks, and env examples as needed.
 
 Docs must clearly state:
 
-* canonical approved profile selector and any supported alias
-* selector precedence if both canonical and alias are set
-* `STRATEGY_CANDIDATE_PROFILE_PATH` is legacy/compatibility/regime-policy-only if still supported
-* `profile-promote` verifies parent source/evidence drift before creating child profiles
-* `profile-diff` is not full artifact-chain verification unless you add that option
-* `profile-verify` is the full check for env selector + runtime contract + source/evidence chain
-* artifact path custody policy: repo-outside-only or data-root/reports-only
+* approved selector path is the full approved-profile contract path
+* legacy `STRATEGY_CANDIDATE_PROFILE_PATH` is compatibility/regime-policy-only if still supported
+* approved profile success paths are not legacy
+* `approved_profile_verification_ok` means full verification only
+* what fields indicate source/evidence/runtime verification
+* whether external absolute artifact paths are allowed
+* `profile-promote` re-verifies parent source/evidence drift before child creation
 * live fails closed on missing/mismatched/drifted approved profile
 * SELL/exit policy remains unchanged
 
@@ -434,54 +358,52 @@ Add or update tests in the repo’s existing style.
 
 At minimum:
 
-### Ambiguous live flags
+### Approved vs legacy audit labeling
 
-* `profile-verify` with both live flags true fails with `live_mode_arming_flags_ambiguous`.
-* `profile-verify` with both live flags false fails with `live_mode_not_dry_run_or_armed`.
-* Runtime/preflight path preserves the same reasons.
+* Approved selector path returns `legacy_candidate_profile_path_used == False`.
+* Approved selector path returns full approved-profile contract scope.
+* Approved selector path returns `approved_profile_verification_ok == True`.
+* Legacy candidate path returns `legacy_candidate_profile_path_used == True`.
+* Legacy candidate path returns regime-policy-only contract scope.
+* Live mode with only legacy candidate path still fails approved profile requirement.
+
+### Verification semantic clarity
+
+* Full approved-profile path distinguishes:
+
+  * loaded
+  * source verified
+  * evidence verified
+  * runtime verified
+  * full contract scope
+* Legacy regime-only path does not claim source/runtime/evidence verification.
+* Runtime mismatch produces reason-coded approved-profile failure.
+* Source/evidence drift produces reason-coded approved-profile failure.
 
 ### Promotion chain drift
 
-* Mutating source promotion artifact after parent profile creation causes `profile-promote` to fail.
-* Mutating paper validation evidence after live-dry-run profile creation causes promotion to `small_live` to fail.
-* Failure output includes the specific drift reason.
+* `profile-promote` fails if source promotion artifact changed after parent profile creation.
+* `profile-promote` fails if parent evidence artifact changed after parent profile creation.
+* CLI JSON exposes the specific failure reason.
 
-### Selector alias consistency
+### Artifact custody policy
 
-* Canonical selector works in env-file and settings/runtime verification.
-* Alias selector works or fails according to documented policy.
-* If both canonical and alias are set, precedence is deterministic.
+Depending on chosen policy:
 
-### Successful audit propagation
-
-* Successful runtime/preflight verification includes the full hash chain.
-* Successful BUY decision context includes the full hash chain.
-* Blocked BUY due to profile mismatch includes reason-coded failure fields.
-* No secret values appear in audit output.
-
-### Helper source verification
-
-* `load_profile_or_promotion_regime_policy(..., verify_source=True)` fails on source/evidence drift.
-* Legacy candidate path to an approved profile does not silently imply full verification.
-* Live mode with only legacy candidate path still fails approved profile requirement.
-
-### Path policy
-
-* repo-local artifact/evidence path rejected.
-* missing path rejected.
-* external absolute path accepted or rejected according to documented policy.
-* data-root/reports path accepted.
-* live profile promotion follows the stricter policy if implemented.
-
-### `profile-diff` scope
-
-* `profile-diff` output states artifact-chain verification is not performed, or
-* `profile-diff --verify-artifact-chain` fails on source/evidence drift.
+* repo-local path rejected
+* missing path rejected
+* data-root/reports path accepted
+* external absolute path accepted or rejected exactly as documented
+* live promotion policy is tested if stricter than paper policy
 
 ### Existing safety regression
 
 Run or preserve tests for:
 
+* profile-generate
+* profile-diff
+* profile-verify
+* profile-promote
 * live preflight
 * arming
 * run lock
@@ -490,7 +412,7 @@ Run or preserve tests for:
 * ledger behavior
 * storage-root isolation
 * lot-native SELL authority
-* existing profile generation/diff/verify/promote tests
+* SELL/exit not blocked solely by candidate regime/profile verification failure
 
 ## Final report format
 
@@ -501,7 +423,7 @@ When finished, produce this exact report:
 
 ## Hypotheses Verified / Falsified
 
-For each hypothesis A–G:
+For each hypothesis A–D:
 - status: verified, partially verified, falsified, or inconclusive
 - repo evidence
 - implemented change or reason no change was needed
@@ -517,6 +439,19 @@ Explain behavior for:
 - live armed / small-live
 - SELL/exit paths
 
+## Approved vs Legacy Audit Semantics
+
+Explain exactly how a full approved-profile path differs from legacy/regime-policy-only compatibility in emitted fields.
+
+## Artifact Chain Verification
+
+Explain:
+- parent profile verification
+- source promotion verification
+- evidence verification
+- runtime/env verification
+- path custody policy
+
 ## CLI Behavior
 
 Include expected behavior for:
@@ -524,15 +459,6 @@ Include expected behavior for:
 - profile-diff
 - profile-verify
 - profile-promote
-
-## Artifact Chain Verification
-
-Explain:
-- source promotion verification
-- evidence verification
-- parent profile verification
-- path policy
-- hash policy
 
 ## Observability / Audit Fields
 
@@ -565,5 +491,5 @@ Only list intentionally deferred work or unresolved hypotheses.
 
 Success criterion:
 
-> A human can still manually approve promotion from research to paper/live, but the repo now verifies that runtime env selection, runtime settings, parent profile, source promotion artifact, evidence artifacts, and runtime telemetry all point to the same approved artifact chain. Live execution fails closed on dangerous drift, and operators can reproduce and audit exactly what happened.
+> A normal approved-profile runtime path is auditable as a full approved-profile contract, a legacy candidate-profile path is auditable as legacy/regime-policy-only, live execution still fails closed on dangerous drift, and operators can reproduce which artifact chain was actually active.
 

@@ -1079,6 +1079,46 @@ class SmaWithFilterStrategy:
                 if isinstance(self.candidate_regime_policy, dict)
                 else None
             ),
+            "approved_profile_loaded": (
+                self.candidate_regime_policy.get("approved_profile_loaded")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "approved_profile_schema_hash_valid": (
+                self.candidate_regime_policy.get("approved_profile_schema_hash_valid")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "approved_profile_source_verified": (
+                self.candidate_regime_policy.get("approved_profile_source_verified")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "approved_profile_evidence_verified": (
+                self.candidate_regime_policy.get("approved_profile_evidence_verified")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "approved_profile_runtime_verified": (
+                self.candidate_regime_policy.get("approved_profile_runtime_verified")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "approved_profile_contract_scope": (
+                self.candidate_regime_policy.get("approved_profile_contract_scope")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "legacy_candidate_profile_path_used": (
+                self.candidate_regime_policy.get("legacy_candidate_profile_path_used")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
+            "legacy_profile_contract_scope": (
+                self.candidate_regime_policy.get("legacy_profile_contract_scope")
+                if isinstance(self.candidate_regime_policy, dict)
+                else None
+            ),
             "source_promotion_artifact_path": (
                 self.candidate_regime_policy.get("source_promotion_artifact_path")
                 if isinstance(self.candidate_regime_policy, dict)

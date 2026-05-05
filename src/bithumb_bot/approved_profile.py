@@ -68,6 +68,12 @@ class ProfileVerificationResult:
     expected_runtime_mode: str | None
     mismatches: tuple[dict[str, object], ...]
     profile: dict[str, Any] | None = None
+    profile_loaded: bool = False
+    profile_schema_hash_valid: bool = False
+    source_verified: bool = False
+    evidence_verified: bool = False
+    runtime_verified: bool = False
+    contract_scope: str = "full_approved_profile"
 
     def audit_fields(self) -> dict[str, object]:
         profile = self.profile if isinstance(self.profile, dict) else {}
@@ -77,6 +83,13 @@ class ProfileVerificationResult:
             "approved_profile_mode": self.mode,
             "approved_profile_verification_ok": self.ok,
             "approved_profile_block_reason": self.reason,
+            "approved_profile_loaded": self.profile_loaded,
+            "approved_profile_schema_hash_valid": self.profile_schema_hash_valid,
+            "approved_profile_source_verified": self.source_verified,
+            "approved_profile_evidence_verified": self.evidence_verified,
+            "approved_profile_runtime_verified": self.runtime_verified,
+            "approved_profile_contract_scope": self.contract_scope,
+            "legacy_candidate_profile_path_used": False,
             "source_promotion_artifact_path": profile.get("source_promotion_artifact_path"),
             "promotion_content_hash": self.promotion_hash,
             "candidate_profile_hash": self.candidate_profile_hash,
@@ -383,6 +396,12 @@ def load_approved_profile(path: str | Path) -> dict[str, Any]:
 
 
 def verify_profile_source_promotion(profile: dict[str, Any]) -> dict[str, Any]:
+    promotion = verify_profile_source_artifact(profile)
+    verify_profile_evidence_artifacts(profile)
+    return promotion
+
+
+def verify_profile_source_artifact(profile: dict[str, Any]) -> dict[str, Any]:
     validated = validate_approved_profile(profile)
     source_path = str(validated.get("source_promotion_artifact_path") or "").strip()
     resolved_source_path = resolve_runtime_artifact_path(
@@ -399,7 +418,6 @@ def verify_profile_source_promotion(profile: dict[str, Any]) -> dict[str, Any]:
     for key in ("candidate_profile_hash", "manifest_hash", "dataset_content_hash", "strategy_name"):
         if not _values_equal(validated.get(key), promotion.get(key)):
             raise ApprovedProfileError(f"source_promotion_{key}_mismatch")
-    verify_profile_evidence_artifacts(validated)
     return promotion
 
 
@@ -442,15 +460,84 @@ def load_profile_or_promotion_regime_policy(
     if "profile_schema_version" in payload:
         try:
             profile = validate_approved_profile(payload)
-            if verify_source:
-                verify_profile_source_promotion(profile)
         except ApprovedProfileError as exc:
             return {
                 "_policy_load_error": str(exc),
                 "_policy_source": raw,
                 "approved_profile_verification_ok": False,
                 "approved_profile_block_reason": str(exc),
+                "approved_profile_loaded": False,
+                "approved_profile_schema_hash_valid": False,
+                "approved_profile_source_verified": False,
+                "approved_profile_evidence_verified": False,
+                "approved_profile_runtime_verified": False,
+                "approved_profile_contract_scope": approved_profile_contract_scope,
             }
+        if verify_source:
+            try:
+                verify_profile_source_artifact(profile)
+            except ApprovedProfileError as exc:
+                return {
+                    "_policy_load_error": str(exc),
+                    "_policy_source": raw,
+                    "approved_profile_verification_ok": False,
+                    "approved_profile_block_reason": str(exc),
+                    "approved_profile_loaded": True,
+                    "approved_profile_schema_hash_valid": True,
+                    "approved_profile_source_verified": False,
+                    "approved_profile_evidence_verified": False,
+                    "approved_profile_runtime_verified": False,
+                    "approved_profile_contract_scope": approved_profile_contract_scope,
+                    "approved_profile_mode": profile.get("profile_mode"),
+                    "approved_profile_path": str(Path(raw).expanduser().resolve()),
+                    "approved_profile_hash": profile.get(PROFILE_HASH_FIELD),
+                    "source_promotion_content_hash": profile.get("source_promotion_content_hash"),
+                    "promotion_content_hash": profile.get("source_promotion_content_hash"),
+                    "source_promotion_artifact_path": profile.get("source_promotion_artifact_path"),
+                    "candidate_profile_hash": profile.get("candidate_profile_hash"),
+                    "manifest_hash": profile.get("manifest_hash"),
+                    "dataset_content_hash": profile.get("dataset_content_hash"),
+                    "paper_validation_evidence_path": profile.get("paper_validation_evidence_path"),
+                    "paper_validation_evidence_content_hash": profile.get(
+                        "paper_validation_evidence_content_hash"
+                    ),
+                    "live_readiness_evidence_path": profile.get("live_readiness_evidence_path"),
+                    "live_readiness_evidence_content_hash": profile.get(
+                        "live_readiness_evidence_content_hash"
+                    ),
+                }
+            try:
+                verify_profile_evidence_artifacts(profile)
+            except ApprovedProfileError as exc:
+                return {
+                    "_policy_load_error": str(exc),
+                    "_policy_source": raw,
+                    "approved_profile_verification_ok": False,
+                    "approved_profile_block_reason": str(exc),
+                    "approved_profile_loaded": True,
+                    "approved_profile_schema_hash_valid": True,
+                    "approved_profile_source_verified": True,
+                    "approved_profile_evidence_verified": False,
+                    "approved_profile_runtime_verified": False,
+                    "approved_profile_contract_scope": approved_profile_contract_scope,
+                    "approved_profile_mode": profile.get("profile_mode"),
+                    "approved_profile_path": str(Path(raw).expanduser().resolve()),
+                    "approved_profile_hash": profile.get(PROFILE_HASH_FIELD),
+                    "source_promotion_content_hash": profile.get("source_promotion_content_hash"),
+                    "promotion_content_hash": profile.get("source_promotion_content_hash"),
+                    "source_promotion_artifact_path": profile.get("source_promotion_artifact_path"),
+                    "candidate_profile_hash": profile.get("candidate_profile_hash"),
+                    "manifest_hash": profile.get("manifest_hash"),
+                    "dataset_content_hash": profile.get("dataset_content_hash"),
+                    "paper_validation_evidence_path": profile.get("paper_validation_evidence_path"),
+                    "paper_validation_evidence_content_hash": profile.get(
+                        "paper_validation_evidence_content_hash"
+                    ),
+                    "live_readiness_evidence_path": profile.get("live_readiness_evidence_path"),
+                    "live_readiness_evidence_content_hash": profile.get(
+                        "live_readiness_evidence_content_hash"
+                    ),
+                }
         policy = profile.get("regime_policy")
         if isinstance(policy, dict):
             source_verified = bool(verify_source)
@@ -465,6 +552,11 @@ def load_profile_or_promotion_regime_policy(
                 "approved_profile_hash": profile.get(PROFILE_HASH_FIELD),
                 "approved_profile_verification_ok": source_verified,
                 "approved_profile_block_reason": block_reason,
+                "approved_profile_loaded": True,
+                "approved_profile_schema_hash_valid": True,
+                "approved_profile_source_verified": source_verified,
+                "approved_profile_evidence_verified": source_verified,
+                "approved_profile_runtime_verified": source_verified,
                 "approved_profile_contract_scope": approved_profile_contract_scope,
                 "source_promotion_content_hash": profile.get("source_promotion_content_hash"),
                 "promotion_content_hash": profile.get("source_promotion_content_hash"),
@@ -717,14 +809,81 @@ def verify_profile_against_runtime(
             )
         profile = load_approved_profile(raw_path)
         if verify_source_promotion:
-            verify_profile_source_promotion(profile)
+            try:
+                verify_profile_source_artifact(profile)
+            except ApprovedProfileError as exc:
+                return _verification_result(
+                    False,
+                    str(exc),
+                    raw_path,
+                    profile,
+                    tuple(),
+                    runtime,
+                    profile_loaded=True,
+                    profile_schema_hash_valid=True,
+                    source_verified=False,
+                    evidence_verified=False,
+                    runtime_verified=False,
+                )
+            try:
+                verify_profile_evidence_artifacts(profile)
+            except ApprovedProfileError as exc:
+                return _verification_result(
+                    False,
+                    str(exc),
+                    raw_path,
+                    profile,
+                    tuple(),
+                    runtime,
+                    profile_loaded=True,
+                    profile_schema_hash_valid=True,
+                    source_verified=True,
+                    evidence_verified=False,
+                    runtime_verified=False,
+                )
         mode = str(profile.get("profile_mode"))
         if expected_profile_modes is not None and mode not in expected_profile_modes:
-            raise ApprovedProfileError(f"profile_mode_mismatch: expected={sorted(expected_profile_modes)} actual={mode}")
+            return _verification_result(
+                False,
+                f"profile_mode_mismatch: expected={sorted(expected_profile_modes)} actual={mode}",
+                raw_path,
+                profile,
+                tuple(),
+                runtime,
+                profile_loaded=True,
+                profile_schema_hash_valid=True,
+                source_verified=bool(verify_source_promotion),
+                evidence_verified=bool(verify_source_promotion),
+                runtime_verified=False,
+            )
         mismatches = diff_profile_to_runtime(profile, runtime, profile_path=raw_path)
         if mismatches:
-            return _verification_result(False, "approved_profile_runtime_mismatch", raw_path, profile, mismatches, runtime)
-        return _verification_result(True, "ok", raw_path, profile, tuple(), runtime)
+            return _verification_result(
+                False,
+                "approved_profile_runtime_mismatch",
+                raw_path,
+                profile,
+                mismatches,
+                runtime,
+                profile_loaded=True,
+                profile_schema_hash_valid=True,
+                source_verified=bool(verify_source_promotion),
+                evidence_verified=bool(verify_source_promotion),
+                runtime_verified=False,
+            )
+        return _verification_result(
+            True,
+            "ok",
+            raw_path,
+            profile,
+            tuple(),
+            runtime,
+            profile_loaded=True,
+            profile_schema_hash_valid=True,
+            source_verified=bool(verify_source_promotion),
+            evidence_verified=bool(verify_source_promotion),
+            runtime_verified=True,
+        )
     except ApprovedProfileError as exc:
         return _verification_result(False, str(exc), raw_path, None, tuple(), runtime)
 
@@ -736,6 +895,12 @@ def _verification_result(
     profile: dict[str, Any] | None,
     mismatches: tuple[dict[str, object], ...],
     runtime: dict[str, Any] | None,
+    profile_loaded: bool = False,
+    profile_schema_hash_valid: bool = False,
+    source_verified: bool = False,
+    evidence_verified: bool = False,
+    runtime_verified: bool = False,
+    contract_scope: str = "full_approved_profile",
 ) -> ProfileVerificationResult:
     return ProfileVerificationResult(
         ok=bool(ok),
@@ -750,6 +915,12 @@ def _verification_result(
         expected_runtime_mode=None if runtime is None else str(runtime.get("mode") or ""),
         mismatches=mismatches,
         profile=profile,
+        profile_loaded=profile_loaded,
+        profile_schema_hash_valid=profile_schema_hash_valid,
+        source_verified=source_verified,
+        evidence_verified=evidence_verified,
+        runtime_verified=runtime_verified,
+        contract_scope=contract_scope,
     )
 
 

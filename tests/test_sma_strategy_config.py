@@ -200,6 +200,44 @@ def test_approved_profile_runtime_mismatch_becomes_fail_closed_policy_error(
     assert config.candidate_regime_policy is not None
     assert config.candidate_regime_policy["_policy_load_error"] == "approved_profile_runtime_mismatch"
     assert config.candidate_regime_policy["approved_profile_path"] == str(profile_path)
+    assert config.candidate_regime_policy["legacy_candidate_profile_path_used"] is False
+    assert config.candidate_regime_policy["approved_profile_contract_scope"] == "full_approved_profile"
+    assert config.candidate_regime_policy["approved_profile_runtime_verified"] is False
+
+
+def test_approved_profile_selector_is_marked_full_contract_not_legacy(
+    settings_guard,
+    tmp_path: Path,
+) -> None:
+    object.__setattr__(settings, "MODE", "paper")
+    object.__setattr__(settings, "SMA_SHORT", 5)
+    object.__setattr__(settings, "SMA_LONG", 13)
+    object.__setattr__(settings, "PAIR", "KRW-BTC")
+    object.__setattr__(settings, "INTERVAL", "1m")
+    profile_path = _write_paper_profile(tmp_path, sma_short=5)
+    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
+    object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
+    object.__setattr__(settings, "STRATEGY_CANDIDATE_PROFILE_PATH", "")
+
+    config = sma_strategy_config_from_settings()
+
+    assert config.candidate_regime_policy is not None
+    assert config.candidate_regime_policy["legacy_candidate_profile_path_used"] is False
+    assert config.candidate_regime_policy["legacy_profile_contract_scope"] == "full_approved_profile"
+    assert config.candidate_regime_policy["approved_profile_contract_scope"] == "full_approved_profile"
+    assert config.candidate_regime_policy["approved_profile_verification_ok"] is True
+    assert config.candidate_regime_policy["approved_profile_loaded"] is True
+    assert config.candidate_regime_policy["approved_profile_schema_hash_valid"] is True
+    assert config.candidate_regime_policy["approved_profile_source_verified"] is True
+    assert config.candidate_regime_policy["approved_profile_evidence_verified"] is True
+    assert config.candidate_regime_policy["approved_profile_runtime_verified"] is True
+    assert config.candidate_regime_policy["approved_profile_path"] == str(profile_path.resolve())
+    assert config.candidate_regime_policy["approved_profile_hash"]
+    assert config.candidate_regime_policy["source_promotion_artifact_path"]
+    assert config.candidate_regime_policy["promotion_content_hash"]
+    assert config.candidate_regime_policy["candidate_profile_hash"]
+    assert config.candidate_regime_policy["manifest_hash"]
+    assert config.candidate_regime_policy["dataset_content_hash"]
 
 
 def test_live_mode_legacy_candidate_path_does_not_satisfy_approved_profile_contract(
@@ -215,6 +253,10 @@ def test_live_mode_legacy_candidate_path_does_not_satisfy_approved_profile_contr
     assert config.candidate_regime_policy["_policy_load_error"] == "approved_profile_missing"
     assert config.candidate_regime_policy["legacy_candidate_profile_path_used"] is True
     assert config.candidate_regime_policy["legacy_profile_contract_scope"] == "regime_policy_only"
+    assert config.candidate_regime_policy["approved_profile_contract_scope"] == "legacy_regime_policy_only"
+    assert config.candidate_regime_policy["approved_profile_source_verified"] is False
+    assert config.candidate_regime_policy["approved_profile_evidence_verified"] is False
+    assert config.candidate_regime_policy["approved_profile_runtime_verified"] is False
 
 
 def test_legacy_candidate_path_to_approved_profile_is_marked_regime_policy_only(
