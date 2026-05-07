@@ -331,6 +331,30 @@ def test_profile_generate_refuses_live_modes_without_explicit_transition(tmp_pat
     assert not out.exists()
 
 
+def test_profile_promote_refuses_legacy_dataset_quality_bypass_for_live_readiness(tmp_path: Path) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    promotion = _promotion(
+        legacy_compatibility_used=True,
+        dataset_quality_legacy_bypass_used=True,
+    )
+    write_json_atomic(promotion_path, promotion)
+    paper = build_approved_profile(
+        promotion=promotion,
+        mode="paper",
+        source_promotion_path=str(promotion_path),
+        market="KRW-BTC",
+        interval="1m",
+        generated_at="2026-05-04T00:00:00+00:00",
+    )
+
+    with pytest.raises(ApprovedProfileError, match="legacy_dataset_quality_bypass_not_live_ready"):
+        promote_profile_mode(
+            parent_profile=paper,
+            target_mode="live_dry_run",
+            paper_validation_evidence=str(tmp_path / "paper_validation.json"),
+        )
+
+
 def test_generated_at_change_does_not_change_profile_content_hash(tmp_path: Path) -> None:
     promotion_path = tmp_path / "promotion.json"
     write_json_atomic(promotion_path, _promotion())

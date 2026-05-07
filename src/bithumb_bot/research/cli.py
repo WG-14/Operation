@@ -98,6 +98,10 @@ def cmd_research_promote_candidate(
         f"{_format_items(tuple(str(item) for item in result.artifact.get('promotion_warnings') or []))}"
     )
     print(f"  legacy_compatibility_used={1 if result.artifact.get('legacy_compatibility_used') else 0}")
+    print(
+        "  dataset_quality_legacy_bypass_used="
+        f"{1 if result.artifact.get('dataset_quality_legacy_bypass_used') else 0}"
+    )
     print(f"  operator_next_step={result.artifact['operator_next_step']}")
     return 0
 

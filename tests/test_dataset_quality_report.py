@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from bithumb_bot.paths import PathManager
-from bithumb_bot.research.dataset_snapshot import build_dataset_quality_report, load_dataset_split
-from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
+from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot, build_dataset_quality_report, load_dataset_split
+from bithumb_bot.research.experiment_manifest import DateRange, ManifestValidationError, parse_manifest
 from bithumb_bot.research.promotion_gate import PromotionGateError, promote_candidate
 from bithumb_bot.research.validation_protocol import run_research_backtest
 
@@ -98,6 +98,7 @@ def test_dataset_quality_report_passes_complete_valid_candles(tmp_path: Path) ->
     assert report.quality_gate_status == "PASS"
     assert report.payload["expected_candle_count"] == 1440
     assert report.payload["actual_candle_count"] == 1440
+    assert report.payload["present_expected_bucket_count"] == 1440
     assert report.payload["coverage_pct"] == 100.0
     assert report.content_hash.startswith("sha256:")
 
@@ -123,6 +124,58 @@ def test_dataset_quality_report_detects_missing_candles_deterministically(tmp_pa
     assert first.content_hash == second.content_hash
 
 
+def test_dataset_quality_coverage_uses_present_expected_buckets_not_raw_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "quality.sqlite"
+    _create_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("DELETE FROM candles WHERE ts=?", (_ts("2023-01-01", 10),))
+        conn.execute(
+            """
+            INSERT INTO candles(ts, pair, interval, open, high, low, close, volume)
+            VALUES (?, 'KRW-BTC', '1m', 100.0, 101.0, 99.0, 100.0, 1.0)
+            """,
+            (_ts("2023-01-01", 0) + 30_000,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    snapshot = load_dataset_split(db_path=db_path, manifest=_manifest(), split_name="train")
+
+    report = build_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+
+    assert report.payload["actual_candle_count"] == 1440
+    assert report.payload["present_expected_bucket_count"] == 1439
+    assert report.payload["unexpected_bucket_count"] == 1
+    assert report.payload["coverage_pct"] == round(1439 / 1440 * 100.0, 8)
+    assert report.payload["coverage_pct"] < 100.0
+
+
+def test_dataset_quality_coverage_never_exceeds_100_with_duplicate_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "quality.sqlite"
+    _create_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO candles(ts, pair, interval, open, high, low, close, volume)
+            VALUES (?, 'KRW-BTC', '1m', 100.0, 101.0, 99.0, 100.0, 1.0)
+            """,
+            (_ts("2023-01-01", 0),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    snapshot = load_dataset_split(db_path=db_path, manifest=_manifest(), split_name="train")
+
+    report = build_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+
+    assert report.payload["actual_candle_count"] == 1441
+    assert report.payload["present_expected_bucket_count"] == 1440
+    assert report.payload["coverage_pct"] == 100.0
+    assert "duplicate_candle_keys" in report.payload["quality_gate_reasons"]
+
+
 def test_dataset_quality_report_detects_ohlc_non_positive_and_negative_volume(tmp_path: Path) -> None:
     db_path = tmp_path / "quality.sqlite"
     _create_db(db_path, bad_row=(4, 100.0, 99.0, 101.0, 0.0, -1.0))
@@ -146,6 +199,32 @@ def test_dataset_quality_report_rejects_unknown_interval(tmp_path: Path) -> None
 
     with pytest.raises(ManifestValidationError, match="unsupported dataset interval"):
         build_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+
+
+def test_dataset_quality_long_range_missing_diagnostics_are_bounded_and_deterministic(tmp_path: Path) -> None:
+    db_path = tmp_path / "quality.sqlite"
+    _create_db(db_path)
+    snapshot = DatasetSnapshot(
+        snapshot_id="long",
+        source="sqlite_candles",
+        market="KRW-BTC",
+        interval="1m",
+        split_name="train",
+        date_range=DateRange(start="2023-01-01", end="2024-01-01"),
+        candles=(
+            Candle(ts=_ts("2023-01-01", 0), open=100.0, high=101.0, low=99.0, close=100.0, volume=1.0),
+        ),
+    )
+
+    first = build_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+    second = build_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+
+    assert first.payload["expected_candle_count"] == 527040
+    assert first.payload["actual_candle_count"] == 1
+    assert first.payload["present_expected_bucket_count"] == 1
+    assert len(first.payload["missing_bucket_sample"]) == 20
+    assert len(first.payload["missing_bucket_ranges"]) <= 20
+    assert first.content_hash == second.content_hash
 
 
 def test_research_report_surfaces_quality_and_promotion_refuses_failed_quality(

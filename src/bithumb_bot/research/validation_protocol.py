@@ -6,6 +6,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from bithumb_bot.execution_quality import ExecutionQualityThresholds
 from bithumb_bot.paths import PathManager
 from bithumb_bot.market_regime import MARKET_REGIME_VERSION, evaluate_regime_acceptance_gate
 
@@ -158,9 +159,16 @@ def _evaluate_candidates(
             calibration=execution_calibration,
             assumed_slippage_bps=scenario.slippage_bps + scenario.market_order_extra_cost_bps,
             assumed_latency_ms=scenario.latency_ms,
+            assumed_partial_fill_rate=scenario.partial_fill_rate,
+            assumed_order_failure_rate=scenario.order_failure_rate,
             expected_market=manifest.market,
             expected_interval=manifest.interval,
             require_content_hash=manifest.execution_model.calibration_required,
+            min_sample_count=ExecutionQualityThresholds().min_sample,
+            require_quality_gate_pass=(
+                manifest.execution_model.calibration_required
+                or manifest.execution_model.calibration_strictness == "fail"
+            ),
         )
         base_results: list[dict[str, Any]] = []
         for index, params in enumerate(raw_candidates):
@@ -933,7 +941,7 @@ def _execution_calibration_warning_reasons(candidate: dict[str, Any]) -> list[st
     if candidate.get("execution_calibration_strictness") != "warn":
         return []
     gate = candidate.get("execution_calibration_gate")
-    if not isinstance(gate, dict) or gate.get("status") != "FAIL":
+    if not isinstance(gate, dict) or gate.get("status") == "PASS":
         return []
     return [str(reason) for reason in gate.get("reasons") or ["execution_calibration_failed"]]
 

@@ -335,6 +335,7 @@ def build_approved_profile(
         "source_promotion_content_hash": source_hash,
         "lineage_hash": verified_promotion.get("lineage_hash"),
         "legacy_compatibility_used": bool(verified_promotion.get("legacy_compatibility_used")),
+        "dataset_quality_legacy_bypass_used": bool(verified_promotion.get("dataset_quality_legacy_bypass_used")),
         "candidate_profile_hash": verified_promotion.get("candidate_profile_hash"),
         "manifest_hash": verified_promotion.get("manifest_hash"),
         "dataset_content_hash": verified_promotion.get("dataset_content_hash"),
@@ -1018,6 +1019,8 @@ def promote_profile_mode(
 ) -> dict[str, Any]:
     parent = validate_approved_profile(dict(parent_profile))
     verify_profile_source_promotion(parent)
+    if bool(parent.get("dataset_quality_legacy_bypass_used")):
+        raise ApprovedProfileError("legacy_dataset_quality_bypass_not_live_ready")
     parent_mode = str(parent["profile_mode"])
     target = str(target_mode or "").strip().lower()
     if target == "live_dry_run":

@@ -517,8 +517,59 @@ def test_promotion_allows_missing_lineage_only_with_explicit_compatibility(tmp_p
 
     assert result.artifact["lineage_required"] is False
     assert result.artifact["legacy_compatibility_used"] is True
+    assert result.artifact["dataset_quality_legacy_bypass_used"] is True
     assert result.artifact["lineage_hash"] is None
     assert "legacy_lineage_compatibility_used" in result.artifact["promotion_warnings"]
+    assert "legacy_dataset_quality_bypass_used" in result.artifact["promotion_warnings"]
+
+
+def test_legacy_lineage_promotion_records_dataset_quality_bypass_when_quality_evidence_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    _write_report_without_lineage(manager, _candidate())
+    report_path = manager.data_dir() / "reports" / "research" / "promo_exp" / "backtest_report.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    for key in ("dataset_quality_hash", "dataset_quality_gate_status", "dataset_quality_gate_reasons", "dataset_quality_reports"):
+        payload.pop(key, None)
+    payload.pop("content_hash", None)
+    payload["content_hash"] = sha256_prefixed(content_hash_payload(payload))
+    write_json_atomic(report_path, payload)
+
+    result = promote_candidate(
+        experiment_id="promo_exp",
+        candidate_id="candidate_001",
+        manager=manager,
+        allow_legacy_lineage=True,
+    )
+
+    assert result.artifact["dataset_quality_legacy_bypass_used"] is True
+    assert "legacy_dataset_quality_bypass_used" in result.artifact["promotion_warnings"]
+    assert result.artifact["dataset_quality_hash"] == "sha256:quality"
+
+
+def test_legacy_lineage_promotion_does_not_bypass_failed_dataset_quality(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    _write_report_without_lineage(
+        manager,
+        _candidate(dataset_quality_gate_status="FAIL", dataset_quality_gate_reasons=["missing_candles"]),
+    )
+    report_path = manager.data_dir() / "reports" / "research" / "promo_exp" / "backtest_report.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["dataset_quality_gate_status"] = "FAIL"
+    payload["dataset_quality_gate_reasons"] = ["dataset_quality_train_missing_candles"]
+    payload.pop("content_hash", None)
+    payload["content_hash"] = sha256_prefixed(content_hash_payload(payload))
+    write_json_atomic(report_path, payload)
+
+    with pytest.raises(PromotionGateError, match="dataset_quality_train_missing_candles"):
+        promote_candidate(
+            experiment_id="promo_exp",
+            candidate_id="candidate_001",
+            manager=manager,
+            allow_legacy_lineage=True,
+        )
 
 
 def test_reproduce_fails_closed_when_lineage_missing_in_legacy_artifact(tmp_path, monkeypatch) -> None:
@@ -877,6 +928,7 @@ def test_promotion_cli_allows_legacy_lineage_with_explicit_flag(tmp_path, monkey
     assert status == 0
     assert "legacy_lineage_compatibility_used" in output
     assert "  legacy_compatibility_used=1" in output
+    assert "  dataset_quality_legacy_bypass_used=1" in output
 
 
 def test_promotion_cli_argument_wires_allow_legacy_lineage(monkeypatch) -> None:

@@ -365,6 +365,57 @@ def test_research_backtest_fails_candidate_when_calibration_market_mismatches(tm
     assert "execution_calibration_market_mismatch" in report["candidates"][0]["gate_fail_reasons"]
 
 
+def test_research_backtest_candidate_gate_receives_execution_fill_quality_failures(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    monkeypatch.setenv("MODE", "paper")
+    manager = PathManager.from_env(Path.cwd())
+    payload = _manifest()
+    payload["execution_model"] = {
+        "type": "stress",
+        "fee_rate": 0.0,
+        "slippage_bps": 50,
+        "latency_ms": 500,
+        "partial_fill_rate": 0.0,
+        "order_failure_rate": 0.0,
+        "calibration_required": True,
+    }
+    manifest = parse_manifest(payload)
+    calibration = build_calibration_artifact(
+        summary={
+            "sample_count": 20,
+            "median_slippage_vs_signal_bps": 1.0,
+            "p90_slippage_vs_signal_bps": 2.0,
+            "p95_slippage_vs_signal_bps": 3.0,
+            "p95_submit_to_fill_ms": 100,
+            "partial_fill_rate": 0.01,
+            "unfilled_rate": 0.02,
+            "model_breach_rate": 0.0,
+            "quality_gate_status": "FAIL",
+        },
+        market="KRW-BTC",
+        interval="1m",
+        generated_at="2026-05-03T00:00:00+00:00",
+    )
+
+    report = run_research_backtest(
+        manifest=manifest,
+        db_path=db_path,
+        manager=manager,
+        generated_at="2026-05-03T00:00:00+00:00",
+        execution_calibration=calibration,
+    )
+
+    reasons = report["candidates"][0]["gate_fail_reasons"]
+    assert report["gate_result"] == "FAIL"
+    assert "execution_calibration_partial_fill_rate_exceeds_assumption" in reasons
+    assert "execution_calibration_unfilled_rate_exceeds_assumption" in reasons
+    assert "execution_calibration_sample_count_below_required" in reasons
+    assert "execution_calibration_quality_gate_not_passed" in reasons
+
+
 def test_research_backtest_aggregates_scenarios_and_promotion_refuses_failed_stress(
     tmp_path, monkeypatch
 ) -> None:

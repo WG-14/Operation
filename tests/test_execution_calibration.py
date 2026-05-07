@@ -110,3 +110,94 @@ def test_required_calibration_without_content_hash_fails_closed() -> None:
 
     assert result["status"] == "FAIL"
     assert "execution_calibration_content_hash_missing" in result["reasons"]
+
+
+def _artifact(**overrides):
+    summary = {
+        "sample_count": 50,
+        "median_slippage_vs_signal_bps": 1.0,
+        "p90_slippage_vs_signal_bps": 2.0,
+        "p95_slippage_vs_signal_bps": 3.0,
+        "p95_submit_to_fill_ms": 100,
+        "partial_fill_rate": 0.0,
+        "unfilled_rate": 0.0,
+        "model_breach_rate": 0.0,
+        "quality_gate_status": "PASS",
+    }
+    summary.update(overrides)
+    return build_calibration_artifact(
+        summary=summary,
+        market="KRW-BTC",
+        interval="1m",
+        generated_at="2026-05-07T00:00:00+00:00",
+    )
+
+
+def _compare(calibration, **overrides):
+    kwargs = {
+        "calibration": calibration,
+        "assumed_slippage_bps": 5.0,
+        "assumed_latency_ms": 200,
+        "assumed_partial_fill_rate": 0.0,
+        "assumed_order_failure_rate": 0.0,
+        "expected_market": "KRW-BTC",
+        "expected_interval": "1m",
+        "require_content_hash": True,
+        "min_sample_count": 30,
+        "require_quality_gate_pass": True,
+    }
+    kwargs.update(overrides)
+    return compare_calibration_to_scenario(**kwargs)
+
+
+def test_calibration_fails_when_partial_fill_rate_exceeds_assumption() -> None:
+    result = _compare(_artifact(partial_fill_rate=0.01))
+
+    assert result["status"] == "FAIL"
+    assert "execution_calibration_partial_fill_rate_exceeds_assumption" in result["reasons"]
+
+
+def test_calibration_fails_when_unfilled_rate_exceeds_assumption() -> None:
+    result = _compare(_artifact(unfilled_rate=0.02))
+
+    assert result["status"] == "FAIL"
+    assert "execution_calibration_unfilled_rate_exceeds_assumption" in result["reasons"]
+
+
+def test_calibration_fails_when_sample_count_below_required() -> None:
+    result = _compare(_artifact(sample_count=29))
+
+    assert result["status"] == "FAIL"
+    assert "execution_calibration_sample_count_below_required" in result["reasons"]
+
+
+def test_calibration_fails_when_quality_gate_did_not_pass() -> None:
+    result = _compare(_artifact(quality_gate_status="FAIL"))
+
+    assert result["status"] == "FAIL"
+    assert "execution_calibration_quality_gate_not_passed" in result["reasons"]
+
+
+def test_calibration_passes_when_fill_rates_are_within_assumptions() -> None:
+    result = _compare(
+        _artifact(partial_fill_rate=0.01, unfilled_rate=0.02),
+        assumed_partial_fill_rate=0.02,
+        assumed_order_failure_rate=0.03,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["reasons"] == []
+    assert result["observed_partial_fill_rate"] == 0.01
+    assert result["observed_unfilled_rate"] == 0.02
+
+
+def test_optional_warn_mode_missing_calibration_is_explicit() -> None:
+    result = _compare(
+        None,
+        require_content_hash=False,
+        min_sample_count=None,
+        require_quality_gate_pass=False,
+    )
+
+    assert result["status"] == "MISSING"
+    assert result["reasons"] == ["execution_calibration_missing"]

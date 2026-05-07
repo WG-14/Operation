@@ -254,7 +254,10 @@ def promote_candidate(
     backtest_report_hash = _verify_report_content_hash(report, label="backtest_report")
     if report.get("experiment_id") != experiment_id:
         raise PromotionGateError("candidate report experiment_id mismatch")
-    _verify_report_dataset_quality(report)
+    dataset_quality_legacy_bypass_used = _verify_report_dataset_quality(
+        report,
+        allow_legacy_lineage=allow_legacy_lineage,
+    )
     candidates = report.get("candidates")
     if not isinstance(candidates, list):
         raise PromotionGateError("candidate report does not contain candidates")
@@ -291,7 +294,11 @@ def promote_candidate(
         | set(calibration_warning_reasons)
     )
     if base_lineage is None:
-        promotion_warnings = sorted(set(promotion_warnings) | {"legacy_lineage_compatibility_used"})
+        promotion_warnings = sorted(
+            set(promotion_warnings)
+            | {"legacy_lineage_compatibility_used"}
+            | ({"legacy_dataset_quality_bypass_used"} if dataset_quality_legacy_bypass_used else set())
+        )
     artifact = {
         "promotion_schema_version": 1,
         "strategy_name": candidate["strategy_name"],
@@ -310,6 +317,7 @@ def promote_candidate(
         "repository_version": candidate.get("repository_version") or report.get("repository_version"),
         "lineage_required": base_lineage is not None,
         "legacy_compatibility_used": base_lineage is None,
+        "dataset_quality_legacy_bypass_used": dataset_quality_legacy_bypass_used,
         "lineage_hash": None,
         "backtest_report_path": str(candidate_report_path.resolve()),
         "backtest_report_hash": backtest_report_hash,
@@ -472,10 +480,14 @@ def _ensure_research_output_path_allowed(manager: PathManager, path: Path) -> No
         raise PathPolicyError(f"research output path must be outside repository: {resolved}")
 
 
-def _verify_report_dataset_quality(report: dict[str, Any]) -> None:
+def _verify_report_dataset_quality(report: dict[str, Any], *, allow_legacy_lineage: bool = False) -> bool:
     lineage_present = isinstance(report.get("lineage"), dict)
     if not lineage_present:
-        return
+        status = report.get("dataset_quality_gate_status")
+        if status not in {None, "PASS"}:
+            reasons = [str(item) for item in report.get("dataset_quality_gate_reasons") or ["dataset_quality_failed"]]
+            raise PromotionGateError(f"promotion refused: {','.join(reasons)}")
+        return bool(allow_legacy_lineage)
     if report.get("dataset_quality_gate_status") is None:
         raise PromotionGateError("promotion refused: dataset_quality_missing")
     if report.get("dataset_quality_gate_status") != "PASS":
@@ -487,6 +499,7 @@ def _verify_report_dataset_quality(report: dict[str, Any]) -> None:
     quality_reports = report.get("dataset_quality_reports")
     if not isinstance(quality_reports, dict) or not quality_reports:
         raise PromotionGateError("promotion refused: dataset_quality_report_missing")
+    return False
 
 
 def _execution_calibration_warning_reasons(candidate: dict[str, Any]) -> list[str]:
@@ -495,7 +508,7 @@ def _execution_calibration_warning_reasons(candidate: dict[str, Any]) -> list[st
     if candidate.get("execution_calibration_strictness") != "warn":
         return []
     gate = candidate.get("execution_calibration_gate")
-    if not isinstance(gate, dict) or gate.get("status") != "FAIL":
+    if not isinstance(gate, dict) or gate.get("status") == "PASS":
         return []
     return [str(reason) for reason in gate.get("reasons") or ["execution_calibration_failed"]]
 

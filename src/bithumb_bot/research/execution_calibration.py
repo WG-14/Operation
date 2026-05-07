@@ -95,9 +95,13 @@ def compare_calibration_to_scenario(
     calibration: dict[str, Any] | None,
     assumed_slippage_bps: float,
     assumed_latency_ms: int,
+    assumed_partial_fill_rate: float = 0.0,
+    assumed_order_failure_rate: float = 0.0,
     expected_market: str | None = None,
     expected_interval: str | None = None,
     require_content_hash: bool = False,
+    min_sample_count: int | None = None,
+    require_quality_gate_pass: bool = False,
     max_model_breach_rate: float = 0.10,
 ) -> dict[str, Any]:
     if calibration is None:
@@ -120,12 +124,24 @@ def compare_calibration_to_scenario(
     p95 = _float_or_none(artifact.get("p95_slippage_bps"))
     latency = _float_or_none(artifact.get("p95_full_fill_latency_ms"))
     breach_rate = _float_or_none(artifact.get("model_breach_rate"))
+    partial_fill_rate = _float_or_none(artifact.get("partial_fill_rate"))
+    unfilled_rate = _float_or_none(artifact.get("unfilled_rate"))
+    sample_count = int(artifact.get("sample_count") or 0)
+    quality_gate_status = artifact.get("quality_gate_status")
+    if min_sample_count is not None and sample_count < int(min_sample_count):
+        reasons.append("execution_calibration_sample_count_below_required")
+    if require_quality_gate_pass and quality_gate_status != "PASS":
+        reasons.append("execution_calibration_quality_gate_not_passed")
     if p90 is not None and p90 > float(assumed_slippage_bps):
         reasons.append("execution_calibration_p90_slippage_exceeds_assumption")
     if p95 is not None and p95 > float(assumed_slippage_bps):
         reasons.append("execution_calibration_p95_slippage_exceeds_assumption")
     if latency is not None and latency > float(assumed_latency_ms):
         reasons.append("execution_calibration_p95_latency_exceeds_assumption")
+    if partial_fill_rate is not None and partial_fill_rate > float(assumed_partial_fill_rate):
+        reasons.append("execution_calibration_partial_fill_rate_exceeds_assumption")
+    if unfilled_rate is not None and unfilled_rate > float(assumed_order_failure_rate):
+        reasons.append("execution_calibration_unfilled_rate_exceeds_assumption")
     if breach_rate is not None and breach_rate > max_model_breach_rate:
         reasons.append("execution_calibration_model_breach_rate_exceeds_threshold")
     return {
@@ -137,11 +153,17 @@ def compare_calibration_to_scenario(
         "interval": artifact.get("interval"),
         "expected_market": expected_market,
         "expected_interval": expected_interval,
-        "sample_count": artifact.get("sample_count"),
+        "sample_count": sample_count,
+        "min_sample_count": min_sample_count,
+        "quality_gate_status": quality_gate_status,
         "observed_p90_slippage_bps": p90,
         "observed_p95_slippage_bps": p95,
         "observed_p95_full_fill_latency_ms": latency,
+        "observed_partial_fill_rate": partial_fill_rate,
+        "observed_unfilled_rate": unfilled_rate,
         "observed_model_breach_rate": breach_rate,
+        "assumed_partial_fill_rate": float(assumed_partial_fill_rate),
+        "assumed_order_failure_rate": float(assumed_order_failure_rate),
     }
 
 

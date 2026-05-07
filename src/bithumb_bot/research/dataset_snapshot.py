@@ -129,13 +129,22 @@ def build_dataset_quality_report(
     snapshot: DatasetSnapshot,
 ) -> DatasetQualityReport:
     interval_ms = _interval_ms(snapshot.interval)
-    expected_ts = tuple(range(snapshot.date_range.start_ts_ms(), snapshot.date_range.end_ts_ms() + 1, interval_ms))
-    expected_set = set(expected_ts)
+    start_ts = snapshot.date_range.start_ts_ms()
+    end_ts = snapshot.date_range.end_ts_ms()
+    expected_count = _expected_bucket_count(start_ts=start_ts, end_ts=end_ts, interval_ms=interval_ms)
     candles = snapshot.candles
     actual_ts = [candle.ts for candle in candles]
-    actual_ts_set = set(actual_ts)
-    missing_ts = [ts for ts in expected_ts if ts not in actual_ts_set]
-    missing_ranges = _compact_missing_ranges(missing_ts, interval_ms)
+    actual_expected_ts = {
+        ts
+        for ts in actual_ts
+        if _is_expected_bucket(ts, start_ts=start_ts, end_ts=end_ts, interval_ms=interval_ms)
+    }
+    missing_count, missing_ranges, missing_sample = _scan_missing_buckets(
+        start_ts=start_ts,
+        end_ts=end_ts,
+        interval_ms=interval_ms,
+        present_expected_ts=actual_expected_ts,
+    )
     duplicate_key_count = _duplicate_key_count(db_path=db_path, snapshot=snapshot)
     non_monotonic = sum(1 for prev, curr in zip(actual_ts, actual_ts[1:]) if curr <= prev)
     interval_mismatch = sum(
@@ -159,7 +168,7 @@ def build_dataset_quality_report(
             negative_volume += 1
 
     reasons: list[str] = []
-    if missing_ts:
+    if missing_count:
         reasons.append("missing_candles")
     if duplicate_key_count:
         reasons.append("duplicate_candle_keys")
@@ -173,15 +182,19 @@ def build_dataset_quality_report(
         reasons.append("non_positive_price")
     if negative_volume:
         reasons.append("negative_volume")
-    if actual_ts and (min(actual_ts) < snapshot.date_range.start_ts_ms() or max(actual_ts) > snapshot.date_range.end_ts_ms()):
+    if actual_ts and (min(actual_ts) < start_ts or max(actual_ts) > end_ts):
         reasons.append("timestamp_outside_split_range")
-    unexpected_count = sum(1 for ts in actual_ts if ts not in expected_set)
+    unexpected_count = sum(
+        1
+        for ts in actual_ts
+        if not _is_expected_bucket(ts, start_ts=start_ts, end_ts=end_ts, interval_ms=interval_ms)
+    )
     if unexpected_count:
         reasons.append("unexpected_candle_bucket")
 
-    expected_count = len(expected_ts)
     actual_count = len(candles)
-    coverage_pct = (actual_count / expected_count * 100.0) if expected_count else 0.0
+    present_expected_count = len(actual_expected_ts)
+    coverage_pct = (present_expected_count / expected_count * 100.0) if expected_count else 0.0
     payload: dict[str, Any] = {
         "schema_version": 1,
         "artifact_type": "dataset_quality_report",
@@ -194,10 +207,11 @@ def build_dataset_quality_report(
         "end_ts": snapshot.date_range.end_ts_ms(),
         "expected_candle_count": expected_count,
         "actual_candle_count": actual_count,
+        "present_expected_bucket_count": present_expected_count,
         "coverage_pct": round(coverage_pct, 8),
-        "missing_bucket_count": len(missing_ts),
+        "missing_bucket_count": missing_count,
         "missing_bucket_ranges": missing_ranges,
-        "missing_bucket_sample": missing_ts[:20],
+        "missing_bucket_sample": missing_sample,
         "duplicate_key_count": duplicate_key_count,
         "non_monotonic_ts_count": non_monotonic,
         "interval_mismatch_count": interval_mismatch,
@@ -246,6 +260,59 @@ def _interval_ms(interval: str) -> int:
         return interval_to_minute_unit(interval) * 60_000
     except ValueError as exc:
         raise ManifestValidationError(f"unsupported dataset interval for quality report: {interval}") from exc
+
+
+def _expected_bucket_count(*, start_ts: int, end_ts: int, interval_ms: int) -> int:
+    if end_ts < start_ts:
+        return 0
+    return ((end_ts - start_ts) // interval_ms) + 1
+
+
+def _is_expected_bucket(ts: int, *, start_ts: int, end_ts: int, interval_ms: int) -> bool:
+    return start_ts <= ts <= end_ts and (ts - start_ts) % interval_ms == 0
+
+
+def _scan_missing_buckets(
+    *,
+    start_ts: int,
+    end_ts: int,
+    interval_ms: int,
+    present_expected_ts: set[int],
+    max_ranges: int = 20,
+    max_sample: int = 20,
+) -> tuple[int, list[dict[str, int]], list[int]]:
+    missing_count = 0
+    sample: list[int] = []
+    ranges: list[dict[str, int]] = []
+    active_start: int | None = None
+    active_prev: int | None = None
+    active_count = 0
+
+    for ts in range(start_ts, end_ts + 1, interval_ms):
+        if ts in present_expected_ts:
+            if active_start is not None and len(ranges) < max_ranges:
+                ranges.append(
+                    {"start_ts": active_start, "end_ts": active_prev or active_start, "bucket_count": active_count}
+                )
+            active_start = None
+            active_prev = None
+            active_count = 0
+            continue
+        missing_count += 1
+        if len(sample) < max_sample:
+            sample.append(ts)
+        if active_start is None:
+            active_start = ts
+            active_count = 1
+        else:
+            active_count += 1
+        active_prev = ts
+
+    if active_start is not None and len(ranges) < max_ranges:
+        ranges.append(
+            {"start_ts": active_start, "end_ts": active_prev or active_start, "bucket_count": active_count}
+        )
+    return missing_count, ranges, sample
 
 
 def _compact_missing_ranges(missing_ts: list[int], interval_ms: int, *, max_ranges: int = 20) -> list[dict[str, int]]:
