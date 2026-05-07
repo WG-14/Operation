@@ -17,6 +17,8 @@ from .approved_profile import (
     write_approved_profile_atomic,
 )
 from .config import PATH_MANAGER, settings
+from .evidence_chain import evidence_report_failure_payload
+from .decision_equivalence import compare_decision_equivalence, load_decision_list
 from .research.promotion_gate import PromotionGateError
 
 
@@ -168,7 +170,14 @@ def cmd_profile_promote(
         )
         resolved_out = write_approved_profile_atomic(resolved_out, child, manager=PATH_MANAGER)
     except (ApprovedProfileError, OSError, ValueError) as exc:
-        _print_json({"ok": False, "error": str(exc), "command": "profile-promote"})
+        artifact_path = paper_validation_evidence if paper_validation_evidence else live_readiness_evidence
+        _print_json(
+            evidence_report_failure_payload(
+                command="profile-promote",
+                error=str(exc),
+                artifact_path=artifact_path,
+            )
+        )
         return 1
     _print_json(
         {
@@ -181,3 +190,28 @@ def cmd_profile_promote(
         }
     )
     return 0
+
+
+def cmd_decision_equivalence(
+    *,
+    research_decisions_path: str,
+    runtime_decisions_path: str,
+    profile_hash: str,
+    market: str,
+    interval: str,
+    data_fingerprint: str,
+) -> int:
+    try:
+        result = compare_decision_equivalence(
+            research_decisions=load_decision_list(research_decisions_path),
+            runtime_decisions=load_decision_list(runtime_decisions_path),
+            profile_hash=profile_hash,
+            market=market,
+            interval=interval,
+            data_fingerprint=data_fingerprint,
+        )
+    except (OSError, ValueError) as exc:
+        _print_json({"ok": False, "error": str(exc), "command": "decision-equivalence"})
+        return 1
+    _print_json({"command": "decision-equivalence", **result.report})
+    return 0 if result.ok else 1

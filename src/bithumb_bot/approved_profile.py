@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import PathManager, PathPolicyError
+from .evidence_chain import validate_profile_transition_evidence
 from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.promotion_gate import build_candidate_profile
 from .storage_io import write_json_atomic
@@ -425,7 +426,10 @@ def verify_profile_source_artifact(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def verify_profile_evidence_artifacts(profile: dict[str, Any]) -> None:
-    for label in ("paper_validation_evidence", "live_readiness_evidence"):
+    for label, expected_type, expected_mode in (
+        ("paper_validation_evidence", "paper_validation", "paper"),
+        ("live_readiness_evidence", "live_readiness", "live"),
+    ):
         path_key = f"{label}_path"
         hash_key = f"{label}_content_hash"
         path = str(profile.get(path_key) or "").strip()
@@ -439,8 +443,33 @@ def verify_profile_evidence_artifacts(profile: dict[str, Any]) -> None:
         resolved = resolve_runtime_artifact_path(path, label=label)
         if str(resolved) != path:
             raise ApprovedProfileError(f"{label}_path_policy_mismatch")
-        actual_hash = compute_file_content_hash(resolved)
-        if actual_hash != expected_hash:
+        evidence_parent = dict(profile)
+        anchor_key = (
+            "paper_validation_approved_profile_hash"
+            if label == "paper_validation_evidence"
+            else "live_readiness_approved_profile_hash"
+        )
+        anchor_hash = str(profile.get(anchor_key) or "").strip()
+        if anchor_hash:
+            evidence_parent[PROFILE_HASH_FIELD] = anchor_hash
+        try:
+            payload = _load_json(resolved)
+            recorded_hash = str(payload.get("content_hash") or "").strip()
+            if recorded_hash != expected_hash:
+                raise ApprovedProfileError(f"{hash_key}_mismatch")
+            semantic_hash = validate_profile_transition_evidence(
+                payload,
+                label=label,
+                expected_type=expected_type,
+                expected_mode=expected_mode,
+                parent_profile=evidence_parent,
+                evidence_path=resolved,
+            )
+        except ApprovedProfileError:
+            raise
+        except ValueError as exc:
+            raise ApprovedProfileError(str(exc)) from exc
+        if semantic_hash != expected_hash:
             raise ApprovedProfileError(f"{hash_key}_mismatch")
 
 
@@ -963,10 +992,28 @@ def promote_profile_mode(
             manager=manager,
             label="paper_validation_evidence",
         )
+        _validate_transition_evidence_file(
+            evidence_path,
+            label="paper_validation_evidence",
+            expected_type="paper_validation",
+            expected_mode="paper",
+            parent_profile=parent,
+            expected_hash=None,
+        )
+        evidence_hash = validate_profile_transition_evidence(
+            _load_json(evidence_path),
+            label="paper_validation_evidence",
+            expected_type="paper_validation",
+            expected_mode="paper",
+            parent_profile=parent,
+            evidence_path=evidence_path,
+        )
         child["paper_validation_evidence_path"] = str(evidence_path)
         child["paper_validation_evidence_content_hash"] = evidence_hash
+        child["paper_validation_approved_profile_hash"] = parent[PROFILE_HASH_FIELD]
         child.pop("live_readiness_evidence_path", None)
         child.pop("live_readiness_evidence_content_hash", None)
+        child.pop("live_readiness_approved_profile_hash", None)
     else:
         if not str(parent.get("paper_validation_evidence_path") or "").strip():
             raise ApprovedProfileError("paper_validation_evidence_path_missing")
@@ -976,9 +1023,52 @@ def promote_profile_mode(
             manager=manager,
             label="live_readiness_evidence",
         )
+        _validate_transition_evidence_file(
+            evidence_path,
+            label="live_readiness_evidence",
+            expected_type="live_readiness",
+            expected_mode="live",
+            parent_profile=parent,
+            expected_hash=None,
+        )
+        evidence_hash = validate_profile_transition_evidence(
+            _load_json(evidence_path),
+            label="live_readiness_evidence",
+            expected_type="live_readiness",
+            expected_mode="live",
+            parent_profile=parent,
+            evidence_path=evidence_path,
+        )
         child["live_readiness_evidence_path"] = str(evidence_path)
         child["live_readiness_evidence_content_hash"] = evidence_hash
+        child["live_readiness_approved_profile_hash"] = parent[PROFILE_HASH_FIELD]
     child["generated_at"] = generated_at or datetime.now(timezone.utc).isoformat()
     child.pop(PROFILE_HASH_FIELD, None)
     child[PROFILE_HASH_FIELD] = compute_approved_profile_hash(child)
     return validate_approved_profile(child)
+
+
+def _validate_transition_evidence_file(
+    path: Path,
+    *,
+    label: str,
+    expected_type: str,
+    expected_mode: str,
+    parent_profile: dict[str, Any],
+    expected_hash: str | None,
+) -> None:
+    try:
+        semantic_hash = validate_profile_transition_evidence(
+            _load_json(path),
+            label=label,
+            expected_type=expected_type,
+            expected_mode=expected_mode,
+            parent_profile=parent_profile,
+            evidence_path=path,
+        )
+    except ApprovedProfileError:
+        raise
+    except ValueError as exc:
+        raise ApprovedProfileError(str(exc)) from exc
+    if expected_hash is not None and semantic_hash != expected_hash:
+        raise ApprovedProfileError(f"{label}_content_hash_mismatch")

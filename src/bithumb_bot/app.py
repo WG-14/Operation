@@ -156,6 +156,7 @@ from .research.cli import (
     cmd_research_walk_forward,
 )
 from .profile_cli import (
+    cmd_decision_equivalence,
     cmd_profile_diff,
     cmd_profile_generate,
     cmd_profile_promote,
@@ -7207,6 +7208,18 @@ def main(argv: list[str] | None = None) -> int:
     profile_promote.add_argument("--paper-validation-evidence")
     profile_promote.add_argument("--live-readiness-evidence")
 
+    decision_equivalence = sub.add_parser(
+        "decision-equivalence",
+        help="compare research decisions against runtime/paper decision telemetry",
+        description="Credential-free deterministic equivalence check over exported decision JSON artifacts.",
+    )
+    decision_equivalence.add_argument("--research-decisions", required=True)
+    decision_equivalence.add_argument("--runtime-decisions", required=True)
+    decision_equivalence.add_argument("--profile-hash", required=True)
+    decision_equivalence.add_argument("--market", required=True)
+    decision_equivalence.add_argument("--interval", required=True)
+    decision_equivalence.add_argument("--data-fingerprint", required=True)
+
     cash_drift_report = sub.add_parser(
         "cash-drift-report",
         help="audit broker cash versus local ledger and recent external cash adjustments",
@@ -7539,6 +7552,15 @@ def main(argv: list[str] | None = None) -> int:
                 if args.live_readiness_evidence is not None
                 else None
             ),
+        )
+    elif args.cmd == "decision-equivalence":
+        return cmd_decision_equivalence(
+            research_decisions_path=str(args.research_decisions),
+            runtime_decisions_path=str(args.runtime_decisions),
+            profile_hash=str(args.profile_hash),
+            market=str(args.market),
+            interval=str(args.interval),
+            data_fingerprint=str(args.data_fingerprint),
         )
     elif args.cmd == "cash-drift-report":
         cmd_cash_drift_report(recent_limit=max(1, int(args.recent_limit)), as_json=bool(args.json))
