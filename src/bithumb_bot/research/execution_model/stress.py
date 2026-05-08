@@ -48,11 +48,14 @@ class StressExecutionModel:
         slip = total_slippage_bps / 10_000.0
         if side == "BUY":
             avg_fill_price = request.reference_price * (1.0 + slip)
-            requested_qty = (
-                (float(request.requested_notional or 0.0) * (1.0 - float(self.fee_rate))) / avg_fill_price
-                if avg_fill_price > 0.0
-                else 0.0
-            )
+            if request.requested_qty is not None:
+                requested_qty = float(request.requested_qty or 0.0)
+            else:
+                requested_qty = (
+                    (float(request.requested_notional or 0.0) * (1.0 - float(self.fee_rate))) / avg_fill_price
+                    if avg_fill_price > 0.0
+                    else 0.0
+                )
         else:
             avg_fill_price = request.reference_price * (1.0 - slip)
             requested_qty = float(request.requested_qty or 0.0)
@@ -83,7 +86,12 @@ class StressExecutionModel:
 
         filled_qty = requested_qty * fill_ratio
         if side == "BUY":
-            fee = float(request.requested_notional or 0.0) * float(self.fee_rate) * fill_ratio
+            fee_basis = (
+                requested_qty * avg_fill_price
+                if request.requested_qty is not None
+                else float(request.requested_notional or 0.0)
+            )
+            fee = fee_basis * float(self.fee_rate) * fill_ratio
         else:
             fee = filled_qty * avg_fill_price * float(self.fee_rate)
         return ExecutionFill(

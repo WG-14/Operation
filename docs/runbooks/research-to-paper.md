@@ -128,6 +128,7 @@ uv run bithumb-bot run --short <paper_value> --long <paper_value>
 ```
 
 Use only explicit env files or process env. Do not reintroduce repo-root `.env` autoloading.
+Default paper execution uses `PAPER_EXECUTION_MODEL=immediate`, which preserves the existing validated top-of-book fill path. For deterministic lifecycle rehearsal, set `PAPER_EXECUTION_MODEL=stress` with an explicit `PAPER_EXECUTION_STRESS_SEED` and reviewed partial/failure settings. Stress paper evidence is stored in `order_events.submit_evidence`; partial fills remain `PARTIAL` and unresolved instead of being terminalized as `FILLED`. See `docs/paper-execution-lifecycle.md`.
 
 11. Inspect decision and strategy telemetry.
 

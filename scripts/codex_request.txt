@@ -1,356 +1,452 @@
 You are Codex working directly in the GitHub repository `WG-14/bithumb-bot`.
 
-Use the attached review notes as source context, but do not treat any claim as proven until you verify it against the current repository state. The latest review concluded that the core structural P0 issues are now largely closed, while one or two narrow regression hardening tasks remain. Preserve that priority: do not reopen the whole design unless current code disproves the latest review. The core context is summarized in the uploaded review notes.
+Use the attached Korean review as source context, but do not merely restate it; verify it against the repository before changing code. 
 
-## Core objective
+Your task is to turn the current paper trading path into a more reproducible, observable, and operationally realistic execution rehearsal system. Do not reduce this to a cosmetic patch or a random failure-rate tweak inside `paper_execute()`. The core concern is not simply that paper trading is “too simple”; the stronger hypothesis is that execution realism is currently split across research backtests, paper runtime, and live runtime instead of being connected through a shared order lifecycle adapter.
 
-Perform a final, narrow hardening pass on the research/runtime SMA decision-equivalence system.
+## Primary files and areas to inspect
 
-The repository appears to now have the important promotion-grade loop:
+Start by inspecting these repository areas:
 
-```text
-repo-owned research-export-decisions --profile
-  -> repo-owned runtime-replay-decisions
-  -> decision-equivalence over validated export artifacts
-  -> profile transition evidence validation
-```
+* `src/bithumb_bot/broker/paper.py`
+* `src/bithumb_bot/research/execution_model/base.py`
+* `src/bithumb_bot/research/execution_model/stress.py`
+* `src/bithumb_bot/oms.py`
+* `src/bithumb_bot/execution.py`
+* `src/bithumb_bot/broker/base.py`
+* `src/bithumb_bot/execution_models.py`
+* `src/bithumb_bot/execution_planner.py`
+* `src/bithumb_bot/broker/live_submit_orchestrator.py`
+* `src/bithumb_bot/broker/live_submission_execution.py`
+* `tests/test_paper_orderbook.py`
+* `tests/test_research_backtest_reproducibility.py`
+* `docs/live_dry_run_checklist.md`
 
-The main remaining risk is not a major design gap anymore. It is regression exposure: public CLI dispatch and strengthened evidence-validation fields must be pinned by tests so future changes cannot silently break the loop.
+Also search the repo for related existing utilities before adding new ones: `StressExecutionModel`, `ExecutionRequest`, `ExecutionFill`, `BrokerOrder`, `BrokerFill`, `SubmitPlan`, `OrderIntent`, `record_order_if_missing`, `apply_fill_and_trade`, `set_status`, `record_status_transition`, `claim_order_intent_dedup`, `update_order_intent_dedup`, `OPEN_ORDER_STATUSES`, `PARTIAL`, `SUBMIT_UNKNOWN`, `RECOVERY_REQUIRED`.
 
-Do not generalize this into trading advice. Inspect, patch, and test the actual repo.
+## Working hypotheses to verify, not assume
 
-## Files to inspect first
+Keep these as hypotheses. For each one, inspect the repository and either confirm, refine, or refute it in the final report.
 
-Inspect at minimum:
+### H1: Execution lifecycle is split into three disconnected models
 
-```text
-src/bithumb_bot/app.py
-src/bithumb_bot/profile_cli.py
-src/bithumb_bot/decision_equivalence.py
-src/bithumb_bot/approved_profile.py
-src/bithumb_bot/canonical_decision.py
-tests/test_profile_cli_decision_loop.py
-tests/test_decision_equivalence_canonical.py
-tests/test_approved_profile.py
-docs/research-validation.md
-docs/runbooks/research-to-paper.md
-README.md
-```
+Research has `StressExecutionModel`; live runtime has OMS submit/reconcile states; paper runtime mostly has immediate fill accounting. Verify whether `paper_execute()` currently bypasses `ExecutionRequest`, `StressExecutionModel`, `Broker.place_order`, `SubmitPlan`, and live-style submit/application lifecycle.
 
-Also inspect the actual argparse parser and dispatch branches in `app.py`. Do not stop at import statements.
+Validation:
 
-## Hypotheses to validate or falsify
+* Trace `paper_execute()` from signal to DB writes.
+* Identify whether it directly calls fill accounting and then sets `FILLED`.
+* Identify whether stress execution can currently be injected into paper runtime by configuration.
 
-Keep these as hypotheses until verified in the current repo.
+Refutation:
 
-### H1. The major P0 loop is probably closed
+* If there is already a paper runtime stress adapter that persists partial/failure/latency into orders/fills/trades/status, document it and improve tests instead of duplicating it.
 
-The current repo may already prove the positive repo-owned loop through a test such as:
+### H2: OMS supports richer states, but paper does not exercise them
 
-```text
-test_repo_owned_export_replay_artifacts_can_pass_positive_equivalence
-```
+Verify whether OMS supports `PARTIAL`, `SUBMIT_UNKNOWN`, `ACCOUNTING_PENDING`, `RECOVERY_REQUIRED`, `CANCEL_REQUESTED`, `FAILED`, `FILLED`, but paper only uses a shortened path.
 
-Validate that this test actually uses repo-owned research export and runtime replay paths, validates export wrappers, and asserts:
+Validation:
 
-```text
-result.ok is True
-promotion_grade_comparison is True
-legacy_or_unverified_export is False
-mismatch_count == 0
-missing_research_decisions == []
-missing_runtime_decisions == []
-research_export_content_hash present
-runtime_export_content_hash present
-```
+* Inspect status transition rules and unresolved order gates.
+* Create or inspect tests showing whether paper orders can remain open, become partial, become submit-unknown, or require recovery.
 
-Falsify only if the test is merely synthetic and does not exercise repo-owned generation paths.
+Refutation:
 
-### H2. `decision-equivalence` public CLI dispatch may still be unpinned
+* If paper already has deterministic lifecycle tests covering these states, document the evidence and strengthen gaps only.
 
-There may already be `app.main()` dispatch tests for:
+### H3: Research stress execution is auditable but not connected to paper runtime evidence
 
-```text
-research-export-decisions
-runtime-replay-decisions
-```
+Verify whether research execution stores model name/version/params hash/seed/fill status/remaining qty, while paper DB evidence does not.
 
-but not for:
+Validation:
 
-```text
-decision-equivalence
-```
+* Compare `ExecutionFill.as_dict()` with paper order/fill/trade/order_event records.
+* Look for paper DB fields or event payloads containing stress model evidence.
 
-Validate whether `tests/test_profile_cli_decision_loop.py` or another test proves `app.main(["decision-equivalence", ...])` reaches `cmd_decision_equivalence()` with parsed arguments.
+Refutation:
 
-Falsify only if such a test already exists.
+* If this evidence is already persisted for paper runs, add regression tests that prove it.
 
-### H3. Strengthened evidence-validator rejection fields may be only partially pinned
+### H4: live-dry-run is an operational checklist, not deterministic failure injection
 
-The evidence fixture may include:
+Verify whether live dry-run checks operational safety but does not force submit timeout, broker reject, partial fill, fee pending, order-not-ready, recovery-required, or delayed fill scenarios.
 
-```text
-promotion_grade_comparison=True
-repo_owned_export_artifacts=True
-legacy_or_unverified_export=False
-research_export_content_hash
-runtime_export_content_hash
-```
+Validation:
 
-Validate whether mutation tests prove profile transition evidence fails when these fields are missing or bad.
+* Inspect `docs/live_dry_run_checklist.md` and live dry-run implementation paths.
+* Determine whether a dry-run/chaos broker or scenario runner already exists.
 
-Falsify only if each relevant field has regression coverage, or if the validator code already has equivalent generic coverage that makes additional per-field tests redundant.
+Refutation:
 
-### H4. Candidate/profile binding is likely closed
+* If such a tool exists, document it and connect it to tests and promotion/readiness checks.
 
-The latest code may already validate source promotion candidate id and rebuild candidate profile hash inside `_validate_research_export_profile_binding()`.
+### H5: Ledger robustness can hide lifecycle incompleteness
 
-Validate this; do not patch unless it is missing or weak.
+Verify whether `apply_fill_and_trade()` is robust against duplicate/overfill/fee/accounting issues, but paper applies fills immediately rather than through delayed lifecycle events.
 
-### H5. Exit-rule scope should remain unchanged
+Validation:
 
-The current SMA runtime exit-rule scope should remain:
+* Inspect fill application and order status updates.
+* Add tests proving that partial fills leave `orders.qty_filled < orders.qty_req`, order status remains `PARTIAL`, and no false `FILLED` terminal state is recorded.
+
+Refutation:
+
+* If the current code already enforces these paper semantics, preserve them and focus on missing observability/replay.
+
+## Design priority
+
+Prioritize a structural design change over symptom patches.
+
+Do not implement this as:
+
+* “randomly return `None` from `paper_execute()`”
+* “sometimes halve the qty inside `paper_execute()`”
+* “add a hardcoded failed-order branch without OMS lifecycle evidence”
+* “mark partial fills as `FILLED` just because some trade was recorded”
+
+Instead, introduce or refactor toward a common execution lifecycle abstraction that can support:
 
 ```text
-opposite_cross
-max_holding_time
+Strategy signal
+  -> order intent / sizing / submit plan
+  -> execution adapter
+  -> order lifecycle events
+  -> OMS status transitions
+  -> fill accounting
+  -> reconcile / recovery / terminalization
 ```
 
-Standalone hard `stop_loss` and `take_profit` should remain unsupported unless deliberately implemented as named rules with profile parameters, docs, and research/runtime equivalence coverage.
+The first implementation slice may be smaller than this full design, but it must move in that direction and not make later convergence harder.
 
-This pass should not add stop-loss or take-profit rules.
+## Required implementation direction
 
-## Required work
+### 1. Preserve existing paper behavior by default
 
-### P0: Confirm positive repo-owned loop test
+Current paper behavior using top-of-book, spread validation, slippage, guardrails, sizing, lot/dust handling, dedup, and ledger writes should continue to pass existing tests.
 
-If the positive test exists and is real, leave it intact and mention it in the final report.
-
-If it does not exist, add it. It must use either the public command functions or the exact underlying repo-owned export/replay functions:
+Introduce a default adapter or equivalent abstraction, for example:
 
 ```text
-cmd_research_export_decisions(...)
-cmd_runtime_replay_decisions(...)
-load_decision_export_artifact(...)
-compare_decision_export_artifacts(...)
+ImmediateTopOfBookPaperAdapter
 ```
 
-The test must use validated export artifacts, not only handcrafted decision dicts.
+This adapter should preserve the current behavior when stress execution is disabled.
 
-Minimum assertions:
+### 2. Add a deterministic stress paper execution path
+
+Add a stress-enabled paper execution path that reuses or adapts the existing research `StressExecutionModel` rather than inventing a separate nondeterministic implementation.
+
+The stress path must support at least these deterministic scenarios:
+
+* full fill
+* partial fill
+* order failure before fill accounting
+* submit unknown / delayed fill if feasible in the first implementation slice
+* latency evidence, even if actual scheduling is implemented later
+
+Use deterministic seed/hash semantics. Do not use uncontrolled randomness.
+
+Suggested configuration names may include:
 
 ```text
-research_artifact.source == "research"
-runtime_artifact.source == "runtime_replay"
-both artifacts validate their content_hash
-all decision profile_content_hash values equal approved profile hash
-compare_decision_export_artifacts(...).ok is True
-promotion_grade_comparison is True
-legacy_or_unverified_export is False
-mismatch_count == 0
-missing_research_decisions == []
-missing_runtime_decisions == []
+PAPER_EXECUTION_MODEL=immediate|stress
+PAPER_EXECUTION_STRESS_SEED
+PAPER_EXECUTION_LATENCY_MS
+PAPER_EXECUTION_PARTIAL_FILL_RATE
+PAPER_EXECUTION_PARTIAL_FILL_FRACTION
+PAPER_EXECUTION_ORDER_FAILURE_RATE
 ```
 
-### P1: Add public CLI dispatch test for `decision-equivalence`
+If the repository already has different naming conventions, follow those conventions.
 
-If missing, add a focused test in `tests/test_profile_cli_decision_loop.py` or a new CLI test file.
+### 3. Apply lifecycle semantics, not just fill math
 
-Patch the command function and call `app.main()` so the test proves argparse/dispatch wiring, not only direct function behavior.
+For a stress partial fill:
 
-Example intent:
+* create/order-record the requested qty
+* apply only the filled qty to fills/trades/portfolio
+* keep the order status as `PARTIAL`
+* ensure `qty_filled < qty_req`
+* preserve remaining qty evidence
+* do not update intent dedup as terminal `FILLED`
 
-```python
-def test_cli_dispatch_reaches_decision_equivalence(monkeypatch):
-    calls = {}
+For a stress failure:
 
-    def fake_cmd(**kwargs):
-        calls.update(kwargs)
-        return 0
+* create an order or intent record if the failure occurs after intent/submission staging
+* mark order/intent as `FAILED`
+* do not create fills or trades
+* include failure evidence in order events or another durable diagnostic location
 
-    monkeypatch.setattr(app, "cmd_decision_equivalence", fake_cmd)
+For a submit unknown / delayed scenario if implemented:
 
-    assert app.main([
-        "decision-equivalence",
-        "--research-decisions", "research.json",
-        "--runtime-decisions", "runtime.json",
-        "--profile-hash", "sha256:profile",
-        "--market", "KRW-BTC",
-        "--interval", "1m",
-        "--data-fingerprint", "sha256:data",
-    ]) == 0
+* leave order in `SUBMIT_UNKNOWN`, `NEW`, or another appropriate open/recovery state according to existing OMS semantics
+* ensure unresolved order gates can see it
+* ensure duplicate intents do not silently create another order
+* include replayable evidence showing why it is unresolved
 
-    assert calls == {
-        "research_decisions_path": "research.json",
-        "runtime_decisions_path": "runtime.json",
-        "profile_hash": "sha256:profile",
-        "market": "KRW-BTC",
-        "interval": "1m",
-        "data_fingerprint": "sha256:data",
-    }
-```
+### 4. Persist observability and replay evidence
 
-Use the repo’s actual argument names if they differ.
+Persist enough evidence to reproduce and audit the paper stress result. Prefer existing DB/event structures if possible; add schema migration only if necessary.
 
-### P1: Confirm or add evidence-validator rejection tests
-
-Inspect `_validate_decision_equivalence_evidence()` in `approved_profile.py` and existing tests in `tests/test_approved_profile.py`.
-
-If not already covered, add deterministic mutation tests proving profile transition evidence fails when:
+At minimum, preserve these values in a durable place such as `order_events.message`, `submit_evidence`, a JSON evidence column, or explicit columns if the schema already supports them:
 
 ```text
-promotion_grade_comparison != true
-legacy_or_unverified_export == true
-repo_owned_export_artifacts != true
-research_export_content_hash missing
-runtime_export_content_hash missing
-canonical_incomplete_decision_count > 0
-canonical_missing_field_count > 0
-binding_validation non-empty
-missing_research_decisions non-empty
-missing_runtime_decisions non-empty
-mismatch_count != 0
-comparison_contract_version != canonical_decision_v1
-canonical_schema != true
-legacy_schema == true
+execution_model_name
+execution_model_version
+execution_model_params_hash
+base_seed
+derived_seed_hash
+fill_status
+requested_qty
+filled_qty
+remaining_qty
+latency_ms
+best_bid
+best_ask
+spread_bps
+quote_source
+quote_age_ms
+execution_reality_level
 ```
 
-Important: recompute report `content_hash` after mutating the report so the test proves semantic validation, not only hash mismatch.
+If some fields are unavailable in paper runtime, record explicit `null`/`unknown` values rather than silently omitting the execution evidence.
 
-Do not overfit by adding dozens of redundant tests if a parametrized test can cover these cases.
+### 5. Keep recovery and dedup semantics safe
 
-### P1: Confirm candidate/profile binding is fully pinned
+Ensure the stress paper path respects existing OMS/dedup safety:
 
-Inspect `_validate_research_export_profile_binding()`.
+* `claim_order_intent_dedup`
+* `update_order_intent_dedup`
+* `OPEN_ORDER_STATUSES`
+* terminal vs non-terminal status rules
+* unresolved order gate behavior
+* status transition validation where applicable
 
-If current code already checks:
+Do not release dedup for a `PARTIAL`, `SUBMIT_UNKNOWN`, `ACCOUNTING_PENDING`, or `RECOVERY_REQUIRED` order as if it were terminal.
+
+### 6. Avoid breaking live trading paths
+
+This task is primarily paper-runtime hardening. Do not make risky live-order behavioral changes unless they are small, well-tested, and necessary for shared lifecycle utilities.
+
+If you introduce shared lifecycle helpers, prove they preserve existing live tests.
+
+### 7. Document live-dry-run chaos gap without over-scoping
+
+If adding a full `LiveDryRunChaosBroker` is too large for this change, add a focused design note or TODO-backed test scaffolding that makes the gap explicit.
+
+The design should call for deterministic dry-run scenarios such as:
 
 ```text
-source promotion candidate_id == selected candidate id
-rebuilt candidate_profile_hash == approved profile candidate_profile_hash
-strategy parameters match
-cost model matches
-manifest hash matches
-dataset hash matches
+submit_timeout_then_reconcile
+broker_reject_under_min_total
+partial_fill_then_fee_pending
+order_not_ready_then_recovery_required
 ```
 
-then do not patch it. Mention in the report.
+Do not claim the live dry-run gap is solved unless code and tests actually exercise it.
 
-If any of those are missing, add the missing validation and tests.
+## Tests to add or update
 
-### P2: Improve operator recovery language only if stale
+Add focused regression tests. Prefer small, deterministic unit tests over broad integration tests.
 
-Inspect `_recommended_next_action()` and report generation.
+At minimum, add tests covering:
 
-If it still emits older generic actions in cases that now have repo-specific recovery, add or adjust mappings such as:
+### Existing behavior preservation
+
+* Existing `tests/test_paper_orderbook.py` tests still pass.
+* Immediate/default paper execution still fills using validated top-of-book with spread/slippage and records order/fill/trade as before.
+
+### Stress failure
+
+A test where stress paper execution has `order_failure_rate=1.0`.
+
+Expected:
+
+* `paper_execute()` returns `None` or a clear non-trade result, consistent with repo conventions.
+* order or intent evidence is recorded if the failure occurs after intent staging.
+* order status is `FAILED`.
+* no fill is inserted.
+* no trade is inserted.
+* dedup is released or marked according to existing failed-order semantics.
+
+### Stress partial fill
+
+A test where stress paper execution has `partial_fill_rate=1.0` and `partial_fill_fraction=0.5`.
+
+Expected:
+
+* one order exists
+* one fill/trade exists for only the partial qty
+* `orders.qty_filled` equals the partial qty
+* `orders.qty_req` remains the full requested qty
+* order status is `PARTIAL`
+* remaining qty is positive and persisted in evidence
+* order intent dedup remains non-terminal/open
+* no false `FILLED` status is written
+
+### Deterministic replay
+
+A test where the same seed, request inputs, and stress params produce identical fill status, filled qty, remaining qty, model params hash, and derived seed hash across repeated runs or isolated DBs.
+
+### Observability
+
+A test that reads `order_events`, `fills`, `trades`, or whichever durable evidence sink you choose and verifies that stress execution evidence is present.
+
+### Unresolved gate / duplicate protection if delayed or partial orders remain open
+
+A test that creates a partial or submit-unknown paper order, then attempts the same intent again.
+
+Expected:
+
+* duplicate intent is blocked or unresolved gate blocks new submission
+* no second unsafe order is created
+* logs/events explain the skip
+
+## Suggested implementation shape
+
+You may choose the exact structure after inspecting the code, but a good direction is:
 
 ```text
-decision_export_artifact_unverified -> regenerate_decisions_with_repo_owned_export_commands
-research export/profile mismatch -> reexport_research_decisions_with_approved_profile_hash
-runtime replay/regime mismatch -> replay_runtime_with_approved_regime_policy
-profile/market/interval/data binding mismatch -> bind_decisions_to_requested_profile_market_interval_data_fingerprint
-flat/no-dust state mismatch -> align_flat_position_canonical_state
-runtime-only state mismatch -> scope_runtime_only_state_as_fail_closed_or_extend_research_model
+src/bithumb_bot/broker/paper_execution.py
+  PaperExecutionRequest
+  PaperExecutionResult
+  ImmediateTopOfBookPaperAdapter
+  StressPaperExecutionAdapter
+
+src/bithumb_bot/order_lifecycle.py
+  small lifecycle helpers if needed:
+    apply_paper_execution_result(...)
+    mark_order_partial(...)
+    mark_order_failed(...)
+    mark_order_submit_unknown(...)
 ```
 
-Do not spend time here if current report actions are already actionable and tested.
+Keep this lightweight. Do not over-engineer a full framework if a smaller adapter plus tests can establish the direction.
 
-## Scope rules
+When adapting `StressExecutionModel`, map paper runtime data into `ExecutionRequest` using:
 
-Do not weaken existing safety gates.
+* signal ts
+* decision ts
+* side
+* reference price
+* requested qty or notional
+* fee rate
+* best bid/ask
+* spread bps
+* quote source if available
+* latency settings
+* seed derivation inputs that include client order id or intent key only if that preserves deterministic replay expectations
+
+Be careful: using a UUID client order id in seed derivation may break deterministic replay. Prefer stable inputs such as intent key, signal ts, side, symbol, strategy context, requested qty, model params hash, and explicit base seed.
+
+## Database and schema guidance
+
+Before adding columns, inspect current schema creation/migration code.
+
+Prefer using existing event/evidence fields where possible. If you add schema fields:
+
+* add migration/backfill-safe logic
+* ensure existing DBs do not break
+* add tests against a fresh temp DB
+* add tests against an existing minimal DB if the repo has migration test helpers
+
+## Documentation updates
+
+Update or add concise docs explaining:
+
+* immediate paper execution mode
+* stress paper execution mode
+* deterministic seed/replay behavior
+* what partial/failure/latency does and does not simulate
+* how this differs from live dry-run
+* remaining gap for full live-dry-run chaos rehearsal if not implemented
+
+Good candidate docs:
+
+* `docs/runbooks/research-to-paper.md`
+* `docs/live_dry_run_checklist.md`
+* or a new focused doc such as `docs/paper-execution-lifecycle.md`
+
+Do not overstate completion. If live-dry-run chaos is not implemented, explicitly say it remains future work.
+
+## Commands to run
+
+Run the most relevant tests first, then broader regression if feasible:
+
+```bash
+pytest tests/test_paper_orderbook.py -q
+pytest tests/test_research_backtest_reproducibility.py -q
+pytest tests/test_ledger_atomicity.py -q
+pytest tests/test_recovery_restart_regression.py -q
+pytest tests/test_operator_commands.py -q
+```
+
+Also run any new test file you add, for example:
+
+```bash
+pytest tests/test_paper_stress_execution.py -q
+```
+
+If some tests fail for reasons unrelated to this change, document the exact failures and why they are unrelated. Do not hide them.
+
+## Non-goals for this change
 
 Do not:
 
-```text
-drop canonical comparison fields to make tests pass
-allow manual canonical JSON as promotion-grade evidence
-allow unverified export wrappers as promotion-grade evidence
-allow research/runtime profile hash mismatch
-bypass approved profile validation
-bypass evidence-chain validation
-call live broker APIs from tests
-submit real orders
-add hidden stop_loss or take_profit behavior
-perform a large shared-decision-kernel refactor in this pass
-```
-
-This is a final regression-hardening pass, not a redesign.
-
-## Tests to run
-
-Run targeted tests first:
-
-```bash
-pytest -q tests/test_profile_cli_decision_loop.py
-pytest -q tests/test_decision_equivalence_canonical.py
-pytest -q tests/test_approved_profile.py
-pytest -q tests/test_research_backtest_reproducibility.py
-pytest -q tests/test_sma_with_filter_strategy.py
-pytest -q tests/test_strategy_exit_rules.py
-pytest -q tests/test_research_promotion_gate.py
-```
-
-Then run the full suite if feasible:
-
-```bash
-pytest -q
-```
-
-If full pytest is too slow or fails due to unrelated environmental assumptions, run all changed tests and clearly report what was not run and why.
-
-## Acceptance criteria
-
-The patch is acceptable only if:
-
-```text
-1. The positive repo-owned export/replay/equivalence test exists and passes.
-2. `decision-equivalence` public CLI dispatch is tested through `app.main()`.
-3. Evidence validator rejection for non-promotion-grade or unverified decision-equivalence reports is either already covered or newly covered.
-4. Candidate/profile binding is confirmed or strengthened.
-5. Unsupported runtime-only states remain fail-closed.
-6. Existing exit-rule scope remains unchanged.
-7. No broad redesign or weakening of comparison semantics is introduced.
-```
+* change real live order submission semantics unless absolutely necessary
+* weaken existing guardrails, lot/dust handling, fee validation, or dedup protection
+* replace research `StressExecutionModel` with a separate unseeded random simulator
+* mark partial fills as terminal filled
+* silently drop unresolved paper orders from dedup/gating
+* turn the final report into generic advice
 
 ## Final report format
 
-At the end, provide a concise but complete report with these sections:
+When finished, report in this exact structure:
 
 ```text
 Summary
-- What was confirmed
-- What was patched
-- Whether the repo now has a promotion-grade export/replay/equivalence success path
+- What changed at a design level.
+- Whether default paper behavior is preserved.
+- Whether stress paper execution is now implemented, partially implemented, or deferred.
 
-Verified Findings
-- File-by-file findings
-- Which hypotheses were validated or falsified
-- Any stale assumptions from the review
+Hypothesis Review
+- H1: confirmed/refined/refuted, with repo evidence.
+- H2: confirmed/refined/refuted, with repo evidence.
+- H3: confirmed/refined/refuted, with repo evidence.
+- H4: confirmed/refined/refuted, with repo evidence.
+- H5: confirmed/refined/refuted, with repo evidence.
 
-Changes Made
-- CLI dispatch tests
-- Evidence validator tests, if added
-- Candidate/profile binding validation, if changed
-- Recovery action/report changes, if changed
+Implementation Details
+- Files changed.
+- New adapter/lifecycle components.
+- DB/schema changes, if any.
+- Configuration added or reused.
+- Observability fields persisted.
 
-Tests Added/Changed
-- List each test and what it proves
+Behavioral Guarantees
+- Immediate mode behavior.
+- Stress failure behavior.
+- Stress partial fill behavior.
+- Dedup/unresolved-order behavior.
+- Replay/determinism behavior.
+- Recovery implications.
 
-Exit Rule Scope
-- Confirm current implemented exit rules
-- Confirm stop_loss/take_profit status
-- State whether exit behavior changed
+Tests
+- New tests added.
+- Existing tests updated.
+- Exact test commands run.
+- Pass/fail results.
 
-Commands Run
-- Exact commands
-- Pass/fail result
-- Any skipped or not-run tests with reason
+Remaining Gaps
+- What is still not solved.
+- Especially whether live-dry-run chaos rehearsal is implemented or only documented.
+- Risks and follow-up tasks.
 
-Remaining Risks / Follow-up
-- Only repo-specific risks
-- No generic trading disclaimers
-- If shared decision kernel remains future work, state the exact research/runtime boundary still split
+Do Not Overclaim
+- Explicitly state any uncertainty or unimplemented part.
 ```
 
-Be explicit. Do not claim the broader strategy-equivalence problem is solved unless the real repo-owned success path is tested and the remaining dispatch/evidence regressions are pinned.
+The priority is to evolve `WG-14/bithumb-bot` from “paper execution with realistic price and ledger accounting” into “paper execution that rehearses the same failure families the live OMS must survive,” while preserving reproducibility, recovery safety, and operational observability.
 

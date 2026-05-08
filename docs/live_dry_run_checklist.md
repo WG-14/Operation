@@ -34,6 +34,20 @@ Background: This checklist is for validation only and does not permit real order
 - [ ] Notifier delivery works
 - [ ] The backup timer runs normally
 
+## Deterministic Chaos Gap
+
+This checklist validates operational live dry-run safety. It does not force
+deterministic broker failure families such as:
+
+- `submit_timeout_then_reconcile`
+- `broker_reject_under_min_total`
+- `partial_fill_then_fee_pending`
+- `order_not_ready_then_recovery_required`
+
+Use paper stress execution for deterministic paper lifecycle rehearsal. A
+live-dry-run chaos broker or scenario runner is still required before claiming
+that live dry-run rehearses these failure paths directly.
+
 ## Minimum Conditions for Switching to Real Orders
 
 - [ ] No unexplained error persists over time

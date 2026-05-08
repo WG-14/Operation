@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from ..config import settings
@@ -28,13 +30,31 @@ from ..oms import (
     build_order_intent_key,
     claim_order_intent_dedup,
     new_client_order_id,
+    payload_fingerprint,
+    record_submit_attempt,
     set_status,
     update_order_intent_dedup,
 )
 from ..execution import apply_fill_and_trade, record_order_if_missing
+from .paper_execution import (
+    ImmediateTopOfBookPaperAdapter,
+    PaperExecutionRequest,
+    StressPaperExecutionAdapter,
+)
 
 POSITION_EPSILON = 1e-12
 RUN_LOG = logging.getLogger("bithumb_bot.run")
+
+
+@dataclass(frozen=True)
+class _PaperQuoteContext:
+    fill_price: float
+    reference_price: float
+    best_bid: float
+    best_ask: float
+    spread_bps: float
+    quote_source: str
+    quote_age_ms: int | None = None
 
 
 def _resolve_orderbook_market() -> str:
@@ -45,6 +65,11 @@ def _resolve_orderbook_market() -> str:
 
 
 def _get_fill_price(signal: str, *, market: str) -> float | None:
+    quote_context = _get_paper_quote_context(signal, market=market)
+    return quote_context.fill_price if quote_context is not None else None
+
+
+def _get_paper_quote_context(signal: str, *, market: str) -> _PaperQuoteContext | None:
     try:
         quote = fetch_orderbook_top(market)
         bid, ask = validated_best_quote_prices(quote, requested_market=market)
@@ -63,10 +88,135 @@ def _get_fill_price(signal: str, *, market: str) -> float | None:
 
     slip = float(settings.SLIPPAGE_BPS) / 10000.0
     if signal == "BUY":
-        return ask * (1 + slip)
+        return _PaperQuoteContext(
+            fill_price=ask * (1 + slip),
+            reference_price=ask,
+            best_bid=bid,
+            best_ask=ask,
+            spread_bps=spread_bps,
+            quote_source=type(quote).__name__,
+        )
     if signal == "SELL":
-        return bid * (1 - slip)
+        return _PaperQuoteContext(
+            fill_price=bid * (1 - slip),
+            reference_price=bid,
+            best_bid=bid,
+            best_ask=ask,
+            spread_bps=spread_bps,
+            quote_source=type(quote).__name__,
+        )
     return None
+
+
+def _paper_execution_model_name() -> str:
+    return str(getattr(settings, "PAPER_EXECUTION_MODEL", "immediate") or "immediate").strip().lower()
+
+
+def _paper_stress_seed() -> int | None:
+    raw = getattr(settings, "PAPER_EXECUTION_STRESS_SEED", None)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return int(raw)
+
+
+def _build_paper_execution_request(
+    *,
+    side: str,
+    ts: int,
+    trade_qty: float,
+    fill_price: float,
+    quote_context: _PaperQuoteContext | None,
+    intent_key: str,
+    market: str,
+    fee_rate: float,
+) -> PaperExecutionRequest:
+    seed = _paper_stress_seed()
+    reference_price = (
+        float(quote_context.reference_price)
+        if quote_context is not None and _paper_execution_model_name() == "stress"
+        else float(fill_price)
+    )
+    seed_inputs = {
+        "intent_key": intent_key,
+        "signal_ts": int(ts),
+        "decision_ts": int(ts),
+        "side": side,
+        "symbol": market,
+        "requested_qty": round(float(trade_qty), 12),
+        "reference_price": round(float(reference_price), 8),
+    }
+    return PaperExecutionRequest(
+        signal_ts=int(ts),
+        decision_ts=int(ts),
+        side=side,
+        requested_qty=float(trade_qty),
+        reference_price=reference_price,
+        fee_rate=float(fee_rate),
+        slippage_bps=float(settings.SLIPPAGE_BPS),
+        best_bid=(float(quote_context.best_bid) if quote_context is not None else None),
+        best_ask=(float(quote_context.best_ask) if quote_context is not None else None),
+        spread_bps=(float(quote_context.spread_bps) if quote_context is not None else None),
+        quote_source=(quote_context.quote_source if quote_context is not None else "unknown"),
+        quote_age_ms=(quote_context.quote_age_ms if quote_context is not None else None),
+        execution_reality_level=(
+            "paper_stress_top_of_book"
+            if _paper_execution_model_name() == "stress"
+            else "paper_immediate_top_of_book"
+        ),
+        base_seed=seed,
+        seed_derivation_inputs=seed_inputs,
+    )
+
+
+def _build_paper_execution_adapter():
+    if _paper_execution_model_name() == "stress":
+        return StressPaperExecutionAdapter(
+            fee_rate=float(settings.PAPER_FEE_RATE),
+            slippage_bps=float(settings.SLIPPAGE_BPS),
+            latency_ms=int(getattr(settings, "PAPER_EXECUTION_LATENCY_MS", 0)),
+            partial_fill_rate=float(getattr(settings, "PAPER_EXECUTION_PARTIAL_FILL_RATE", 0.0)),
+            partial_fill_fraction=float(getattr(settings, "PAPER_EXECUTION_PARTIAL_FILL_FRACTION", 0.5)),
+            order_failure_rate=float(getattr(settings, "PAPER_EXECUTION_ORDER_FAILURE_RATE", 0.0)),
+            seed=_paper_stress_seed(),
+        )
+    return ImmediateTopOfBookPaperAdapter()
+
+
+def _record_paper_execution_evidence(
+    conn,
+    *,
+    client_order_id: str,
+    market: str,
+    side: str,
+    qty: float,
+    price: float | None,
+    ts: int,
+    order_status: str,
+    evidence: dict[str, Any],
+) -> None:
+    evidence_json = json.dumps(evidence, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    record_submit_attempt(
+        conn=conn,
+        client_order_id=client_order_id,
+        symbol=market,
+        side=side,
+        qty=float(qty),
+        price=price,
+        submit_ts=int(ts),
+        payload_fingerprint=payload_fingerprint(evidence),
+        broker_response_summary=f"paper_execution fill_status={evidence.get('fill_status')}",
+        submission_reason_code=f"paper_execution_{evidence.get('fill_status')}",
+        exception_class=None,
+        timeout_flag=False,
+        submit_evidence=evidence_json,
+        exchange_order_id_obtained=False,
+        order_status=order_status,
+        submit_attempt_id=f"{client_order_id}:paper_execution",
+        submit_phase="paper_execution",
+        submit_plan_id=f"{client_order_id}:paper_execution",
+        message="paper execution lifecycle evidence",
+        order_type="market",
+    )
 
 
 def _floor_qty_for_paper_buy(*, qty: float, qty_step: float, max_qty_decimals: int) -> float:
@@ -146,7 +296,11 @@ def paper_execute(
     exit_rule_name: str | None = None,
 ) -> dict[str, Any] | None:
     market = _resolve_orderbook_market()
-    if "market" in inspect.signature(_get_fill_price).parameters:
+    quote_context: _PaperQuoteContext | None = None
+    if _get_fill_price.__module__ == __name__ and _get_fill_price.__name__ == "_get_fill_price":
+        quote_context = _get_paper_quote_context(signal, market=market)
+        fill_price = quote_context.fill_price if quote_context is not None else None
+    elif "market" in inspect.signature(_get_fill_price).parameters:
         fill_price = _get_fill_price(signal, market=market)
     else:
         # Preserve compatibility with tests or callers that still patch the
@@ -406,17 +560,70 @@ def paper_execute(
             decision_reason=decision_reason,
             exit_rule_name=exit_rule_name,
             ts_ms=int(ts),
+            status="PENDING_SUBMIT",
+            local_intent_state="PENDING_SUBMIT",
         )
+
+        execution_request = _build_paper_execution_request(
+            side=side,
+            ts=int(ts),
+            trade_qty=float(trade_qty),
+            fill_price=float(fill_price),
+            quote_context=quote_context,
+            intent_key=intent_key,
+            market=market,
+            fee_rate=fee_rate,
+        )
+        execution_result = _build_paper_execution_adapter().execute(execution_request)
+        if _paper_execution_model_name() == "stress":
+            _record_paper_execution_evidence(
+                conn,
+                client_order_id=client_order_id,
+                market=market,
+                side=side,
+                qty=float(execution_result.requested_qty),
+                price=(
+                    float(execution_result.avg_fill_price)
+                    if execution_result.avg_fill_price is not None
+                    else float(fill_price)
+                ),
+                ts=int(ts),
+                order_status=(
+                    "FAILED"
+                    if execution_result.fill_status == "failed"
+                    else "PARTIAL"
+                    if execution_result.fill_status == "partial"
+                    else "FILLED"
+                ),
+                evidence=execution_result.evidence,
+            )
+
+        if execution_result.fill_status == "failed" or execution_result.filled_qty <= 0.0:
+            set_status(
+                client_order_id,
+                "FAILED",
+                last_error="paper stress execution failed before fill accounting",
+                conn=conn,
+            )
+            update_order_intent_dedup(
+                conn,
+                intent_key=intent_key,
+                client_order_id=client_order_id,
+                order_status="FAILED",
+                last_error="paper stress execution failed before fill accounting",
+            )
+            conn.commit()
+            return None
 
         trade = apply_fill_and_trade(
             conn,
             client_order_id=client_order_id,
             side=side,
             fill_id=None,
-            fill_ts=int(ts),
-            price=float(fill_price),
-            qty=float(trade_qty),
-            fee=float(fee),
+            fill_ts=int(ts) + int(execution_result.latency_ms),
+            price=float(execution_result.avg_fill_price),
+            qty=float(execution_result.filled_qty),
+            fee=float(execution_result.fee),
             strategy_name=(strategy_name or settings.STRATEGY_NAME),
             entry_decision_id=(decision_id if side == "BUY" else None),
             exit_decision_id=(decision_id if side == "SELL" else None),
@@ -426,13 +633,13 @@ def paper_execute(
             pair=market,
             signal_ts=int(ts),
         )
-
-        set_status(client_order_id, "FILLED", conn=conn)
+        final_status = "PARTIAL" if execution_result.fill_status == "partial" else "FILLED"
+        set_status(client_order_id, final_status, conn=conn)
         update_order_intent_dedup(
             conn,
             intent_key=intent_key,
             client_order_id=client_order_id,
-            order_status="FILLED",
+            order_status=final_status,
         )
         conn.commit()
         return trade
