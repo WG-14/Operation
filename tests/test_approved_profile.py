@@ -245,7 +245,10 @@ def _attach_decision_equivalence_report(
         return Path(str(payload["decision_equivalence_report_path"]))
     report_path = tmp_path / f"decision_equivalence_{len(list(tmp_path.glob('decision_equivalence_*.json')))}.json"
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "comparison_contract_version": "canonical_decision_v1",
+        "canonical_schema": True,
+        "legacy_schema": False,
         "ok": True,
         "reason_codes": [],
         "profile_content_hash": profile["profile_content_hash"],
@@ -938,15 +941,51 @@ def test_evidence_content_hash_excludes_generated_at(tmp_path: Path) -> None:
 
 def _decision(**overrides: object) -> dict[str, object]:
     payload = {
+        "decision_contract_version": 1,
+        "strategy_contract_version": "sma_strategy_v1",
         "signal_timestamp": "2026-05-01T00:01:00+00:00",
+        "candle_ts": 1_714_521_660_000,
+        "through_ts_ms": 1_714_521_660_000,
         "candle_basis": "closed",
+        "decision_ts": 1_714_521_720_000,
+        "raw_signal": "BUY",
+        "final_signal": "BUY",
         "side": "BUY",
         "strategy_name": "sma_with_filter",
         "profile_content_hash": "sha256:profile",
+        "candidate_profile_hash": "sha256:candidate",
+        "dataset_content_hash": "sha256:data",
+        "db_data_fingerprint": "sha256:data",
         "market": "KRW-BTC",
         "interval": "1m",
+        "blocked_filters": [],
+        "prev_s": 100.0,
+        "prev_l": 101.0,
+        "curr_s": 102.0,
+        "curr_l": 101.0,
+        "feature_hash": "sha256:feature",
+        "gap_ratio": 0.01,
+        "range_ratio": 0.02,
+        "expected_edge_ratio": 0.01,
+        "required_edge_ratio": 0.001,
+        "fee_authority_hash": "sha256:fee_authority",
         "fee_model_hash": "sha256:fee",
         "slippage_model_hash": "sha256:slippage",
+        "order_rules_hash": "sha256:order_rules",
+        "market_regime": "trend",
+        "regime_decision": "allowed",
+        "regime_block_reason": "",
+        "position_state_hash": "sha256:position",
+        "entry_allowed": True,
+        "exit_allowed": False,
+        "dust_state": "flat",
+        "effective_flat": True,
+        "normalized_exposure_active": False,
+        "exit_rule": "",
+        "exit_reason": "",
+        "exit_evaluations_hash": "sha256:exit_evaluations",
+        "execution_timing_policy_hash": "sha256:timing",
+        "replay_fingerprint_hash": "sha256:replay",
         "blocked": False,
         "block_reason": "",
     }
@@ -974,14 +1013,14 @@ def test_decision_equivalence_passes_on_matching_synthetic_decisions() -> None:
     ("field", "value", "reason"),
     [
         ("signal_timestamp", "2026-05-01T00:02:00+00:00", "missing_runtime_decision"),
-        ("side", "SELL", "decision_side_mismatch"),
+        ("side", "SELL", "decision_final_signal_mismatch"),
         ("strategy_name", "other", "decision_strategy_name_mismatch"),
         ("market", "KRW-ETH", "decision_market_mismatch"),
         ("interval", "5m", "decision_interval_mismatch"),
-        ("profile_content_hash", "sha256:other", "decision_profile_content_hash_mismatch"),
-        ("fee_model_hash", "sha256:other", "decision_fee_model_hash_mismatch"),
-        ("slippage_model_hash", "sha256:other", "decision_slippage_model_hash_mismatch"),
-        ("blocked", True, "decision_blocked_mismatch"),
+        ("profile_content_hash", "sha256:other", "decision_profile_hash_mismatch"),
+        ("fee_model_hash", "sha256:other", "decision_fee_authority_mismatch"),
+        ("slippage_model_hash", "sha256:other", "decision_slippage_model_mismatch"),
+        ("blocked", True, "decision_filter_block_reason_mismatch"),
     ],
 )
 def test_decision_equivalence_fails_with_clear_reason_codes(field: str, value: object, reason: str) -> None:
@@ -997,6 +1036,43 @@ def test_decision_equivalence_fails_with_clear_reason_codes(field: str, value: o
 
     assert result.ok is False
     assert reason in result.report["reason_codes"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("exit_rule", "max_holding_time", "decision_exit_rule_mismatch"),
+        ("exit_reason", "exit by max holding time", "decision_exit_rule_mismatch"),
+        ("position_state_hash", "sha256:other_position", "decision_position_dust_mismatch"),
+        ("dust_state", "dust_only", "decision_position_dust_mismatch"),
+        ("entry_allowed", False, "decision_position_dust_mismatch"),
+        ("exit_allowed", True, "decision_position_dust_mismatch"),
+        ("fee_authority_hash", "sha256:other_fee_authority", "decision_fee_authority_mismatch"),
+        ("order_rules_hash", "sha256:other_order_rules", "decision_order_rules_mismatch"),
+        ("regime_decision", "blocked", "decision_regime_mismatch"),
+        ("candle_basis", "unsafe_open_candle", "decision_timestamp_candle_basis_mismatch"),
+        ("profile_content_hash", "sha256:other_profile", "decision_profile_hash_mismatch"),
+        ("dataset_content_hash", "sha256:other_data", "decision_data_fingerprint_mismatch"),
+        ("execution_timing_policy_hash", "sha256:other_timing", "decision_execution_timing_policy_mismatch"),
+    ],
+)
+def test_canonical_decision_equivalence_fails_on_safety_semantic_mutations(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    result = compare_decision_equivalence(
+        research_decisions=[_decision()],
+        runtime_decisions=[_decision(**{field: value})],
+        profile_hash="sha256:profile",
+        market="KRW-BTC",
+        interval="1m",
+        data_fingerprint="sha256:data",
+    )
+
+    assert result.ok is False
+    assert reason in result.report["reason_codes"]
+    assert result.report["comparison_contract_version"] == "canonical_decision_v1"
 
 
 @pytest.mark.parametrize(
@@ -1180,6 +1256,14 @@ def test_profile_promote_fails_when_decision_equivalence_mismatch_count_nonzero(
         (
             {"db_data_fingerprint": "sha256:other_db"},
             "paper_validation_evidence_decision_equivalence_data_fingerprint_mismatch",
+        ),
+        (
+            {
+                "comparison_contract_version": "legacy_shallow_v1",
+                "canonical_schema": False,
+                "legacy_schema": True,
+            },
+            "paper_validation_evidence_decision_equivalence_legacy_schema",
         ),
     ],
 )

@@ -5,13 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .canonical_decision import CANONICAL_DECISION_SCHEMA_FIELDS, is_canonical_decision, normalize_canonical_decision
 from .research.hashing import content_hash_payload, sha256_prefixed
 
 
-DECISION_EQUIVALENCE_SCHEMA_VERSION = 1
+DECISION_EQUIVALENCE_SCHEMA_VERSION = 2
+CANONICAL_COMPARISON_CONTRACT_VERSION = "canonical_decision_v1"
+LEGACY_COMPARISON_CONTRACT_VERSION = "legacy_shallow_v1"
 DECISION_EQUIVALENCE_HASH_FIELD = "content_hash"
 DECISION_EQUIVALENCE_HASH_EXCLUDED_FIELDS = frozenset({DECISION_EQUIVALENCE_HASH_FIELD, "generated_at"})
-DECISION_KEYS = (
+LEGACY_DECISION_FIELDS = (
     "signal_timestamp",
     "candle_basis",
     "side",
@@ -24,6 +27,7 @@ DECISION_KEYS = (
     "blocked",
     "block_reason",
 )
+CANONICAL_EQUIVALENCE_FIELDS = CANONICAL_DECISION_SCHEMA_FIELDS
 DIAGNOSTIC_DRIFT_FIELDS = (
     "market",
     "interval",
@@ -55,8 +59,15 @@ def compare_decision_equivalence(
     data_fingerprint: str,
     generated_at: str | None = None,
 ) -> DecisionEquivalenceResult:
-    research_by_key = {_decision_key(item): item for item in research_decisions}
-    runtime_by_key = {_decision_key(item): item for item in runtime_decisions}
+    canonical_comparison = all(is_canonical_decision(item) for item in research_decisions + runtime_decisions)
+    comparison_fields = CANONICAL_EQUIVALENCE_FIELDS if canonical_comparison else LEGACY_DECISION_FIELDS
+    comparison_contract_version = (
+        CANONICAL_COMPARISON_CONTRACT_VERSION if canonical_comparison else LEGACY_COMPARISON_CONTRACT_VERSION
+    )
+    normalized_research = [_normalize_for_comparison(item, canonical=canonical_comparison) for item in research_decisions]
+    normalized_runtime = [_normalize_for_comparison(item, canonical=canonical_comparison) for item in runtime_decisions]
+    research_by_key = {_decision_key(item): item for item in normalized_research}
+    runtime_by_key = {_decision_key(item): item for item in normalized_runtime}
     mismatch_items: list[dict[str, object]] = []
     missing_research = sorted(set(runtime_by_key) - set(research_by_key))
     missing_runtime = sorted(set(research_by_key) - set(runtime_by_key))
@@ -64,17 +75,28 @@ def compare_decision_equivalence(
         left = research_by_key[key]
         right = runtime_by_key[key]
         field_mismatches = []
-        for field in DECISION_KEYS:
+        for field in comparison_fields:
             if _normalized(left.get(field)) != _normalized(right.get(field)):
                 field_mismatches.append(
-                    {"field": field, "research": left.get(field), "runtime": right.get(field)}
+                    {
+                        "field": field,
+                        "reason_code": _reason_for_field(field),
+                        "research": left.get(field),
+                        "runtime": right.get(field),
+                    }
                 )
         if field_mismatches:
-            mismatch_items.append({"decision_key": key, "reason_code": "decision_field_mismatch", "fields": field_mismatches})
+            mismatch_items.append(
+                {
+                    "decision_key": key,
+                    "reason_code": "decision_field_mismatch",
+                    "fields": field_mismatches,
+                }
+            )
     mismatch_items.extend(
         _timestamp_only_diagnostics(
-            research_decisions=research_decisions,
-            runtime_decisions=runtime_decisions,
+            research_decisions=normalized_research,
+            runtime_decisions=normalized_runtime,
             missing_runtime_keys=set(missing_runtime),
             missing_research_keys=set(missing_research),
         )
@@ -89,20 +111,28 @@ def compare_decision_equivalence(
     exact_mismatch_count = sum(1 for item in mismatch_items if not item.get("diagnostic_only"))
     report: dict[str, Any] = {
         "schema_version": DECISION_EQUIVALENCE_SCHEMA_VERSION,
+        "comparison_contract_version": comparison_contract_version,
+        "canonical_schema": canonical_comparison,
+        "legacy_schema": not canonical_comparison,
         "ok": not reason_codes,
         "reason_codes": sorted(set(reason_codes)),
         "profile_content_hash": profile_hash,
         "market": market,
         "interval": interval,
         "data_fingerprint": data_fingerprint,
+        "dataset_content_hash": data_fingerprint,
         "research_decision_count": len(research_decisions),
         "runtime_decision_count": len(runtime_decisions),
         "matched_decision_count": len(set(research_by_key) & set(runtime_by_key)) - exact_mismatch_count,
         "mismatched_decision_count": len(mismatch_items),
+        "mismatch_count": exact_mismatch_count,
         "missing_research_decisions": missing_research,
         "missing_runtime_decisions": missing_runtime,
         "mismatches": mismatch_items,
-        "recommended_next_action": "none" if not reason_codes else "inspect_research_runtime_decision_drift_before_promotion",
+        "recommended_next_action": _recommended_next_action(
+            reason_codes=sorted(set(reason_codes)),
+            canonical_comparison=canonical_comparison,
+        ),
         "generated_at": generated_at,
     }
     report[DECISION_EQUIVALENCE_HASH_FIELD] = compute_decision_equivalence_hash(report)
@@ -137,10 +167,17 @@ def _decision_key(item: dict[str, Any]) -> str:
     return "|".join(
         (
             str(item.get("signal_timestamp") or ""),
+            str(item.get("candle_ts") or ""),
             str(item.get("market") or ""),
             str(item.get("interval") or ""),
         )
     )
+
+
+def _normalize_for_comparison(item: dict[str, Any], *, canonical: bool) -> dict[str, Any]:
+    if canonical:
+        return normalize_canonical_decision(item)
+    return dict(item)
 
 
 def _timestamp_only_diagnostics(
@@ -214,11 +251,70 @@ def _field_reasons(item: dict[str, object]) -> list[str]:
         if not isinstance(field_item, dict):
             continue
         field = str(field_item.get("field") or "field")
-        reasons.append(f"decision_{field}_mismatch")
+        reasons.append(str(field_item.get("reason_code") or _reason_for_field(field)))
     return reasons or ["decision_field_mismatch"]
 
 
 def _normalized(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return str(value or "").strip()
+
+
+def _reason_for_field(field: str) -> str:
+    if field in {"signal_timestamp", "candle_ts", "through_ts_ms", "candle_basis", "decision_ts"}:
+        return "decision_timestamp_candle_basis_mismatch"
+    if field == "raw_signal":
+        return "decision_raw_signal_mismatch"
+    if field in {"final_signal", "side"}:
+        return "decision_final_signal_mismatch"
+    if field in {"blocked", "block_reason", "blocked_filters"}:
+        return "decision_filter_block_reason_mismatch"
+    if field in {"fee_authority_hash", "fee_model_hash"}:
+        return "decision_fee_authority_mismatch"
+    if field == "slippage_model_hash":
+        return "decision_slippage_model_mismatch"
+    if field == "order_rules_hash":
+        return "decision_order_rules_mismatch"
+    if field in {"market_regime", "regime_decision", "regime_block_reason"}:
+        return "decision_regime_mismatch"
+    if field in {
+        "position_state_hash",
+        "entry_allowed",
+        "exit_allowed",
+        "dust_state",
+        "effective_flat",
+        "normalized_exposure_active",
+    }:
+        return "decision_position_dust_mismatch"
+    if field in {"exit_rule", "exit_reason", "exit_evaluations_hash"}:
+        return "decision_exit_rule_mismatch"
+    if field == "execution_timing_policy_hash":
+        return "decision_execution_timing_policy_mismatch"
+    if field in {"profile_content_hash", "candidate_profile_hash"}:
+        return "decision_profile_hash_mismatch"
+    if field in {"dataset_content_hash", "db_data_fingerprint"}:
+        return "decision_data_fingerprint_mismatch"
+    if field in {"feature_hash", "prev_s", "prev_l", "curr_s", "curr_l", "gap_ratio", "range_ratio", "expected_edge_ratio", "required_edge_ratio"}:
+        return "decision_feature_mismatch"
+    return f"decision_{field}_mismatch"
+
+
+def _recommended_next_action(*, reason_codes: list[str], canonical_comparison: bool) -> str:
+    if not canonical_comparison:
+        return "regenerate_decisions_with_canonical_schema_before_promotion"
+    if not reason_codes:
+        return "none"
+    if "decision_timestamp_candle_basis_mismatch" in reason_codes:
+        return "align_candle_cutoff_through_ts_and_execution_timing_policy_then_replay"
+    if "decision_exit_rule_mismatch" in reason_codes:
+        return "inspect_strategy_exit_rule_profile_and_runtime_configuration"
+    if "decision_position_dust_mismatch" in reason_codes:
+        return "inspect_runtime_position_snapshot_dust_state_and_lot_authority"
+    if "decision_fee_authority_mismatch" in reason_codes:
+        return "inspect_fee_authority_order_rules_and_cost_model_inputs"
+    if "decision_regime_mismatch" in reason_codes:
+        return "inspect_candidate_regime_policy_and_market_regime_snapshot"
+    return "inspect_research_runtime_decision_drift_before_promotion"

@@ -1205,5 +1205,7 @@ def _validate_decision_equivalence_evidence(
         raise ApprovedProfileError(f"{label}_decision_equivalence_missing_runtime_decisions")
     if bool(report.get("blocked_decision_equivalence")):
         raise ApprovedProfileError(f"{label}_decision_equivalence_blocked")
+    if report.get("comparison_contract_version") != "canonical_decision_v1" or report.get("canonical_schema") is not True:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_legacy_schema")
     if report.get("ok") is not True:
         raise ApprovedProfileError(f"{label}_decision_equivalence_not_ok")

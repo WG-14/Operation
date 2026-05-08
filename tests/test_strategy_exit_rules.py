@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.strategy.base import PositionContext
-from bithumb_bot.strategy.exit_rules import OppositeCrossExitRule
+
+from bithumb_bot.strategy.exit_rules import OppositeCrossExitRule, create_exit_rules
 from bithumb_bot.strategy.sma import create_sma_strategy
 
 
@@ -396,3 +399,31 @@ def test_noise_band_boundary_comparisons_are_applied_as_expected() -> None:
     assert at_zero.should_exit is False
     assert at_min_profit_floor.context["small_gain_zone"] is False
     assert at_min_profit_floor.should_exit is True
+
+
+def test_exit_rule_factory_scope_is_explicit() -> None:
+    rules = create_exit_rules(
+        rule_names=["opposite_cross", "max_holding_time"],
+        max_holding_sec=60.0,
+        min_take_profit_ratio=0.002,
+        live_fee_rate_estimate=0.0004,
+        small_loss_tolerance_ratio=0.001,
+    )
+
+    assert [rule.name for rule in rules] == ["opposite_cross", "max_holding_time"]
+    with pytest.raises(ValueError, match="unknown exit rule='stop_loss'"):
+        create_exit_rules(
+            rule_names=["stop_loss"],
+            max_holding_sec=60.0,
+            min_take_profit_ratio=0.002,
+            live_fee_rate_estimate=0.0004,
+            small_loss_tolerance_ratio=0.001,
+        )
+    with pytest.raises(ValueError, match="unknown exit rule='take_profit'"):
+        create_exit_rules(
+            rule_names=["take_profit"],
+            max_holding_sec=60.0,
+            min_take_profit_ratio=0.002,
+            live_fee_rate_estimate=0.0004,
+            small_loss_tolerance_ratio=0.001,
+        )
