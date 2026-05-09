@@ -20,6 +20,7 @@ from .dataset_snapshot import (
     load_dataset_split,
 )
 from .backtest_engine import execution_event_summary
+from .deployment_policy import validate_production_calibration_policy
 from .execution_calibration import compare_calibration_to_scenario
 from .execution_model import FixedBpsExecutionModel, StressExecutionModel, model_params_hash
 from .execution_timing import execution_reality_gate, signal_quote_coverage_summary
@@ -407,7 +408,8 @@ def _evaluate_candidates(
                     "parameter_values": params,
                     "scenario_policy": manifest.execution_model.scenario_policy,
                     "scenario_results": [],
-                "execution_model_source": manifest.execution_model.source,
+                    "execution_model_source": manifest.execution_model.source,
+                    "deployment_tier": manifest.deployment_tier,
                     "execution_calibration_required": manifest.execution_model.calibration_required,
                     "execution_calibration_strictness": manifest.execution_model.calibration_strictness,
                     "final_holdout_required_for_promotion": manifest.acceptance_gate.final_holdout_required_for_promotion,
@@ -415,7 +417,7 @@ def _evaluate_candidates(
                     "walk_forward_required": manifest.acceptance_gate.walk_forward_required,
                     "regime_classifier_version": MARKET_REGIME_VERSION,
                     "warnings": [],
-                "repository_version": _repository_version(),
+                    "repository_version": _repository_version(),
                 },
             )
             candidate_payload["scenario_results"].append(scenario_result)
@@ -468,6 +470,22 @@ def _evaluate_candidates(
         if warning_reasons:
             candidate_payload["warnings"] = sorted(
                 set(candidate_payload.get("warnings") or ()) | set(warning_reasons)
+            )
+        policy_result = validate_production_calibration_policy(
+            candidate_payload,
+            target=manifest.deployment_tier,
+        )
+        candidate_payload["production_calibration_policy_result"] = policy_result.as_dict()
+        candidate_payload["production_calibration_policy_reasons"] = list(policy_result.reasons)
+        candidate_payload["execution_calibration_policy_source"] = policy_result.policy_source
+        if policy_result.artifact_hash is not None:
+            candidate_payload["execution_calibration_artifact_hash"] = policy_result.artifact_hash
+        if policy_result.artifact_hashes:
+            candidate_payload["execution_calibration_artifact_hashes"] = list(policy_result.artifact_hashes)
+        if policy_result.status == "FAIL":
+            candidate_payload["acceptance_gate_result"] = "FAIL"
+            candidate_payload["gate_fail_reasons"] = sorted(
+                set(candidate_payload.get("gate_fail_reasons") or ()) | set(policy_result.reasons)
             )
         candidate_payload["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate_payload))
         rows.append(candidate_payload)
@@ -528,16 +546,28 @@ def _combined_calibration_gate(scenario_results: list[dict[str, Any]]) -> dict[s
     gates = [item.get("execution_calibration_gate") for item in scenario_results if isinstance(item.get("execution_calibration_gate"), dict)]
     reasons = sorted({str(reason) for gate in gates for reason in gate.get("reasons") or []})
     statuses = {str(gate.get("status")) for gate in gates}
+    hashes = sorted(
+        {
+            str(gate.get("artifact_hash"))
+            for gate in gates
+            if isinstance(gate.get("artifact_hash"), str) and str(gate.get("artifact_hash")).startswith("sha256:")
+        }
+    )
     status = "PASS"
     if "FAIL" in statuses:
         status = "FAIL"
     elif "MISSING" in statuses:
         status = "MISSING"
-    return {
+    payload: dict[str, Any] = {
         "status": status,
         "reasons": reasons,
         "scenario_gates": gates,
     }
+    if len(hashes) == 1:
+        payload["artifact_hash"] = hashes[0]
+    if hashes:
+        payload["artifact_hashes"] = hashes
+    return payload
 
 
 def _gate_result(
@@ -923,6 +953,7 @@ def _report_payload(
         "regime_acceptance_gate": manifest.acceptance_gate.regime_acceptance_gate.as_dict(),
         "execution_model": manifest.execution_model.as_dict(),
         "execution_model_source": manifest.execution_model.source,
+        "deployment_tier": manifest.deployment_tier,
         "execution_calibration_required": manifest.execution_model.calibration_required,
         "market_regime_bucket_performance": (
             best.get("market_regime_bucket_performance") if best else None

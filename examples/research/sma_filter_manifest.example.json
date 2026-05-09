@@ -2,6 +2,7 @@
   "experiment_id": "sma_filter_v1_2026_05",
   "hypothesis": "In an uptrend with sufficient volatility/liquidity, the SMA strategy has positive expectancy after fees and slippage.",
   "strategy_name": "sma_with_filter",
+  "deployment_tier": "research_only",
   "market": "KRW-BTC",
   "interval": "1m",
   "dataset": {

@@ -10,6 +10,7 @@ from bithumb_bot.storage_io import write_json_atomic
 
 from .hashing import content_hash_payload, sha256_prefixed
 from .lineage import build_promotion_lineage, validate_lineage_artifact, LineageValidationError
+from .deployment_policy import validate_production_calibration_policy
 
 
 class PromotionGateError(ValueError):
@@ -58,6 +59,7 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         "blocked_live_regimes": candidate.get("blocked_live_regimes"),
         "acceptance_gate_result": candidate.get("acceptance_gate_result"),
         "scenario_policy": candidate.get("scenario_policy"),
+        "deployment_tier": candidate.get("deployment_tier") or "research_only",
         "scenario_results": candidate.get("scenario_results"),
         "scenario_pass_count": candidate.get("scenario_pass_count"),
         "scenario_fail_count": candidate.get("scenario_fail_count"),
@@ -78,6 +80,15 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         profile["execution_calibration_strictness"] = candidate.get("execution_calibration_strictness")
     if candidate.get("execution_calibration_gate") is not None:
         profile["execution_calibration_gate"] = candidate.get("execution_calibration_gate")
+    for key in (
+        "execution_calibration_artifact_hash",
+        "execution_calibration_artifact_hashes",
+        "execution_calibration_policy_source",
+        "production_calibration_policy_result",
+        "production_calibration_policy_reasons",
+    ):
+        if candidate.get(key) is not None:
+            profile[key] = candidate.get(key)
     return profile
 
 
@@ -101,6 +112,7 @@ def evaluate_candidate_for_promotion(candidate: dict[str, Any]) -> tuple[bool, l
     _extend_execution_reality_reasons(candidate, reasons)
     _extend_execution_event_reasons(candidate, reasons)
     _extend_execution_calibration_reasons(candidate, reasons)
+    _extend_production_calibration_policy_reasons(candidate, reasons)
     profile_hash = candidate.get("candidate_profile_hash")
     if not profile_hash:
         reasons.append("candidate_profile_hash_missing")
@@ -136,7 +148,20 @@ def validate_backtest_candidate_for_promotion(candidate: dict[str, Any] | None) 
     _extend_execution_reality_reasons(candidate, reasons, prefix="backtest_")
     _extend_execution_event_reasons(candidate, reasons, prefix="backtest_")
     _extend_execution_calibration_reasons(candidate, reasons, prefix="backtest_")
+    _extend_production_calibration_policy_reasons(candidate, reasons, prefix="backtest_")
     return not reasons, reasons
+
+
+def _extend_production_calibration_policy_reasons(
+    candidate: dict[str, Any],
+    reasons: list[str],
+    *,
+    prefix: str = "",
+) -> None:
+    result = validate_production_calibration_policy(candidate)
+    if result.status == "FAIL":
+        reasons.extend([f"{prefix}{reason}" for reason in result.reasons])
+        reasons.extend(result.reasons)
 
 
 def _extend_execution_calibration_reasons(
@@ -396,7 +421,18 @@ def promote_candidate(
         "backtest_report_hash": backtest_report_hash,
         "walk_forward_report_path": str((research_report_dir / "walk_forward_report.json").resolve()) if walk_forward_required else None,
         "walk_forward_report_hash": None,
+        "deployment_tier": candidate.get("deployment_tier") or "research_only",
+        "production_calibration_policy_result": candidate.get("production_calibration_policy_result")
+        or validate_production_calibration_policy(candidate).as_dict(),
+        "production_calibration_policy_reasons": candidate.get("production_calibration_policy_reasons")
+        or list(validate_production_calibration_policy(candidate).reasons),
+        "execution_calibration_policy_source": candidate.get("execution_calibration_policy_source")
+        or validate_production_calibration_policy(candidate).policy_source,
+        "execution_calibration_required": candidate.get("execution_calibration_required"),
+        "execution_calibration_strictness": candidate.get("execution_calibration_strictness"),
+        "execution_calibration_gate": candidate.get("execution_calibration_gate"),
         "execution_calibration_artifact_hash": _candidate_calibration_hash(candidate),
+        "execution_calibration_artifact_hashes": _candidate_calibration_hashes(candidate),
         "experiment_family_id": report.get("experiment_family_id"),
         "hypothesis_id": report.get("hypothesis_id"),
         "hypothesis_status": report.get("hypothesis_status"),
@@ -448,7 +484,7 @@ def promote_candidate(
             "evidence_source": "backtest_report.json",
             "missing_policy_behavior": "fail_closed",
         },
-        "operator_next_step": "Review this artifact before manual paper env/profile consideration.",
+        "operator_next_step": _operator_next_step(candidate),
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
     }
     if walk_forward_required:
@@ -522,7 +558,11 @@ def validate_walk_forward_candidate_for_promotion(
         "cost_model",
         "execution_model",
         "execution_calibration_required",
+        "execution_calibration_strictness",
         "execution_calibration_gate",
+        "execution_calibration_artifact_hash",
+        "execution_calibration_artifact_hashes",
+        "deployment_tier",
         "manifest_hash",
     ):
         if candidate.get(key) != backtest_candidate.get(key):
@@ -594,10 +634,43 @@ def _execution_calibration_warning_reasons(candidate: dict[str, Any]) -> list[st
 
 
 def _candidate_calibration_hash(candidate: dict[str, Any]) -> str | None:
+    value = candidate.get("execution_calibration_artifact_hash")
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return value
     gate = candidate.get("execution_calibration_gate")
     if isinstance(gate, dict) and isinstance(gate.get("artifact_hash"), str):
         return str(gate["artifact_hash"])
+    hashes = _candidate_calibration_hashes(candidate)
+    if len(hashes) == 1:
+        return hashes[0]
     return None
+
+
+def _candidate_calibration_hashes(candidate: dict[str, Any]) -> list[str]:
+    values: set[str] = set()
+    raw = candidate.get("execution_calibration_artifact_hashes")
+    if isinstance(raw, list):
+        values.update(str(value) for value in raw if str(value).startswith("sha256:"))
+    gate = candidate.get("execution_calibration_gate")
+    if isinstance(gate, dict):
+        if isinstance(gate.get("artifact_hash"), str) and str(gate.get("artifact_hash")).startswith("sha256:"):
+            values.add(str(gate["artifact_hash"]))
+        raw_gate = gate.get("artifact_hashes")
+        if isinstance(raw_gate, list):
+            values.update(str(value) for value in raw_gate if str(value).startswith("sha256:"))
+        for scenario_gate in gate.get("scenario_gates") or ():
+            if isinstance(scenario_gate, dict):
+                value = scenario_gate.get("artifact_hash")
+                if isinstance(value, str) and value.startswith("sha256:"):
+                    values.add(value)
+    return sorted(values)
+
+
+def _operator_next_step(candidate: dict[str, Any]) -> str:
+    policy = candidate.get("production_calibration_policy_result")
+    if isinstance(policy, dict) and policy.get("status") == "FAIL":
+        return str(policy.get("operator_next_step") or "regenerate_execution_quality_calibration_and_rerun_research_backtest_with_execution_calibration")
+    return "Review this artifact before manual paper env/profile consideration."
 
 
 def _candidate_execution_event_summary(candidate: dict[str, Any]) -> dict[str, Any] | None:

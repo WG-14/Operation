@@ -14,6 +14,7 @@ from .decision_equivalence import compute_decision_equivalence_hash
 from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.lineage import validate_lineage_artifact, LineageValidationError
 from .research.promotion_gate import build_candidate_profile
+from .research.deployment_policy import deployment_tier_for_profile_mode, validate_production_calibration_policy
 from .storage_io import write_json_atomic
 
 
@@ -251,6 +252,10 @@ def verify_promotion_artifact(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("manifest_hash", "dataset_content_hash", "candidate_profile_hash"):
             if not _values_equal(payload.get(key), validated_lineage.get(key)):
                 raise ApprovedProfileError(f"lineage_{key}_mismatch")
+        promotion_calibration_hash = str(payload.get("execution_calibration_artifact_hash") or "").strip()
+        lineage_calibration_hash = str(validated_lineage.get("execution_calibration_artifact_hash") or "").strip()
+        if promotion_calibration_hash and promotion_calibration_hash != lineage_calibration_hash:
+            raise ApprovedProfileError("lineage_execution_calibration_artifact_hash_mismatch")
     live_regime_policy = payload.get("live_regime_policy")
     if not isinstance(live_regime_policy, dict):
         raise ApprovedProfileError("promotion_regime_policy_missing")
@@ -267,7 +272,14 @@ def _candidate_like_from_promotion(payload: dict[str, Any]) -> dict[str, Any]:
         "cost_model": profile.get("cost_model"),
         "execution_model": profile.get("execution_model"),
         "execution_calibration_required": profile.get("execution_calibration_required"),
+        "execution_calibration_strictness": profile.get("execution_calibration_strictness"),
         "execution_calibration_gate": profile.get("execution_calibration_gate"),
+        "execution_calibration_artifact_hash": profile.get("execution_calibration_artifact_hash"),
+        "execution_calibration_artifact_hashes": profile.get("execution_calibration_artifact_hashes"),
+        "execution_calibration_policy_source": profile.get("execution_calibration_policy_source"),
+        "production_calibration_policy_result": profile.get("production_calibration_policy_result"),
+        "production_calibration_policy_reasons": profile.get("production_calibration_policy_reasons"),
+        "deployment_tier": profile.get("deployment_tier") or payload.get("deployment_tier"),
         "experiment_id": payload.get("strategy_profile_source_experiment") or profile.get("source_experiment"),
         "manifest_hash": payload.get("manifest_hash") or profile.get("manifest_hash"),
         "dataset_snapshot_id": payload.get("dataset_snapshot_id") or profile.get("dataset_snapshot_id"),
@@ -313,6 +325,20 @@ def build_approved_profile(
     if normalized_mode not in APPROVED_PROFILE_MODES:
         raise ApprovedProfileError(f"invalid_profile_mode: {normalized_mode}")
     source_hash = str(verified_promotion["content_hash"])
+    promotion_profile = (
+        verified_promotion.get("candidate_profile")
+        if isinstance(verified_promotion.get("candidate_profile"), dict)
+        else {}
+    )
+    promotion_source = {**promotion_profile, **verified_promotion}
+    production_policy = validate_production_calibration_policy(
+        promotion_source,
+        target=deployment_tier_for_profile_mode(normalized_mode),
+    )
+    if production_policy.status != "PASS":
+        raise ApprovedProfileError(
+            "production_calibration_policy_failed:" + ",".join(production_policy.reasons)
+        )
     parent_hash = None
     if parent_profile is not None:
         validate_approved_profile(parent_profile)
@@ -331,6 +357,17 @@ def build_approved_profile(
     payload: dict[str, Any] = {
         "profile_schema_version": APPROVED_PROFILE_SCHEMA_VERSION,
         "profile_mode": normalized_mode,
+        "deployment_tier": production_policy.target,
+        "production_calibration_policy_result": production_policy.as_dict(),
+        "production_calibration_policy_reasons": list(production_policy.reasons),
+        "execution_calibration_policy_source": production_policy.policy_source,
+        "execution_model": promotion_source.get("execution_model"),
+        "execution_model_source": promotion_source.get("execution_model_source"),
+        "execution_calibration_required": promotion_source.get("execution_calibration_required"),
+        "execution_calibration_strictness": promotion_source.get("execution_calibration_strictness"),
+        "execution_calibration_gate": promotion_source.get("execution_calibration_gate"),
+        "execution_calibration_artifact_hash": production_policy.artifact_hash,
+        "execution_calibration_artifact_hashes": list(production_policy.artifact_hashes),
         "source_promotion_artifact_path": str(resolved_source_path),
         "source_promotion_content_hash": source_hash,
         "lineage_hash": verified_promotion.get("lineage_hash"),
@@ -412,6 +449,15 @@ def validate_approved_profile(profile: dict[str, Any]) -> dict[str, Any]:
         raise ApprovedProfileError("strategy_parameters_missing")
     if not isinstance(profile.get("cost_model"), dict):
         raise ApprovedProfileError("cost_model_missing")
+    if mode in LIVE_COMPATIBLE_PROFILE_MODES or mode == "paper":
+        policy = validate_production_calibration_policy(
+            profile,
+            target=profile.get("deployment_tier") or deployment_tier_for_profile_mode(mode),
+        )
+        if policy.status != "PASS":
+            raise ApprovedProfileError(
+                "production_calibration_policy_failed:" + ",".join(policy.reasons)
+            )
     regime_policy = profile.get("regime_policy")
     if not isinstance(regime_policy, dict):
         raise ApprovedProfileError("regime_policy_missing")
@@ -462,6 +508,10 @@ def verify_profile_source_artifact(profile: dict[str, Any]) -> dict[str, Any]:
             raise ApprovedProfileError("lineage_hash_missing")
         if validated.get("lineage_hash") != promotion.get("lineage_hash"):
             raise ApprovedProfileError("source_promotion_lineage_hash_mismatch")
+        profile_calibration_hash = str(validated.get("execution_calibration_artifact_hash") or "").strip()
+        promotion_calibration_hash = str(promotion.get("execution_calibration_artifact_hash") or "").strip()
+        if profile_calibration_hash and profile_calibration_hash != promotion_calibration_hash:
+            raise ApprovedProfileError("source_promotion_execution_calibration_artifact_hash_mismatch")
     return promotion
 
 
@@ -1035,8 +1085,19 @@ def promote_profile_mode(
             raise ApprovedProfileError("live_readiness_evidence_required")
     else:
         raise ApprovedProfileError(f"profile_transition_target_invalid: {target}")
+    transition_policy = validate_production_calibration_policy(
+        parent,
+        target=deployment_tier_for_profile_mode(target),
+    )
+    if transition_policy.status != "PASS":
+        raise ApprovedProfileError(
+            "production_calibration_policy_failed:" + ",".join(transition_policy.reasons)
+        )
     child = dict(parent)
     child["profile_mode"] = target
+    child["deployment_tier"] = transition_policy.target
+    child["production_calibration_policy_result"] = transition_policy.as_dict()
+    child["production_calibration_policy_reasons"] = list(transition_policy.reasons)
     child["parent_profile_hash"] = parent[PROFILE_HASH_FIELD]
     child.pop("paper_validation_evidence", None)
     child.pop("live_readiness_evidence", None)

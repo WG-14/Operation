@@ -1,0 +1,91 @@
+{
+  "experiment_id": "sma_filter_production_candidate_v1_2026_05",
+  "deployment_tier": "paper_candidate",
+  "hypothesis": "The SMA filter candidate remains positive after calibrated execution costs and production-bound evidence gates.",
+  "strategy_name": "sma_with_filter",
+  "market": "KRW-BTC",
+  "interval": "1m",
+  "dataset": {
+    "source": "sqlite_candles",
+    "snapshot_id": "candles_krw_btc_2023_2026_v1",
+    "top_of_book": {
+      "source": "sqlite_orderbook_top_snapshots",
+      "required": true,
+      "join_tolerance_ms": 3000,
+      "missing_policy": "fail",
+      "min_coverage_pct": 100
+    },
+    "train": {
+      "start": "2023-01-01",
+      "end": "2024-06-30"
+    },
+    "validation": {
+      "start": "2024-07-01",
+      "end": "2025-12-31"
+    },
+    "final_holdout": {
+      "start": "2026-01-01",
+      "end": "2026-05-01"
+    }
+  },
+  "parameter_space": {
+    "SMA_SHORT": [7],
+    "SMA_LONG": [30],
+    "SMA_FILTER_GAP_MIN_RATIO": [0.0012],
+    "SMA_FILTER_VOL_MIN_RANGE_RATIO": [0.003]
+  },
+  "cost_model": {
+    "fee_rate": 0.0025,
+    "slippage_bps": [10]
+  },
+  "execution_model": {
+    "type": "stress",
+    "fee_rate": [0.0025],
+    "slippage_bps": [10, 20],
+    "latency_ms": [500, 1500],
+    "partial_fill_rate": [0.0, 0.02],
+    "order_failure_rate": [0.0, 0.01],
+    "market_order_extra_cost_bps": [0.0],
+    "scenario_policy": "must_pass_base_and_survive_stress",
+    "calibration_required": true,
+    "calibration_strictness": "fail"
+  },
+  "execution_timing": {
+    "signal_basis": "closed_candle",
+    "decision_time": "candle_close_plus_guard",
+    "decision_guard_ms": 500,
+    "fill_reference_policy": "latency_adjusted_orderbook",
+    "quote_selection": "first_after_or_equal",
+    "max_quote_wait_ms": 3000,
+    "missing_quote_policy": "fail",
+    "allow_same_candle_close_fill": false,
+    "min_execution_reality_level_for_promotion": "latency_adjusted_top_of_book"
+  },
+  "acceptance_gate": {
+    "min_trade_count": 30,
+    "max_mdd_pct": 15,
+    "min_profit_factor": 1.1,
+    "oos_return_must_be_positive": true,
+    "parameter_stability_required": true,
+    "walk_forward_required": true,
+    "regime_acceptance_gate": {
+      "required": true,
+      "min_trade_count_per_required_regime": 10,
+      "required_regimes": ["uptrend"],
+      "blocked_regimes": ["sideways_low_vol_volume_decreasing", "downtrend"],
+      "blocked_regime_max_trade_count": 0,
+      "blocked_regime_max_net_pnl_loss_krw": 0,
+      "min_profit_factor_by_regime": {
+        "uptrend": 1.2
+      },
+      "max_loss_share_by_single_regime": 0.4,
+      "max_pnl_dependency_by_single_regime": 0.5
+    }
+  },
+  "walk_forward": {
+    "train_window_days": 180,
+    "test_window_days": 30,
+    "step_days": 30,
+    "min_windows": 6
+  }
+}

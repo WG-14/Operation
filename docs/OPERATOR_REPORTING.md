@@ -159,8 +159,12 @@ Status interpretation:
   quality_gate_status=INSUFFICIENT_EVIDENCE sample_count=12 primary_issue=insufficient_sample next_action=collect_more_live_execution_quality_samples quality_gate_enabled=0 quality_gate_mode=telemetry
 ```
 
-This block is visibility only. It does not block live trading unless a separate
-operator-approved gate policy enables blocking behavior.
+This block is visibility only. It does not by itself prove live readiness and
+does not block live trading unless a separate operator-approved gate policy
+enables blocking behavior. Approved-profile transitions use typed evidence and
+the production calibration policy instead; do not treat telemetry-only
+execution-quality output as a substitute for calibration PASS evidence,
+decision-equivalence evidence, or paper/live readiness evidence.
 
 ## 4. Live Read Checklist
 

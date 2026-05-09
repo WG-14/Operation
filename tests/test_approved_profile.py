@@ -57,6 +57,58 @@ def _candidate() -> dict[str, object]:
             "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0,
         },
         "cost_model": {"fee_rate": 0.0025, "slippage_bps": 50.0},
+        "execution_model_source": "execution_model",
+        "execution_model": {
+            "type": "fixed_bps",
+            "fee_rate": 0.0025,
+            "slippage_bps": 50.0,
+            "latency_ms": 0,
+            "partial_fill_rate": 0.0,
+            "order_failure_rate": 0.0,
+            "market_order_extra_cost_bps": 0.0,
+            "model_params_hash": "sha256:model",
+        },
+        "execution_calibration_required": True,
+        "execution_calibration_strictness": "fail",
+        "execution_calibration_gate": {
+            "status": "PASS",
+            "reasons": [],
+            "artifact_hash": "sha256:calibration",
+            "artifact_hashes": ["sha256:calibration"],
+            "scenario_gates": [
+                {
+                    "status": "PASS",
+                    "reasons": [],
+                    "artifact_hash": "sha256:calibration",
+                    "content_hash_present": True,
+                    "market": "KRW-BTC",
+                    "interval": "1m",
+                    "expected_market": "KRW-BTC",
+                    "expected_interval": "1m",
+                    "expected_fill_reference_policy": "next_candle_open",
+                    "artifact_fill_reference_policy": "next_candle_open",
+                    "sample_count": 30,
+                    "min_sample_count": 30,
+                    "quality_gate_status": "PASS",
+                }
+            ],
+        },
+        "execution_calibration_artifact_hash": "sha256:calibration",
+        "execution_calibration_artifact_hashes": ["sha256:calibration"],
+        "execution_calibration_policy_source": "repo_production_calibration_policy_v1",
+        "production_calibration_policy_result": {
+            "target": "paper_candidate",
+            "production_bound": True,
+            "required": True,
+            "status": "PASS",
+            "reasons": [],
+            "artifact_hash": "sha256:calibration",
+            "artifact_hashes": ["sha256:calibration"],
+            "policy_source": "repo_production_calibration_policy_v1",
+            "operator_next_step": "none",
+        },
+        "production_calibration_policy_reasons": [],
+        "deployment_tier": "paper_candidate",
         "regime_classifier_version": "market_regime_v2",
         "allowed_live_regimes": ["uptrend_normal_vol_unknown"],
         "blocked_live_regimes": ["downtrend_normal_vol_unknown"],
@@ -341,6 +393,75 @@ def test_profile_generate_refuses_live_modes_without_explicit_transition(tmp_pat
 
     assert rc == 1
     assert not out.exists()
+
+
+def test_profile_generate_refuses_warn_mode_production_calibration(tmp_path: Path) -> None:
+    promotion = _promotion()
+    candidate = _candidate()
+    candidate["execution_calibration_required"] = False
+    candidate["execution_calibration_strictness"] = "warn"
+    candidate["execution_calibration_gate"] = {
+        "status": "FAIL",
+        "reasons": ["execution_calibration_quality_gate_not_passed"],
+        "artifact_hash": "sha256:calibration",
+        "scenario_gates": [
+            {
+                "status": "FAIL",
+                "reasons": ["execution_calibration_quality_gate_not_passed"],
+                "artifact_hash": "sha256:calibration",
+                "content_hash_present": True,
+                "market": "KRW-BTC",
+                "interval": "1m",
+                "expected_market": "KRW-BTC",
+                "expected_interval": "1m",
+                "sample_count": 30,
+                "min_sample_count": 30,
+                "quality_gate_status": "FAIL",
+            }
+        ],
+    }
+    candidate["deployment_tier"] = "research_only"
+    candidate_profile = build_candidate_profile(candidate)
+    promotion["candidate_profile"] = candidate_profile
+    promotion["candidate_profile_hash"] = sha256_prefixed(candidate_profile)
+    promotion["verified_candidate_profile_hash"] = promotion["candidate_profile_hash"]
+    promotion["strategy_profile_hash"] = promotion["candidate_profile_hash"]
+    promotion["content_hash"] = sha256_prefixed(content_hash_payload({k: v for k, v in promotion.items() if k != "content_hash"}))
+    promotion_path = tmp_path / "warn_promotion.json"
+    write_json_atomic(promotion_path, promotion)
+
+    with pytest.raises(ApprovedProfileError, match="production_execution_calibration_required"):
+        build_approved_profile(
+            promotion=promotion,
+            mode="paper",
+            source_promotion_path=str(promotion_path),
+            market="KRW-BTC",
+            interval="1m",
+        )
+
+
+def test_profile_generate_refuses_legacy_cost_model_only_promotion(tmp_path: Path) -> None:
+    promotion = _promotion()
+    candidate = _candidate()
+    candidate.pop("execution_model", None)
+    candidate["execution_model_source"] = "legacy_cost_model"
+    candidate_profile = build_candidate_profile(candidate)
+    promotion["candidate_profile"] = candidate_profile
+    promotion["candidate_profile_hash"] = sha256_prefixed(candidate_profile)
+    promotion["verified_candidate_profile_hash"] = promotion["candidate_profile_hash"]
+    promotion["strategy_profile_hash"] = promotion["candidate_profile_hash"]
+    promotion["content_hash"] = sha256_prefixed(content_hash_payload({k: v for k, v in promotion.items() if k != "content_hash"}))
+    promotion_path = tmp_path / "legacy_promotion.json"
+    write_json_atomic(promotion_path, promotion)
+
+    with pytest.raises(ApprovedProfileError, match="production_execution_model_required"):
+        build_approved_profile(
+            promotion=promotion,
+            mode="paper",
+            source_promotion_path=str(promotion_path),
+            market="KRW-BTC",
+            interval="1m",
+        )
 
 
 def test_profile_promote_refuses_legacy_dataset_quality_bypass_for_live_readiness(tmp_path: Path) -> None:

@@ -187,6 +187,7 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
         "backtest_report_hash": None,
         "walk_forward_report_hash": None,
         "candidate_profile_hash": None,
+        "execution_calibration_artifact_hash": None,
         "mismatches": [],
         "missing_artifacts": [],
         "legacy_compatibility_used": False,
@@ -227,6 +228,7 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
     summary["backtest_report_hash"] = lineage.get("backtest_report_hash")
     summary["walk_forward_report_hash"] = lineage.get("walk_forward_report_hash")
     summary["candidate_profile_hash"] = lineage.get("candidate_profile_hash")
+    summary["execution_calibration_artifact_hash"] = lineage.get("execution_calibration_artifact_hash")
 
     _compare(summary, "manifest_hash", promotion.get("manifest_hash"), lineage.get("manifest_hash"), "manifest_hash_mismatch")
     _compare(
@@ -261,12 +263,33 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
         required=walk_required,
         missing_reason="walk_forward_required_but_missing",
     )
-    if lineage.get("execution_calibration_artifact_hash"):
+    calibration_required = bool(promotion.get("execution_calibration_required"))
+    promotion_calibration_hash = str(promotion.get("execution_calibration_artifact_hash") or "").strip()
+    lineage_calibration_hash = str(lineage.get("execution_calibration_artifact_hash") or "").strip()
+    if calibration_required and not promotion_calibration_hash:
+        summary["mismatches"].append(
+            _mismatch(
+                "execution_calibration_artifact_hash",
+                "sha256:<required>",
+                promotion_calibration_hash or None,
+                "calibration_hash_missing",
+            )
+        )
+    if calibration_required and not lineage_calibration_hash:
+        summary["mismatches"].append(
+            _mismatch(
+                "lineage.execution_calibration_artifact_hash",
+                promotion_calibration_hash or "sha256:<required>",
+                lineage_calibration_hash or None,
+                "calibration_hash_missing",
+            )
+        )
+    if promotion_calibration_hash or lineage_calibration_hash:
         _compare(
             summary,
             "execution_calibration_artifact_hash",
-            promotion.get("execution_calibration_artifact_hash"),
-            lineage.get("execution_calibration_artifact_hash"),
+            promotion_calibration_hash,
+            lineage_calibration_hash,
             "calibration_hash_mismatch",
         )
     if promotion.get("command_args_hash_expected") and promotion.get("command_args_hash_expected") != lineage.get("command_args_hash"):

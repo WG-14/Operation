@@ -1,324 +1,410 @@
-You are Codex working directly in the GitHub repository `WG-14/bithumb-bot`.
+You are working in the GitHub repository `WG-14/bithumb-bot`.
 
-Use the attached review chain as context only, not as authoritative truth. Verify the current repository state before changing anything. The prior reviews explain why paper execution must evolve from immediate-fill simulation into reproducible lifecycle rehearsal, why unresolved/open orders must block new paper submissions, and why partial-fill boundary semantics must fail closed.   
+Use this task as a repo-specific engineering assignment, not a general review. Inspect the current repository directly before changing code. Treat the following source context as the starting analysis, but do not assume every hypothesis is true until you verify it in the code and tests: the current concern is that production-bound trading candidates should treat execution calibration as mandatory promotion evidence, not as an optional warning path. The repository already appears to contain execution calibration fields, strictness, promotion gate handling, lineage/hash/reproducibility, and execution-quality reporting, but the suspected structural weakness is that “production-bound candidate” status is not yet centrally tied to mandatory calibration across the full lifecycle. 
 
-Your task is to review the current patched state and decide whether the remaining low-priority observability refactor should be applied now: move the paper unresolved-order gate before orderbook fetching, so an existing `PARTIAL`/open order is always diagnosed as an unresolved-order block instead of being hidden behind an orderbook fetch failure.
+Your goal is to make the repository more robust, reproducible, and operationally safe as an automated trading experiment system. Prioritize design changes that prevent an entire class of failures over symptom-level patches.
 
-Do not generalize this into broad advice. Work in this repo, verify the current code, patch only if safe, and add focused tests that would fail before the refactor.
+Do not reduce the strength of existing gates. Do not silently bypass lineage, dataset quality, candidate profile hash, walk-forward, final holdout, regime policy, execution reality, approved-profile, or runtime safety checks. Do not edit env files, secrets, live credentials, or operator-local runtime state.
 
-## Current priority
+## Core problem statement
 
-The previous mandatory paper stress lifecycle issues appear to be fixed:
+The repository must fail closed for production-bound candidates unless execution calibration evidence is present, hash-bound, semantically valid, and passing. A production-bound candidate means a candidate intended to move beyond diagnostic research into paper/live transition paths such as `live_dry_run`, `small_live`, or equivalent profile/promotion states.
 
-* paper stress execution uses deterministic adapter behavior
-* `PARTIAL` remains open and blocks later submissions
-* invalid stress model/rates/latency fail closed
-* `PAPER_EXECUTION_PARTIAL_FILL_FRACTION` rejects `0.0` and `1.0` in stress mode
-* BUY/SELL stress partial/failure tests exist
-* latency is persisted and shifts fill/trade timestamps
+A minimal fix that merely sets `execution_calibration_required=true` in one manifest is insufficient. The expected outcome is a repo-owned policy surface that makes production-bound calibration requirements explicit, testable, reproducible, and visible.
 
-Treat this as a hypothesis until verified.
+## Files and areas to inspect first
 
-The remaining issue is lower priority but useful for operational observability:
+Inspect at least these files before implementing changes:
 
-```text
-Current likely flow:
-validate config
-resolve market
-fetch orderbook / quote
-open DB
-init portfolio
-evaluate unresolved order gate
-```
-
-This means an existing unresolved/open order may not be logged as an unresolved-order gate block if orderbook fetching fails first.
-
-Preferred flow:
-
-```text
-validate config
-resolve market
-open DB
-init portfolio
-evaluate unresolved order gate
-fetch orderbook / quote
-```
-
-This should not change successful immediate or stress execution behavior. It should only make already-unresolved paper state fail earlier and more observably.
-
-## Primary files to inspect
-
-Inspect these first:
-
-* `src/bithumb_bot/broker/paper.py`
-* `src/bithumb_bot/broker/paper_execution.py`
-* `src/bithumb_bot/oms.py`
+* `src/bithumb_bot/research/experiment_manifest.py`
+* `src/bithumb_bot/research/validation_protocol.py`
+* `src/bithumb_bot/research/promotion_gate.py`
+* `src/bithumb_bot/research/execution_calibration.py`
+* `src/bithumb_bot/research/execution_timing.py`
+* `src/bithumb_bot/research/lineage.py`
+* `src/bithumb_bot/evidence_chain.py`
+* `src/bithumb_bot/approved_profile.py`
+* `src/bithumb_bot/profile_cli.py`
 * `src/bithumb_bot/config.py`
-* `tests/test_paper_stress_execution.py`
-* `tests/test_paper_orderbook.py`
-* `docs/paper-execution-lifecycle.md`
+* `src/bithumb_bot/execution_quality.py`
+* `examples/research/sma_filter_manifest.example.json`
+* `docs/research-validation.md`
+* `docs/runbooks/research-to-paper.md`
+* `docs/OPERATOR_REPORTING.md`
+* Existing tests, especially:
 
-Search for:
+  * `tests/test_research_promotion_gate.py`
+  * `tests/test_execution_quality.py`
+  * `tests/test_approved_profile.py`
+  * any tests covering research validation, profile generation, profile promotion, lineage reproduction, and CLI behavior.
 
-```text
-paper_execute
-_get_fill_price
-_get_paper_quote_context
-fetch_orderbook_top
-evaluate_unresolved_order_gate
-PAPER_EXECUTION_PARTIAL_FILL_FRACTION
-test_partial_stress_order_blocks_new_intent_with_different_timestamp
-[SKIP] unresolved order gate
-```
+## Keep these hypotheses as hypotheses until verified
 
-## Working hypotheses to verify, not assume
+Verify or falsify each hypothesis by inspecting code and, where appropriate, adding tests. Do not present them as facts unless your work confirms them.
 
-Keep these hypotheses explicit. Confirm, refine, or refute them in the final report.
+### H1
 
-### H1: Core paper stress lifecycle safety is now implemented
+Production-bound manifests or artifacts may not consistently require:
 
-Verify that current code already has:
+* `execution_model.calibration_required=true`
+* `execution_model.calibration_strictness="fail"`
+* candidate/profile-level `execution_calibration_required=true`
+* `execution_calibration_gate.status="PASS"`
+* calibration artifact content hash presence.
 
-* stress adapter backed by research stress execution
-* `PARTIAL` order status for real partial fills
-* `FAILED` with no fill/trade for stress failure
-* unresolved-order gate for open paper orders
-* fail-closed config validation
-* strict `0 < PAPER_EXECUTION_PARTIAL_FILL_FRACTION < 1` in stress mode
-* BUY/SELL partial/failure tests
-* latency timestamp/evidence test
+Verification: inspect examples, manifest parsing, research report generation, promotion artifacts, profile generation/promotion, and tests.
 
-If any of these are missing or broken, prioritize fixing the missing core lifecycle item before the low-priority refactor.
+### H2
 
-### H2: `paper_execute()` still fetches orderbook before checking unresolved/open orders
+The boundary between research-only candidates and production-bound candidates may not be explicit enough in manifest/report/profile state.
 
-Verify the actual call order in `src/bithumb_bot/broker/paper.py`.
+Verification: look for an existing `deployment_tier`, `promotion_target`, `profile_mode`, or equivalent state and whether it centrally enforces calibration requirements for live/paper transition paths.
 
-Refutation:
+### H3
 
-* If unresolved-order gate already runs before orderbook fetch, do not refactor. Add a regression test if missing.
+Calibration artifact hash binding may be incomplete at the promotion artifact top level.
 
-### H3: Fetch-before-gate can hide the useful unresolved-order diagnostic
+Verification: run or create an end-to-end test where a valid calibration artifact is supplied to `research-backtest`, then the candidate is promoted and reproduced. Compare nested `scenario_gates[].artifact_hash` with `promotion.execution_calibration_artifact_hash` and lineage/reproduction behavior.
 
-If a `PARTIAL` order exists and the next `paper_execute()` call hits an orderbook fetch failure first, the operator sees `paper_execute blocked: orderbook fetch failed` instead of the more accurate unresolved-order gate block.
+### H4
 
-Validation:
+Live execution quality may currently be telemetry by default rather than a blocking runtime gate.
 
-* Inspect current flow.
-* Add a test that proves orderbook is not called when an unresolved order already exists.
+Verification: inspect `LIVE_EXECUTION_QUALITY_GATE_ENABLED`, `LIVE_EXECUTION_QUALITY_GATE_MODE`, startup guard usage, `ops-report`, and profile transition requirements. Do not automatically turn all live telemetry into blocking behavior unless the design explicitly scopes this and tests it.
 
-### H4: Moving the gate earlier is safe only if legacy quote/fill-price monkeypatch compatibility is preserved
+### H5
 
-`paper.py` appears to preserve compatibility with callers/tests that monkeypatch `_get_fill_price`. Do not break that.
+The current canonical example manifest may teach unsafe defaults by using legacy `cost_model` only and omitting required execution calibration.
 
-Validation:
+Verification: inspect `examples/research/*.json` and docs. Determine whether production-safe examples are separated from research-only or legacy examples.
 
-* Run existing `tests/test_paper_orderbook.py`.
-* Preserve the behavior of patched `_get_fill_price` when no unresolved order exists.
-* Ensure DB connections are closed correctly if orderbook fetching returns `None` after the gate.
+### H6
 
-## Required patch, if H2 is confirmed
+Typed paper/live evidence generation may be manual or not fully integrated with operational execution-quality telemetry.
 
-Refactor `paper_execute()` so the unresolved-order gate runs before orderbook quote loading.
+Verification: inspect evidence generation and validation commands. If the repo lacks a generation command, document the gap and only implement it if the scope is small, testable, and fits existing architecture.
 
-Target behavior:
+### H7
 
-```text
-1. Validate paper execution config.
-2. Resolve canonical market.
-3. Open DB connection.
-4. init_portfolio(conn).
-5. evaluate_unresolved_order_gate(...).
-6. If gate blocked:
-   - log `[SKIP] unresolved order gate`
-   - notify consistently with existing paper skip style
-   - commit if needed
-   - return None
-   - do not fetch orderbook
-   - do not call patched `_get_fill_price`
-   - do not create orders/fills/trades
-7. Only if gate is clear:
-   - fetch orderbook / build quote context / resolve fill price
-   - continue existing sizing, dedup, order recording, stress/immediate execution flow
-```
+Execution calibration may be treated as if it solves all execution realism gaps, while the current research engine may still be limited to candle and optional top-of-book simulation.
 
-Be careful with connection lifetime. If quote fetching now happens inside the DB `try/finally`, make sure the connection is closed on all returns and exceptions.
+Verification: inspect execution timing, top-of-book support, docs, and manifest expressiveness. Ensure production-bound policy can require an explicit minimum execution reality level and does not accidentally bless candle-only evidence for strategies that require stronger execution data.
 
-Do not:
+## Required design direction
 
-* change live order behavior
-* weaken dedup
-* release `PARTIAL` dedup
-* mark partial fills as `FILLED`
-* add DB schema
-* remove existing monkeypatch compatibility branches unless tests prove they are obsolete and you replace them safely
+Implement a central policy layer rather than scattering one-off checks.
 
-## Required test
+Preferred shape:
 
-Add a regression test that fails before this refactor.
+Create or extend a module such as:
 
-Suggested name:
+* `src/bithumb_bot/deployment_policy.py`, or
+* `src/bithumb_bot/research/deployment_policy.py`, if research-local placement fits better.
 
-```python
-test_unresolved_paper_order_gate_runs_before_orderbook_fetch
-```
+The policy should express production-bound requirements in one place. Suggested concepts:
 
-Test shape:
+* `deployment_tier` or `promotion_target`
+* allowed values such as:
 
-```text
-1. Configure stress paper execution:
-   PAPER_EXECUTION_MODEL=stress
-   PAPER_EXECUTION_PARTIAL_FILL_RATE=1.0
-   PAPER_EXECUTION_PARTIAL_FILL_FRACTION=0.5
-   PAPER_EXECUTION_ORDER_FAILURE_RATE=0.0
+  * `research_only`
+  * `paper_candidate`
+  * `live_dry_run_candidate`
+  * `small_live_candidate`
+* a function that returns required execution-calibration policy for a given target/profile mode
+* fail-closed validation helpers with stable reason codes.
 
-2. Patch orderbook fetch for the first call to return a valid BestQuote.
-   Track call count.
+Production-bound tiers should require, at minimum:
 
-3. Execute BUY at ts1.
-   Expect:
-   - trade is not None
-   - one order exists
-   - order status is PARTIAL
-   - one orderbook fetch occurred
+* explicit `execution_model`, not only legacy `cost_model`
+* `calibration_required=true`
+* `calibration_strictness="fail"`
+* calibration artifact content hash
+* calibration artifact market and interval matching the manifest/profile
+* calibration artifact fill reference policy matching execution timing when available
+* calibration artifact execution reality level matching the expected policy when available
+* `quality_gate_status="PASS"` when production-bound
+* minimum sample count from existing calibration comparison policy
+* no insufficient evidence
+* no slippage/latency/partial-fill/unfilled/model-breach violation against the scenario assumptions.
 
-4. Make the orderbook fetch function fail if called again, for example by raising AssertionError.
+Do not make `warn` strictness production-promotable. `warn` may remain acceptable for research-only diagnostics, but production-bound profile generation or profile promotion should reject it with an explicit reason code.
 
-5. Execute another paper order at ts2, preferably SELL or a different timestamp BUY.
+## Scope requirements
 
-6. Expect:
-   - second result is None
-   - no exception from the failing orderbook fetch
-   - orderbook fetch call count did not increase
-   - order count remains 1
-   - fill/trade counts remain unchanged
-   - original order remains PARTIAL
-   - dedup remains PARTIAL
-   - log records unresolved-order gate block
-```
+### P0: Central production-bound calibration policy
 
-This test must prove the gate runs before quote fetching.
+Add or reuse a central policy validator and wire it into the lifecycle at the earliest correct points.
 
-If the current code already gates before orderbook fetch, keep the same test as regression coverage.
+At minimum, production-bound policy should be enforced before any artifact can be treated as eligible for `live_dry_run` or `small_live` profile transition.
 
-## Existing tests that must remain valid
+Do not make research-only experimentation impossible. Research diagnostics may still run with legacy cost models, optional calibration, or warn-mode calibration, but such artifacts must not be accepted as production-bound evidence.
 
-Do not weaken or remove these behavioral assertions:
+### P1: Calibration hash binding and reproducibility
 
-* stress failure records `FAILED` with no fills/trades
-* stress partial keeps order `PARTIAL`
-* partial order blocks duplicate intent
-* partial order blocks new timestamp/different-side intent
-* invalid model fails closed
-* invalid stress rates fail closed
-* invalid latency fails closed
-* invalid partial-fill boundary values `0.0` and `1.0` fail closed
-* valid partial-fill fraction `0.5` passes
-* SELL partial/failure coverage
-* latency shifts fill/trade timestamps and is persisted in evidence
-* existing paper orderbook behavior
+Ensure calibration evidence is first-class and reproducible.
 
-## Optional documentation update
+Specifically verify and, if needed, fix:
 
-If you perform the refactor, update `docs/paper-execution-lifecycle.md` with one concise sentence:
+* combined calibration gates should expose top-level calibration artifact hash information, not only nested scenario gates
+* promotion artifacts should bind calibration artifact hash consistently
+* lineage should carry the same calibration artifact hash or an explicitly deterministic artifact hash set
+* `research-reproduce` should detect calibration hash mismatch when calibration was required or bound
+* if multiple scenarios reference calibration artifacts:
 
-```text
-When an unresolved/open paper order already exists, paper execution evaluates the unresolved-order gate before loading a new orderbook quote, so the skip is diagnosed as an order-lifecycle block rather than a market-data failure.
-```
+  * either require a single consistent calibration artifact for production-bound candidates, or
+  * explicitly support and hash a deterministic sorted artifact hash set
+* add stable reason codes for missing, inconsistent, hashless, or mismatched calibration artifacts.
 
-Do not overstate this as async delayed-fill support or live-dry-run chaos support.
+### P2: Manifest/profile target boundary
 
-## Recovery and observability requirements
+Introduce or strengthen explicit target/tier semantics if the repo does not already have them.
 
-The refactor must preserve:
+Potential places:
 
-* `PARTIAL` remains visible through `OPEN_ORDER_STATUSES`
-* no new order is created while unresolved/open order exists
-* unresolved skip log includes mode, symbol, signal/side, reason code, and reason text
-* no orderbook fetch is attempted when the unresolved gate blocks
-* no fill/trade/portfolio mutation occurs on the blocked second call
-* failed stress orders still release dedup according to existing OMS rules
-* no schema changes
+* manifest parsing and canonical hash payload
+* research report candidate profile
+* promotion artifact
+* approved profile generation/promotion
+* profile verification.
 
-## Scope boundaries
+Be conservative. If adding a new manifest field is too invasive, implement a backward-compatible policy where absent target defaults to `research_only`, while profile generation/promotion to live-compatible modes requires production-bound calibration policy.
 
-This patch is paper-runtime observability and diagnosis ordering only.
+### P3: Production-safe examples and documentation
 
-Do not implement:
+Do not leave unsafe examples as the only obvious path.
 
-* live-dry-run chaos broker
-* async delayed fill scheduler
-* new promotion gate
-* broad order lifecycle service
-* real live order behavior changes
+Add a production-grade example manifest such as:
 
-If moving the gate before quote fetching proves risky because it breaks legacy tests or requires broad restructuring, stop after adding a focused test and report exactly why the refactor should be deferred.
+* `examples/research/sma_filter_manifest.production.example.json`
 
-## Tests to run
+It should include:
 
-Run focused tests first:
+* explicit `execution_model`
+* `calibration_required=true`
+* `calibration_strictness="fail"`
+* `execution_timing.min_execution_reality_level_for_promotion`
+* top-of-book dataset requirements if needed for the selected reality level
+* clear target/tier metadata if you add such a field.
+
+Keep the existing example if needed, but label it as research-only or legacy/diagnostic if it is not production-promotable.
+
+Update docs:
+
+* `docs/research-validation.md`
+* `docs/runbooks/research-to-paper.md`
+* `docs/OPERATOR_REPORTING.md` only if operational interpretation changes.
+
+Docs must state clearly:
+
+* research-only calibration warnings are not approval signals
+* production-bound candidates require calibration PASS
+* `warn` strictness cannot satisfy production-bound promotion/profile transition
+* telemetry-only execution quality does not equal live readiness
+* calibration does not remove execution-reality limitations such as missing full depth, queue position, trade ticks, or intra-candle path.
+
+### P4: Tests
+
+Add targeted tests before or alongside code changes. Prefer small deterministic unit/integration tests using existing test helpers.
+
+At minimum, add or extend tests covering this matrix:
+
+1. `calibration_required=true` plus missing calibration artifact:
+
+   * research candidate is not production-promotable
+   * promotion or profile transition refuses with explicit reason.
+
+2. `calibration_required=true` plus artifact without content hash:
+
+   * fail closed.
+
+3. `calibration_required=true` plus insufficient sample count:
+
+   * fail closed.
+
+4. `calibration_required=true` plus `quality_gate_status` not `PASS`:
+
+   * fail closed.
+
+5. `calibration_strictness="fail"` plus failing calibration:
+
+   * fail closed.
+
+6. `calibration_strictness="warn"` plus failing calibration:
+
+   * research-only artifact may produce warnings if current behavior supports this
+   * production-bound profile generation or profile promotion must fail closed.
+
+7. Valid calibration:
+
+   * research report candidate gate passes
+   * promotion artifact includes calibration hash
+   * lineage includes calibration hash or deterministic artifact hash set
+   * `research-reproduce` passes.
+
+8. Tampered calibration evidence:
+
+   * reproduce or verification fails with a calibration-specific reason.
+
+9. Legacy `cost_model`-only manifest:
+
+   * research diagnostic path remains possible
+   * production-bound profile transition fails closed.
+
+10. Production example manifest:
+
+* parses successfully
+* canonical payload includes target/tier and calibration policy if you add those fields
+* does not silently degrade to legacy `cost_model`.
+
+11. No regression for existing promotion gates:
+
+* validation evidence
+* candidate profile hash
+* lineage
+* final holdout
+* walk-forward
+* dataset quality
+* execution reality
+* regime policy.
+
+Suggested test files:
+
+* extend `tests/test_research_promotion_gate.py`
+* add `tests/test_research_execution_calibration_policy.py`
+* add or extend profile transition tests in `tests/test_approved_profile.py`
+* add reproduce/hash tests near existing lineage tests.
+
+Use existing test utilities where possible. Avoid brittle assertions on full JSON if stable reason codes or key fields can be asserted instead.
+
+### P5: Recovery and operational observability
+
+Add operator-visible fields only where useful and deterministic.
+
+Artifacts should expose, where applicable:
+
+* `deployment_tier` or `promotion_target`
+* `execution_calibration_required`
+* `execution_calibration_strictness`
+* `execution_calibration_gate.status`
+* `execution_calibration_gate.reasons`
+* `execution_calibration_artifact_hash`
+* `execution_calibration_artifact_hashes` if multiple are supported
+* `execution_calibration_policy_source`
+* `production_calibration_policy_result`
+* `production_calibration_policy_reasons`
+* `operator_next_step`.
+
+CLI output should surface production-bound calibration failure reasons clearly. Do not bury them only in JSON.
+
+If a failure is detected, recommended next action should be operationally actionable, e.g.:
+
+* regenerate execution-quality calibration artifact
+* collect more live/paper execution-quality samples
+* rerun research backtest with `--execution-calibration`
+* do not edit recorded hashes
+* do not promote warn-mode calibration to live-compatible profile.
+
+## Implementation constraints
+
+* Preserve backward compatibility for research-only artifacts unless this conflicts with production-bound safety.
+* Do not mutate env files.
+* Do not introduce network calls in tests.
+* Do not require live exchange access.
+* Keep path-policy protections intact.
+* Use deterministic hashing and sorted collections where artifact hashes or sets are serialized.
+* Use stable reason codes, not prose-only failures.
+* Keep schemas explicit and versioned if you add schema fields.
+* Do not hide production-bound failures behind `promotion_warnings`.
+* Do not downgrade required calibration failures to warnings.
+
+## Suggested execution plan
+
+1. Inspect current code paths and write a short internal note identifying where calibration policy is currently enforced and where it is not.
+2. Add failing tests for the highest-risk gaps, especially hash binding and production-bound warn-mode rejection.
+3. Implement central policy.
+4. Wire central policy into promotion/profile transition paths.
+5. Fix calibration artifact hash binding if your tests confirm the suspected issue.
+6. Add production-safe example manifest.
+7. Update docs.
+8. Run focused tests.
+9. Run the broader test suite if practical.
+
+## Test commands
+
+Run at least:
 
 ```bash
-pytest tests/test_paper_stress_execution.py -q
-pytest tests/test_paper_orderbook.py -q
+uv run pytest -q tests/test_research_promotion_gate.py
+uv run pytest -q tests/test_execution_quality.py
+uv run pytest -q tests/test_approved_profile.py
 ```
 
-Then run adjacent regression tests if feasible:
+Also run any new test files you add, for example:
 
 ```bash
-pytest tests/test_ledger_atomicity.py -q
-pytest tests/test_recovery_restart_regression.py -q
-pytest tests/test_operator_commands.py -q
-pytest tests/test_research_backtest_reproducibility.py -q
+uv run pytest -q tests/test_research_execution_calibration_policy.py
 ```
 
-If any test fails for unrelated reasons, document the exact command, failure, and why it is unrelated. Do not hide failures.
+If `uv` is unavailable in the environment, use:
 
-## Final report format
+```bash
+python -m pytest -q <same test paths>
+```
+
+If a full suite is practical, run:
+
+```bash
+uv run pytest -q
+```
+
+or:
+
+```bash
+python -m pytest -q
+```
+
+## Expected final report format
 
 When finished, report in exactly this structure:
 
 ```text
-Summary
-- What changed.
-- Whether this was code, test, and/or documentation.
-- Whether default immediate paper behavior remains preserved.
-- Whether this was an optional observability refactor or a core safety fix.
+## Summary
+- What changed, in one concise paragraph.
+- Whether the production-bound calibration invariant is now enforced.
 
-Hypothesis Review
-- H1: confirmed/refined/refuted, with repo evidence.
-- H2: confirmed/refined/refuted, with repo evidence.
-- H3: confirmed/refined/refuted, with repo evidence.
-- H4: confirmed/refined/refuted, with repo evidence.
+## Hypotheses Checked
+- H1: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H2: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H3: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H4: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H5: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H6: confirmed/refuted/partially confirmed. Evidence and changed files.
+- H7: confirmed/refuted/partially confirmed. Evidence and changed files.
 
-Implementation Details
-- Files changed.
-- New call order in paper_execute().
-- How monkeypatch/backward compatibility was preserved.
-- What log/notification behavior occurs on unresolved-order gate block.
-- Any docs updated.
+## Design Changes
+- Central policy changes.
+- Lifecycle wiring changes.
+- Hash/lineage/reproducibility changes.
+- Docs/example changes.
 
-Behavioral Guarantees
-- What happens when a PARTIAL order exists and the next paper call would otherwise fetch orderbook.
-- What happens when there is no unresolved order.
-- What happens for existing stress partial/failure behavior.
-- What happens for invalid paper stress config.
-- Dedup/recovery implications.
+## Safety Properties
+- How research-only behavior remains possible.
+- How production-bound behavior fails closed.
+- How warn-mode calibration is handled.
+- How tampering or hash drift is detected.
+- How operator-visible reason codes are exposed.
 
-Tests
-- New tests added.
-- Existing tests updated.
-- Exact pytest commands run.
-- Pass/fail results.
+## Tests
+- Exact commands run.
+- Pass/fail status.
+- Any tests not run and why.
 
-Remaining Gaps
-- Whether async delayed fill scheduling remains future work.
-- Whether live-dry-run chaos remains future work.
-- Whether broader lifecycle service refactor remains future work.
+## Files Changed
+- List files with a one-line purpose for each.
 
-Do Not Overclaim
-- Explicitly state anything not implemented.
+## Remaining Risks / Follow-ups
+- Be explicit about limitations, especially full-depth/queue/tick/intra-candle execution realism and any typed evidence generation still not implemented.
 ```
 
-The priority is not to add new failure simulation. The priority is to make the existing paper stress lifecycle more diagnosable: when an unresolved paper order already exists, the system should say “unresolved order gate blocked this” before touching market data.
+Do not claim a hypothesis is resolved unless tests or direct code inspection support that conclusion.
 

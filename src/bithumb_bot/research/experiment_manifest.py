@@ -9,6 +9,7 @@ from typing import Any
 
 from bithumb_bot.market_regime import RegimeAcceptanceGate
 
+from .deployment_policy import DEPLOYMENT_TIERS, normalize_deployment_tier
 from .hashing import sha256_prefixed
 
 
@@ -231,6 +232,7 @@ class ExperimentManifest:
     cost_model: CostModel
     execution_model: ExecutionModelConfig
     execution_timing: ExecutionTimingPolicy
+    deployment_tier: str
     acceptance_gate: AcceptanceGate
     walk_forward: WalkForwardConfig | None
     raw: dict[str, Any]
@@ -247,6 +249,7 @@ class ExperimentManifest:
             "cost_model": self.cost_model.as_dict(),
             "execution_model": self.execution_model.as_dict(),
             "execution_timing": self.execution_timing.as_dict(),
+            "deployment_tier": self.deployment_tier,
             "acceptance_gate": self.acceptance_gate.as_dict(),
             "walk_forward": self.walk_forward.as_dict() if self.walk_forward is not None else None,
         }
@@ -279,6 +282,7 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
     cost_model = _parse_cost_model(payload.get("cost_model"))
     execution_model = _parse_execution_model(payload.get("execution_model"), cost_model)
     execution_timing = _parse_execution_timing(payload.get("execution_timing"))
+    deployment_tier = _parse_deployment_tier(payload.get("deployment_tier") or payload.get("promotion_target"))
     acceptance_gate = _parse_acceptance_gate(_required_dict(payload, "acceptance_gate"))
     walk_forward = _parse_walk_forward(payload.get("walk_forward"))
     if acceptance_gate.walk_forward_required and walk_forward is None:
@@ -297,6 +301,7 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
         cost_model=cost_model,
         execution_model=execution_model,
         execution_timing=execution_timing,
+        deployment_tier=deployment_tier,
         acceptance_gate=acceptance_gate,
         walk_forward=walk_forward,
         raw=dict(payload),
@@ -315,6 +320,15 @@ def _required_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ManifestValidationError(f"manifest field {key!r} must be an object")
     return value
+
+
+def _parse_deployment_tier(value: Any) -> str:
+    tier = normalize_deployment_tier(value)
+    if value is not None and tier == "research_only" and str(value).strip().lower() not in DEPLOYMENT_TIERS:
+        raise ManifestValidationError(
+            "deployment_tier must be one of research_only, paper_candidate, live_dry_run_candidate, small_live_candidate"
+        )
+    return tier
 
 
 def _parse_date_range(payload: dict[str, Any], key: str) -> DateRange:
