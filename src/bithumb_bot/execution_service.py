@@ -105,6 +105,21 @@ class ExecutionDecisionSummary:
     signal_flow: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
+        signal_flow = None if self.signal_flow is None else dict(self.signal_flow)
+        actual_primary_block_layer = (
+            "none" if signal_flow is None else signal_flow.get("primary_block_layer") or "none"
+        )
+        actual_primary_block_reason = (
+            "none" if signal_flow is None else signal_flow.get("primary_block_reason") or "none"
+        )
+        if (
+            actual_primary_block_layer == "none"
+            and not bool(self.submit_expected)
+            and str(self.final_signal).upper() == "HOLD"
+            and str(self.final_action).upper() in {"HOLD", "STRATEGY_HOLD", "LIVE_DRY_RUN_NO_SUBMIT"}
+        ):
+            actual_primary_block_layer = "strategy_signal_absent"
+            actual_primary_block_reason = "raw_hold_no_entry_or_exit_signal"
         return {
             "execution_engine": _execution_engine(),
             "raw_signal": self.raw_signal,
@@ -138,7 +153,9 @@ class ExecutionDecisionSummary:
             "pre_trade_economics": (
                 None if self.pre_trade_economics is None else dict(self.pre_trade_economics)
             ),
-            "signal_flow": None if self.signal_flow is None else dict(self.signal_flow),
+            "signal_flow": signal_flow,
+            "actual_primary_block_layer": actual_primary_block_layer,
+            "actual_primary_block_reason": actual_primary_block_reason,
         }
 
 
@@ -236,9 +253,16 @@ def _strategy_performance_gate_fields(raw_gate: object | None) -> dict[str, obje
     if not payload:
         return {}
     summary = _dict_value(payload.get("summary"))
+    blocked = bool(payload.get("blocked") or not bool(payload.get("allowed", True)))
+    enabled = bool(payload.get("enabled", True))
+    enforced = bool(blocked and enabled and _live_real_order_performance_gate_applies())
+    status = "blocked" if blocked and enabled else "allowed" if enabled else "disabled"
     return {
         "strategy_performance_gate": payload,
-        "strategy_performance_gate_blocked": bool(payload.get("blocked") or not bool(payload.get("allowed", True))),
+        "strategy_performance_gate_status": status,
+        "strategy_performance_gate_blocked": blocked,
+        "strategy_performance_gate_enforced": enforced,
+        "strategy_performance_gate_would_block_if_armed": bool(blocked and enabled),
         "strategy_performance_gate_reason_code": payload.get("reason_code"),
         "strategy_performance_gate_reason": payload.get("reason"),
         "strategy_performance_gate_sample_count": int(summary.get("sample_count") or 0),

@@ -893,6 +893,7 @@ def _apply_live_dry_run_no_submit_policy(
         and performance_gate_payload.get("enabled", True)
         and not bool(performance_gate_payload.get("allowed", True))
     )
+    performance_enforced = False
     performance_fields: dict[str, object] = {}
     if performance_gate_payload:
         gate_summary = (
@@ -900,9 +901,19 @@ def _apply_live_dry_run_no_submit_policy(
             if isinstance(performance_gate_payload.get("summary"), dict)
             else {}
         )
+        performance_status = (
+            "blocked"
+            if performance_blocked
+            else "allowed"
+            if bool(performance_gate_payload.get("enabled", True))
+            else "disabled"
+        )
         performance_fields = {
             "strategy_performance_gate": performance_gate_payload,
+            "strategy_performance_gate_status": performance_status,
             "strategy_performance_gate_blocked": performance_blocked,
+            "strategy_performance_gate_enforced": performance_enforced,
+            "strategy_performance_gate_would_block_if_armed": performance_blocked,
             "strategy_performance_gate_reason_code": performance_gate_payload.get("reason_code"),
             "strategy_performance_gate_reason": performance_gate_payload.get("reason"),
             "strategy_performance_gate_sample_count": int(gate_summary.get("sample_count") or 0),
@@ -918,7 +929,7 @@ def _apply_live_dry_run_no_submit_policy(
         }
 
     target_side = str((target_plan or {}).get("target_delta_side") or (target_plan or {}).get("side") or "").upper()
-    blocked_by_gate = bool(performance_blocked and target_side == "BUY")
+    blocked_by_gate = bool(performance_enforced and performance_blocked and target_side == "BUY")
     previous_submit_expected = bool(decision.get("submit_expected"))
     if target_plan is not None:
         previous_submit_expected = bool(target_plan.get("submit_expected"))
@@ -1312,7 +1323,9 @@ def cmd_live_dry_run(short_n: int, long_n: int) -> None:
     print(
         "  "
         f"final_action={context.get('final_action')} execution_block_reason={context.get('execution_block_reason')} "
-        f"performance_gate_blocked={1 if bool(target_plan_out.get('strategy_performance_gate_blocked')) else 0} "
+        f"performance_gate_status={target_plan_out.get('strategy_performance_gate_status') or '-'} "
+        f"performance_gate_enforced={1 if bool(target_plan_out.get('strategy_performance_gate_enforced')) else 0} "
+        f"performance_gate_would_block_if_armed={1 if bool(target_plan_out.get('strategy_performance_gate_would_block_if_armed')) else 0} "
         f"performance_gate_reason_code={target_plan_out.get('strategy_performance_gate_reason_code') or '-'}"
     )
     print(
@@ -5130,7 +5143,49 @@ def cmd_residual_closeout_plan(*, as_json: bool = False) -> None:
         )
 
 
-def _build_fill_trade_linkage_diagnostic() -> dict[str, object]:
+def _fill_trade_linkage_candidates(conn: sqlite3.Connection, row: sqlite3.Row) -> list[dict[str, object]]:
+    client_order_id = str(row["client_order_id"] or "")
+    qty = float(row["qty"] or 0.0)
+    price = float(row["price"] or 0.0)
+    fee = row["fee"]
+    fill_ts = int(row["fill_ts"] or 0)
+    trade_rows = conn.execute(
+        """
+        SELECT id, client_order_id, ts, price, qty, fee
+        FROM trades
+        WHERE client_order_id=?
+        ORDER BY ABS(ts-?) ASC, id ASC
+        """,
+        (client_order_id, fill_ts),
+    ).fetchall()
+    candidates: list[dict[str, object]] = []
+    for trade in trade_rows:
+        trade_fee = trade["fee"]
+        fee_matches = False
+        if fee is None and trade_fee is None:
+            fee_matches = True
+        else:
+            try:
+                fee_matches = abs(float(fee or 0.0) - float(trade_fee or 0.0)) <= 1e-8
+            except (TypeError, ValueError):
+                fee_matches = False
+        if (
+            abs(float(trade["qty"] or 0.0) - qty) <= 1e-12
+            and abs(float(trade["price"] or 0.0) - price) <= 1e-8
+            and fee_matches
+            and abs(int(trade["ts"] or 0) - fill_ts) <= 2_000
+        ):
+            candidates.append(
+                {
+                    "trade_id": int(trade["id"]),
+                    "trade_ts": int(trade["ts"]),
+                    "client_order_id": str(trade["client_order_id"] or ""),
+                }
+            )
+    return candidates
+
+
+def _build_fill_trade_linkage_diagnostic(*, apply_safe: bool = False) -> dict[str, object]:
     conn = ensure_db()
     try:
         fills_total = int(conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0])
@@ -5142,64 +5197,76 @@ def _build_fill_trade_linkage_diagnostic() -> dict[str, object]:
             ORDER BY id ASC
             """
         ).fetchall()
-    finally:
-        conn.close()
-
-    safe_matchable = 0
-    ambiguous = 0
-    unmatchable = 0
-    samples: list[dict[str, object]] = []
-
-    conn = ensure_db()
-    try:
+        safe_matchable = 0
+        ambiguous = 0
+        unmatchable = 0
+        repaired_count = 0
+        skipped_count = 0
+        samples: list[dict[str, object]] = []
+        repaired_rows: list[dict[str, object]] = []
+        now_ms = int(time.time() * 1000)
         for row in missing_rows:
             client_order_id = str(row["client_order_id"] or "")
-            qty = float(row["qty"] or 0.0)
-            price = float(row["price"] or 0.0)
-            fee = row["fee"]
-            fill_ts = int(row["fill_ts"] or 0)
-            trade_rows = conn.execute(
-                """
-                SELECT id, client_order_id, ts, price, qty, fee
-                FROM trades
-                WHERE client_order_id=?
-                ORDER BY ABS(ts-?) ASC, id ASC
-                """,
-                (client_order_id, fill_ts),
-            ).fetchall()
-            candidates = []
-            for trade in trade_rows:
-                trade_fee = trade["fee"]
-                fee_matches = False
-                if fee is None and trade_fee is None:
-                    fee_matches = True
-                else:
-                    try:
-                        fee_matches = abs(float(fee or 0.0) - float(trade_fee or 0.0)) <= 1e-8
-                    except (TypeError, ValueError):
-                        fee_matches = False
-                if (
-                    abs(float(trade["qty"] or 0.0) - qty) <= 1e-12
-                    and abs(float(trade["price"] or 0.0) - price) <= 1e-8
-                    and fee_matches
-                    and abs(int(trade["ts"] or 0) - fill_ts) <= 2_000
-                ):
-                    candidates.append(
-                        {
-                            "trade_id": int(trade["id"]),
-                            "trade_ts": int(trade["ts"]),
-                            "client_order_id": str(trade["client_order_id"] or ""),
-                        }
-                    )
+            candidates = _fill_trade_linkage_candidates(conn, row)
             if len(candidates) == 1:
                 safe_matchable += 1
                 status = "safely_matchable"
+                if apply_safe:
+                    candidate_trade_id = int(candidates[0]["trade_id"])
+                    repair_key = f"fill_trade_linkage:{int(row['id'])}:{candidate_trade_id}"
+                    basis = {
+                        "fill_row_id": int(row["id"]),
+                        "fill_id": str(row["fill_id"] or ""),
+                        "fill_ts": int(row["fill_ts"] or 0),
+                        "price": float(row["price"] or 0.0),
+                        "qty": float(row["qty"] or 0.0),
+                        "fee": None if row["fee"] is None else float(row["fee"]),
+                        "candidate_trade_id": candidate_trade_id,
+                        "candidate_trade_ids": [candidate_trade_id],
+                        "match_rule": "same_client_order_id_price_qty_fee_ts_within_2000ms",
+                    }
+                    current = conn.execute("SELECT trade_id FROM fills WHERE id=?", (int(row["id"]),)).fetchone()
+                    if current is not None and current["trade_id"] is None:
+                        update_cursor = conn.execute(
+                            "UPDATE fills SET trade_id=? WHERE id=? AND trade_id IS NULL",
+                            (candidate_trade_id, int(row["id"])),
+                        )
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO fill_trade_linkage_repairs(
+                                repair_key, fill_row_id, client_order_id, fill_id, candidate_trade_id,
+                                applied_ts, status, repair_basis
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                repair_key,
+                                int(row["id"]),
+                                client_order_id,
+                                str(row["fill_id"] or ""),
+                                candidate_trade_id,
+                                now_ms,
+                                "applied",
+                                json.dumps(basis, ensure_ascii=False, sort_keys=True),
+                            ),
+                        )
+                        repaired_count += max(0, int(update_cursor.rowcount or 0))
+                        repaired_rows.append(
+                            {
+                                "fill_row_id": int(row["id"]),
+                                "client_order_id": client_order_id,
+                                "fill_id": str(row["fill_id"] or ""),
+                                "candidate_trade_id": candidate_trade_id,
+                            }
+                        )
             elif len(candidates) > 1:
                 ambiguous += 1
                 status = "ambiguous"
+                skipped_count += 1
             else:
                 unmatchable += 1
                 status = "unmatchable"
+                skipped_count += 1
             if len(samples) < 10:
                 samples.append(
                     {
@@ -5211,21 +5278,30 @@ def _build_fill_trade_linkage_diagnostic() -> dict[str, object]:
                         "candidate_trade_ids": [int(item["trade_id"]) for item in candidates],
                     }
                 )
+        if apply_safe:
+            conn.commit()
+        after_missing = int(conn.execute("SELECT COUNT(*) FROM fills WHERE trade_id IS NULL").fetchone()[0])
     finally:
         conn.close()
 
     return {
         "fills_total": fills_total,
         "fills_missing_trade_id": len(missing_rows),
+        "fills_missing_trade_id_after": after_missing if apply_safe else len(missing_rows),
         "missing_but_safely_matchable": safe_matchable,
         "ambiguous": ambiguous,
         "unmatchable": unmatchable,
+        "dry_run": not apply_safe,
+        "apply_safe": bool(apply_safe),
+        "repaired_count": repaired_count,
+        "skipped_count": skipped_count,
+        "repaired_rows": repaired_rows,
         "samples": samples,
     }
 
 
-def cmd_diagnose_fill_trade_linkage(*, as_json: bool = False) -> None:
-    payload = _build_fill_trade_linkage_diagnostic()
+def cmd_diagnose_fill_trade_linkage(*, as_json: bool = False, apply_safe: bool = False) -> None:
+    payload = _build_fill_trade_linkage_diagnostic(apply_safe=apply_safe)
     if as_json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return
@@ -5235,9 +5311,13 @@ def cmd_diagnose_fill_trade_linkage(*, as_json: bool = False) -> None:
         "  "
         f"fills_total={int(payload.get('fills_total') or 0)} "
         f"fills_missing_trade_id={int(payload.get('fills_missing_trade_id') or 0)} "
+        f"fills_missing_trade_id_after={int(payload.get('fills_missing_trade_id_after') or 0)} "
         f"missing_but_safely_matchable={int(payload.get('missing_but_safely_matchable') or 0)} "
         f"ambiguous={int(payload.get('ambiguous') or 0)} "
-        f"unmatchable={int(payload.get('unmatchable') or 0)}"
+        f"unmatchable={int(payload.get('unmatchable') or 0)} "
+        f"dry_run={1 if bool(payload.get('dry_run')) else 0} "
+        f"apply_safe={1 if bool(payload.get('apply_safe')) else 0} "
+        f"repaired_count={int(payload.get('repaired_count') or 0)}"
     )
     for sample in payload.get("samples") or []:
         print(
@@ -7151,9 +7231,14 @@ def main(argv: list[str] | None = None) -> int:
     fill_trade_linkage = sub.add_parser(
         "diagnose-fill-trade-linkage",
         help="summarize fills that are missing trade_id linkage",
-        description="Read-only diagnostic for fills.trade_id gaps and safely matchable rows.",
+        description="Diagnose fills.trade_id gaps and optionally repair exactly safe matches.",
     )
     fill_trade_linkage.add_argument("--json", action="store_true")
+    fill_trade_linkage.add_argument(
+        "--apply-safe",
+        action="store_true",
+        help="update only rows with exactly one safe candidate trade; ambiguous and unmatchable rows are skipped",
+    )
     sub.add_parser(
         "restart-checklist",
         help="print restart safety checklist before resume",
@@ -7888,7 +7973,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "residual-closeout-plan":
         cmd_residual_closeout_plan(as_json=bool(args.json))
     elif args.cmd == "diagnose-fill-trade-linkage":
-        cmd_diagnose_fill_trade_linkage(as_json=bool(args.json))
+        cmd_diagnose_fill_trade_linkage(as_json=bool(args.json), apply_safe=bool(args.apply_safe))
     elif args.cmd == "restart-checklist":
         cmd_restart_checklist()
     elif args.cmd == "recover-order":

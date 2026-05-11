@@ -9,6 +9,7 @@ from bithumb_bot.db_core import ensure_db, record_strategy_decision
 from bithumb_bot.config import settings
 from bithumb_bot.execution_quality import (
     ExecutionQualityThresholds,
+    assess_execution_remainder,
     build_execution_quality_record,
     format_execution_quality_text,
     latency_ms,
@@ -16,6 +17,7 @@ from bithumb_bot.execution_quality import (
     side_aware_slippage_bps,
     summarize_execution_quality,
 )
+from bithumb_bot.order_semantics import classify_order_semantics
 from bithumb_bot.execution import apply_fill_and_trade
 from bithumb_bot.oms import add_fill, create_order, record_submit_attempt
 
@@ -194,6 +196,65 @@ def test_latency_calculation_handles_missing_and_ordering() -> None:
     assert latency_ms(start_ms=1000, end_ms=1600) == 600
     assert latency_ms(start_ms=None, end_ms=1600) is None
     assert latency_ms(start_ms=1600, end_ms=1000) is None
+
+
+def test_canonical_order_semantics_side_aware() -> None:
+    buy_price = classify_order_semantics(raw_order_type="price", side="BUY")
+    assert buy_price.canonical_execution_kind == "market_buy_quote_notional"
+    assert buy_price.market_equivalent is True
+    assert buy_price.legacy_unknown is False
+
+    sell_market = classify_order_semantics(raw_order_type="market", side="SELL")
+    assert sell_market.canonical_execution_kind == "market_sell_base_qty"
+    assert sell_market.market_equivalent is True
+
+    limit = classify_order_semantics(raw_order_type="limit", side="BUY")
+    assert limit.canonical_execution_kind == "limit_qty_price"
+    assert limit.limit_equivalent is True
+
+    legacy = classify_order_semantics(raw_order_type=None, side="BUY")
+    assert legacy.canonical_execution_kind == "legacy_unknown"
+    assert legacy.legacy_unknown is True
+
+    unsupported = classify_order_semantics(raw_order_type="post_only", side="BUY")
+    assert unsupported.canonical_execution_kind == "unsupported_unknown"
+    assert unsupported.unsupported_unknown is True
+
+
+def test_execution_remainder_materiality_rules() -> None:
+    tiny = assess_execution_remainder(
+        requested_qty=0.0006,
+        filled_qty=0.00059988,
+        remaining_qty=0.00000012,
+        reference_price=100_000_000.0,
+        qty_step=0.0001,
+        effective_min_trade_qty=0.0001,
+        min_notional_krw=5000.0,
+    )
+    assert tiny.is_material_remaining is False
+    assert tiny.materiality_reason == "remaining_qty_at_or_below_qty_step"
+
+    material = assess_execution_remainder(
+        requested_qty=0.002,
+        filled_qty=0.0005,
+        remaining_qty=0.0015,
+        reference_price=100_000_000.0,
+        qty_step=0.0001,
+        effective_min_trade_qty=0.0001,
+        min_notional_krw=5000.0,
+    )
+    assert material.is_material_remaining is True
+
+    unfilled = assess_execution_remainder(
+        requested_qty=0.001,
+        filled_qty=0.0,
+        remaining_qty=0.001,
+        reference_price=100_000_000.0,
+        qty_step=0.0001,
+        effective_min_trade_qty=0.0001,
+        min_notional_krw=5000.0,
+    )
+    assert unfilled.is_material_remaining is True
 
 
 def _seed_quality_order(
@@ -487,6 +548,98 @@ def test_summary_order_type_comparison_handles_one_side_only_and_unknown_type(tm
     assert summary["limit_p90_slippage_bps"] is None
     assert summary["order_type_cost_delta"] == "one_order_type_only"
     assert "limit_p90_slippage_bps=NA" in format_execution_quality_text(summary)
+
+
+def test_summary_treats_buy_price_as_market_equivalent_not_unknown(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "execution-quality-price-market.sqlite"))
+    try:
+        records = []
+        for index in range(72):
+            client_order_id = f"quality_price_{index}"
+            _seed_quality_order(
+                conn,
+                client_order_id=client_order_id,
+                side="BUY",
+                order_type="price",
+                fill_prices=(100.0,),
+                fill_qtys=(1.0,),
+            )
+            records.append(build_execution_quality_record(conn, client_order_id=client_order_id))
+        for index in range(61):
+            client_order_id = f"quality_market_{index}"
+            _seed_quality_order(
+                conn,
+                client_order_id=client_order_id,
+                side="SELL",
+                order_type="market",
+                fill_prices=(100.0,),
+                fill_qtys=(1.0,),
+            )
+            records.append(build_execution_quality_record(conn, client_order_id=client_order_id))
+        for index in range(49):
+            client_order_id = f"quality_legacy_{index}"
+            _seed_quality_order(
+                conn,
+                client_order_id=client_order_id,
+                side="BUY",
+                order_type=None,
+                fill_prices=(100.0,),
+                fill_qtys=(1.0,),
+            )
+            records.append(build_execution_quality_record(conn, client_order_id=client_order_id))
+    finally:
+        conn.close()
+
+    assert all(record is not None for record in records)
+    summary = summarize_execution_quality(
+        [record for record in records if record is not None],
+        thresholds=ExecutionQualityThresholds(min_sample=1),
+    )
+
+    assert summary["market_equivalent_order_count"] == 133
+    assert summary["market_order_count"] == 133
+    assert summary["market_buy_quote_order_count"] == 72
+    assert summary["market_sell_base_order_count"] == 61
+    assert summary["legacy_unknown_order_type_count"] == 49
+    assert summary["unsupported_unknown_order_type_count"] == 0
+    assert summary["unknown_order_type_count"] == 49
+    assert summary["order_type_cost_delta"] == "one_order_type_only"
+
+
+def test_material_remainder_controls_quality_gate_and_preserves_raw_flags(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "execution-quality-material-remainder.sqlite"))
+    try:
+        _seed_quality_order(
+            conn,
+            client_order_id="quality_tiny_residue",
+            order_type="price",
+            decision_price=100_000_000.0,
+            submit_reference=100_000_000.0,
+            fill_prices=(100_000_000.0,),
+            fill_qtys=(0.00059988,),
+            qty_req=0.0006,
+        )
+        conn.execute(
+            """
+            UPDATE orders
+            SET qty_step=0.0001, effective_min_trade_qty=0.0001, min_notional_krw=5000.0
+            WHERE client_order_id='quality_tiny_residue'
+            """
+        )
+        record = build_execution_quality_record(conn, client_order_id="quality_tiny_residue")
+    finally:
+        conn.close()
+
+    assert record is not None
+    assert record.partial_fill_flag is True
+    assert record.material_partial_fill_flag is False
+    assert record.remaining_qty_materiality_reason == "remaining_qty_at_or_below_qty_step"
+    assert record.quality_status == "within_model"
+
+    summary = summarize_execution_quality([record], thresholds=ExecutionQualityThresholds(min_sample=1))
+    assert summary["raw_partial_fill_rate"] == pytest.approx(1.0)
+    assert summary["partial_fill_rate"] == pytest.approx(0.0)
+    assert summary["quality_gate_status"] == "PASS"
 
 
 def test_execution_quality_report_cli_no_records(tmp_path, monkeypatch, capsys) -> None:

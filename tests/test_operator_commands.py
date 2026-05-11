@@ -9208,8 +9208,12 @@ def test_live_dry_run_performance_gate_visible_and_submit_expected_false(tmp_pat
     assert ctx["submit_expected"] is False
     assert plan["submit_expected"] is False
     assert plan["strategy_performance_gate_blocked"] is True
+    assert plan["strategy_performance_gate_status"] == "blocked"
+    assert plan["strategy_performance_gate_enforced"] is False
+    assert plan["strategy_performance_gate_would_block_if_armed"] is True
     assert plan["strategy_performance_gate_reason_code"] == "STRATEGY_PERFORMANCE_BLOCKED:STRATEGY_EXPECTANCY_NEGATIVE"
-    assert ctx["final_action"] == "BLOCK_STRATEGY_PERFORMANCE_GATE"
+    assert ctx["final_action"] == "LIVE_DRY_RUN_NO_SUBMIT"
+    assert ctx["execution_decision"]["actual_primary_block_layer"] in {"none", "execution_order_rule"}
 
 
 def test_decision_telemetry_shows_live_dry_run_target_delta_plan(tmp_path, monkeypatch, capsys):

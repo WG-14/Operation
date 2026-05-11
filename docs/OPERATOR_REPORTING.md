@@ -111,8 +111,8 @@ The report answers these execution-quality questions:
 - Signal-time price, submit-time reference price, and actual average fill price.
 - Submit-to-fill latency from broker request evidence to observed fills.
 - Realized slippage versus signal price and submit reference price.
-- Partial-fill and unfilled rates.
-- Market-vs-limit cost, latency, partial-fill, and unfilled behavior.
+- Raw and materiality-aware partial-fill and unfilled rates.
+- Market-equivalent-vs-limit cost, latency, partial-fill, and unfilled behavior.
 - Live observed cost versus manifest/backtest assumptions when
   `--compare-manifest` is supplied.
 
@@ -121,10 +121,16 @@ with fields such as:
 
 ```text
 market_order_count=42
+market_equivalent_order_count=42
+market_buy_quote_order_count=25
+market_sell_base_order_count=17
 market_p90_slippage_bps=18.5
 market_p95_submit_to_fill_ms=2400
 market_partial_fill_rate=0
 market_unfilled_rate=0
+market_raw_partial_fill_rate=0.02
+legacy_unknown_order_type_count=3
+unsupported_unknown_order_type_count=0
 limit_order_count=17
 limit_p90_slippage_bps=4.2
 limit_p95_submit_to_fill_ms=5100
@@ -133,12 +139,42 @@ limit_unfilled_rate=0.11
 order_type_cost_delta=market_fills_faster_but_costs_more
 ```
 
-`order_type_cost_delta` compares market and limit p90 signal slippage and p95
-submit-to-fill latency when both sides have evidence. `one_order_type_only`
-means the sample has only market or only limit orders.
+BUY `order_type=price` rows are classified as
+`market_buy_quote_notional`, a market-equivalent quote/notional BUY contract.
+SELL `order_type=market` rows are classified as `market_sell_base_qty`.
+Missing historical order types are reported as `legacy_unknown_order_type_count`;
+future unsupported values are reported as `unsupported_unknown_order_type_count`.
+`unknown_order_type_count` is the sum of those two unknown classes and does not
+include BUY `price` orders.
+
+`partial_fill_rate` and `unfilled_rate` are materiality-aware and are used for
+operator warnings. Raw diagnostic fields such as `raw_partial_fill_rate` and
+`raw_unfilled_rate` remain available to show dust-like exchange residue. A tiny
+remaining quantity is non-material when it is at or below `qty_step`, below
+`effective_min_trade_qty`, or below `min_notional_krw` when a remaining notional
+can be computed.
+
+`order_type_cost_delta` compares market-equivalent and limit p90 signal slippage
+and p95 submit-to-fill latency when both sides have evidence. `one_order_type_only`
+means the sample has only market-equivalent or only limit orders.
 `insufficient_order_type_samples` means one or both sides lack cost or latency
 evidence. Unknown order types are counted separately and are not mixed into the
 market/limit comparison.
+
+Fill-to-trade linkage gaps can be previewed without mutation:
+
+```bash
+uv run bithumb-bot diagnose-fill-trade-linkage --json
+```
+
+When the preview reports safely matchable legacy rows, this command updates only
+rows with exactly one candidate trade and records DB repair evidence:
+
+```bash
+uv run bithumb-bot diagnose-fill-trade-linkage --apply-safe --json
+```
+
+Ambiguous and unmatchable rows are never updated by this repair path.
 
 Status interpretation:
 

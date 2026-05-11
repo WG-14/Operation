@@ -1895,6 +1895,28 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS fill_trade_linkage_repairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repair_key TEXT NOT NULL UNIQUE,
+            fill_row_id INTEGER NOT NULL,
+            client_order_id TEXT NOT NULL,
+            fill_id TEXT,
+            candidate_trade_id INTEGER NOT NULL,
+            applied_ts INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            repair_basis TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_fill_trade_linkage_repairs_fill_row
+        ON fill_trade_linkage_repairs(fill_row_id, candidate_trade_id)
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS order_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_order_id TEXT NOT NULL,
@@ -1987,6 +2009,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             market TEXT,
             side TEXT,
             order_type TEXT,
+            canonical_execution_kind TEXT,
+            market_equivalent INTEGER NOT NULL DEFAULT 0,
+            legacy_unknown_order_type INTEGER NOT NULL DEFAULT 0,
+            unsupported_unknown_order_type INTEGER NOT NULL DEFAULT 0,
             exchange_order_id TEXT,
             signal_ts_ms INTEGER,
             signal_reference_price REAL,
@@ -2006,6 +2032,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             filled_qty REAL NOT NULL DEFAULT 0,
             requested_qty REAL,
             remaining_qty REAL,
+            remaining_notional_krw REAL,
+            qty_step REAL,
+            effective_min_trade_qty REAL,
+            min_notional_krw REAL,
             fee REAL,
             realized_fee_rate REAL,
             submit_latency_ms INTEGER,
@@ -2018,6 +2048,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             fill_ratio REAL,
             partial_fill_flag INTEGER NOT NULL DEFAULT 0,
             unfilled_flag INTEGER NOT NULL DEFAULT 0,
+            material_partial_fill_flag INTEGER NOT NULL DEFAULT 0,
+            material_unfilled_flag INTEGER NOT NULL DEFAULT 0,
+            remaining_qty_materiality_reason TEXT NOT NULL DEFAULT 'not_yet_computed',
             quality_status TEXT NOT NULL,
             quality_reason TEXT NOT NULL,
             backtest_assumed_slippage_bps REAL,
@@ -2036,6 +2069,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ("market", "market TEXT"),
         ("side", "side TEXT"),
         ("order_type", "order_type TEXT"),
+        ("canonical_execution_kind", "canonical_execution_kind TEXT"),
+        ("market_equivalent", "market_equivalent INTEGER NOT NULL DEFAULT 0"),
+        ("legacy_unknown_order_type", "legacy_unknown_order_type INTEGER NOT NULL DEFAULT 0"),
+        ("unsupported_unknown_order_type", "unsupported_unknown_order_type INTEGER NOT NULL DEFAULT 0"),
         ("exchange_order_id", "exchange_order_id TEXT"),
         ("signal_ts_ms", "signal_ts_ms INTEGER"),
         ("signal_reference_price", "signal_reference_price REAL"),
@@ -2055,6 +2092,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ("filled_qty", "filled_qty REAL NOT NULL DEFAULT 0"),
         ("requested_qty", "requested_qty REAL"),
         ("remaining_qty", "remaining_qty REAL"),
+        ("remaining_notional_krw", "remaining_notional_krw REAL"),
+        ("qty_step", "qty_step REAL"),
+        ("effective_min_trade_qty", "effective_min_trade_qty REAL"),
+        ("min_notional_krw", "min_notional_krw REAL"),
         ("fee", "fee REAL"),
         ("realized_fee_rate", "realized_fee_rate REAL"),
         ("submit_latency_ms", "submit_latency_ms INTEGER"),
@@ -2067,6 +2108,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ("fill_ratio", "fill_ratio REAL"),
         ("partial_fill_flag", "partial_fill_flag INTEGER NOT NULL DEFAULT 0"),
         ("unfilled_flag", "unfilled_flag INTEGER NOT NULL DEFAULT 0"),
+        ("material_partial_fill_flag", "material_partial_fill_flag INTEGER NOT NULL DEFAULT 0"),
+        ("material_unfilled_flag", "material_unfilled_flag INTEGER NOT NULL DEFAULT 0"),
+        (
+            "remaining_qty_materiality_reason",
+            "remaining_qty_materiality_reason TEXT NOT NULL DEFAULT 'not_yet_computed'",
+        ),
         ("quality_status", "quality_status TEXT NOT NULL DEFAULT 'insufficient_evidence'"),
         ("quality_reason", "quality_reason TEXT NOT NULL DEFAULT 'not_yet_computed'"),
         ("backtest_assumed_slippage_bps", "backtest_assumed_slippage_bps REAL"),

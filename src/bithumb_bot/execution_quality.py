@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .order_semantics import (
+    CANONICAL_LIMIT_QTY_PRICE,
+    CANONICAL_MARKET_BUY_QUOTE_NOTIONAL,
+    CANONICAL_MARKET_SELL_BASE_QTY,
+    classify_order_semantics,
+)
 from .research.experiment_manifest import load_manifest
 
 
@@ -49,6 +55,10 @@ class ExecutionQualityRecord:
     market: str | None
     side: str | None
     order_type: str | None
+    canonical_execution_kind: str
+    market_equivalent: bool
+    legacy_unknown_order_type: bool
+    unsupported_unknown_order_type: bool
     exchange_order_id: str | None
     signal_ts_ms: int | None
     signal_reference_price: float | None
@@ -68,6 +78,10 @@ class ExecutionQualityRecord:
     filled_qty: float
     requested_qty: float | None
     remaining_qty: float | None
+    remaining_notional_krw: float | None
+    qty_step: float | None
+    effective_min_trade_qty: float | None
+    min_notional_krw: float | None
     fee: float | None
     realized_fee_rate: float | None
     submit_latency_ms: int | None
@@ -80,6 +94,9 @@ class ExecutionQualityRecord:
     fill_ratio: float | None
     partial_fill_flag: bool
     unfilled_flag: bool
+    material_partial_fill_flag: bool
+    material_unfilled_flag: bool
+    remaining_qty_materiality_reason: str
     quality_status: str
     quality_reason: str
     backtest_assumed_slippage_bps: float | None
@@ -181,14 +198,24 @@ def percentile(values: list[float], pct: float) -> float | None:
 
 
 def _normalized_order_type(value: object) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"market", "limit"}:
-        return normalized
+    semantics = classify_order_semantics(raw_order_type=value, side=None)
+    if semantics.market_equivalent:
+        return "market"
+    if semantics.limit_equivalent:
+        return "limit"
     return "unknown"
 
 
+def _execution_kind_matches(row: ExecutionQualityRecord, order_type: str) -> bool:
+    if order_type == "market":
+        return bool(row.market_equivalent)
+    if order_type == "limit":
+        return row.canonical_execution_kind == CANONICAL_LIMIT_QTY_PRICE
+    return False
+
+
 def _order_type_metrics(records: list[ExecutionQualityRecord], order_type: str) -> dict[str, object]:
-    typed = [row for row in records if _normalized_order_type(row.order_type) == order_type]
+    typed = [row for row in records if _execution_kind_matches(row, order_type)]
     count = len(typed)
     slippage = [float(row.slippage_vs_signal_bps) for row in typed if row.slippage_vs_signal_bps is not None]
     latency = [float(row.full_fill_latency_ms) for row in typed if row.full_fill_latency_ms is not None]
@@ -201,9 +228,96 @@ def _order_type_metrics(records: list[ExecutionQualityRecord], order_type: str) 
         f"{prefix}median_submit_to_fill_ms": percentile(latency, 50),
         f"{prefix}p90_submit_to_fill_ms": percentile(latency, 90),
         f"{prefix}p95_submit_to_fill_ms": percentile(latency, 95),
-        f"{prefix}partial_fill_rate": (sum(1 for row in typed if row.partial_fill_flag) / count if count else 0.0),
-        f"{prefix}unfilled_rate": (sum(1 for row in typed if row.unfilled_flag) / count if count else 0.0),
+        f"{prefix}partial_fill_rate": (
+            sum(1 for row in typed if row.material_partial_fill_flag) / count if count else 0.0
+        ),
+        f"{prefix}unfilled_rate": (sum(1 for row in typed if row.material_unfilled_flag) / count if count else 0.0),
+        f"{prefix}raw_partial_fill_rate": (sum(1 for row in typed if row.partial_fill_flag) / count if count else 0.0),
+        f"{prefix}raw_unfilled_rate": (sum(1 for row in typed if row.unfilled_flag) / count if count else 0.0),
     }
+
+
+@dataclass(frozen=True)
+class ExecutionRemainder:
+    requested_qty: float | None
+    filled_qty: float
+    remaining_qty: float | None
+    remaining_notional_krw: float | None
+    qty_step: float | None
+    effective_min_trade_qty: float | None
+    min_notional_krw: float | None
+    is_material_remaining: bool
+    materiality_reason: str
+
+
+def assess_execution_remainder(
+    *,
+    requested_qty: object,
+    filled_qty: object,
+    remaining_qty: object,
+    reference_price: object,
+    qty_step: object,
+    effective_min_trade_qty: object,
+    min_notional_krw: object,
+) -> ExecutionRemainder:
+    requested = finite_non_negative(requested_qty)
+    filled = finite_non_negative(filled_qty) or 0.0
+    remaining = finite_non_negative(remaining_qty)
+    step = finite_positive(qty_step)
+    min_qty = finite_positive(effective_min_trade_qty)
+    min_notional = finite_positive(min_notional_krw)
+    ref_price = finite_positive(reference_price)
+    remaining_notional = None
+    if remaining is not None and ref_price is not None:
+        remaining_notional = remaining * ref_price
+
+    if requested is None or requested <= 0:
+        return ExecutionRemainder(
+            requested_qty=requested,
+            filled_qty=filled,
+            remaining_qty=remaining,
+            remaining_notional_krw=remaining_notional,
+            qty_step=step,
+            effective_min_trade_qty=min_qty,
+            min_notional_krw=min_notional,
+            is_material_remaining=False,
+            materiality_reason="requested_qty_missing",
+        )
+    if remaining is None or remaining <= 0:
+        return ExecutionRemainder(
+            requested_qty=requested,
+            filled_qty=filled,
+            remaining_qty=remaining,
+            remaining_notional_krw=remaining_notional,
+            qty_step=step,
+            effective_min_trade_qty=min_qty,
+            min_notional_krw=min_notional,
+            is_material_remaining=False,
+            materiality_reason="no_remaining_qty",
+        )
+    if step is not None and remaining <= step:
+        reason = "remaining_qty_at_or_below_qty_step"
+        material = False
+    elif min_qty is not None and remaining < min_qty:
+        reason = "remaining_qty_below_effective_min_trade_qty"
+        material = False
+    elif min_notional is not None and remaining_notional is not None and remaining_notional < min_notional:
+        reason = "remaining_notional_below_min_notional_krw"
+        material = False
+    else:
+        reason = "material_executable_remaining_qty"
+        material = True
+    return ExecutionRemainder(
+        requested_qty=requested,
+        filled_qty=filled,
+        remaining_qty=remaining,
+        remaining_notional_krw=remaining_notional,
+        qty_step=step,
+        effective_min_trade_qty=min_qty,
+        min_notional_krw=min_notional,
+        is_material_remaining=material,
+        materiality_reason=reason,
+    )
 
 
 def _classify_order_type_cost_delta(summary: dict[str, object]) -> str:
@@ -348,7 +462,8 @@ def build_execution_quality_record(
     order = conn.execute(
         """
         SELECT client_order_id, submit_attempt_id, exchange_order_id, status, side, order_type,
-               price, qty_req, qty_filled, strategy_name, entry_decision_id, exit_decision_id, created_ts
+               price, qty_req, qty_filled, strategy_name, entry_decision_id, exit_decision_id, created_ts,
+               effective_min_trade_qty, qty_step, min_notional_krw
         FROM orders
         WHERE client_order_id=?
         """,
@@ -410,6 +525,17 @@ def build_execution_quality_record(
     fill_ratio = None if not requested_qty or requested_qty <= 0 else min(filled_qty / requested_qty, 1.0)
     unfilled = bool(requested_qty and requested_qty > 0 and filled_qty <= 0)
     partial = bool(fill_ratio is not None and 0 < fill_ratio < 0.999999)
+    remainder = assess_execution_remainder(
+        requested_qty=requested_qty,
+        filled_qty=filled_qty,
+        remaining_qty=remaining_qty,
+        reference_price=(avg_fill if avg_fill is not None else submit_ref if submit_ref is not None else signal_ref),
+        qty_step=order["qty_step"],
+        effective_min_trade_qty=order["effective_min_trade_qty"],
+        min_notional_krw=order["min_notional_krw"],
+    )
+    material_unfilled = bool(unfilled and remainder.is_material_remaining)
+    material_partial = bool(partial and remainder.is_material_remaining)
     notional = (avg_fill * filled_qty) if avg_fill is not None and filled_qty > 0 else None
     realized_fee_rate = None if fee is None or notional is None or notional <= 0 else fee / notional
     side = str(order["side"] or "").upper() or None
@@ -434,7 +560,7 @@ def build_execution_quality_record(
         missing.append("fill_price_missing")
     if requested_qty is None or requested_qty <= 0:
         missing.append("requested_qty_missing")
-    if unfilled:
+    if material_unfilled:
         missing.append("unfilled")
 
     if missing:
@@ -443,12 +569,14 @@ def build_execution_quality_record(
     elif model_breach:
         quality_status = QUALITY_MODEL_BREACH
         quality_reason = "slippage_vs_signal_exceeds_backtest_model"
-    elif partial:
+    elif material_partial:
         quality_status = QUALITY_DEGRADED
         quality_reason = "partial_fill"
     else:
         quality_status = QUALITY_WITHIN_MODEL
         quality_reason = "complete_evidence_within_thresholds"
+
+    semantics = classify_order_semantics(raw_order_type=order["order_type"], side=side)
 
     return ExecutionQualityRecord(
         client_order_id=str(order["client_order_id"]),
@@ -459,6 +587,10 @@ def build_execution_quality_record(
         market=str((confirmation or preflight or intent)["symbol"]) if (confirmation or preflight or intent) is not None and (confirmation or preflight or intent)["symbol"] else None,
         side=side,
         order_type=str(order["order_type"]) if order["order_type"] else None,
+        canonical_execution_kind=semantics.canonical_execution_kind,
+        market_equivalent=semantics.market_equivalent,
+        legacy_unknown_order_type=semantics.legacy_unknown,
+        unsupported_unknown_order_type=semantics.unsupported_unknown,
         exchange_order_id=str(order["exchange_order_id"]) if order["exchange_order_id"] else None,
         signal_ts_ms=(int(decision["decision_ts"]) if decision is not None and decision["decision_ts"] is not None else None),
         signal_reference_price=signal_ref,
@@ -478,6 +610,10 @@ def build_execution_quality_record(
         filled_qty=filled_qty,
         requested_qty=requested_qty,
         remaining_qty=remaining_qty,
+        remaining_notional_krw=remainder.remaining_notional_krw,
+        qty_step=remainder.qty_step,
+        effective_min_trade_qty=remainder.effective_min_trade_qty,
+        min_notional_krw=remainder.min_notional_krw,
         fee=fee,
         realized_fee_rate=realized_fee_rate,
         submit_latency_ms=latency_ms(start_ms=(preflight["event_ts"] if preflight is not None else None), end_ms=submit_sent_ts),
@@ -490,6 +626,9 @@ def build_execution_quality_record(
         fill_ratio=fill_ratio,
         partial_fill_flag=partial,
         unfilled_flag=unfilled,
+        material_partial_fill_flag=material_partial,
+        material_unfilled_flag=material_unfilled,
+        remaining_qty_materiality_reason=remainder.materiality_reason,
         quality_status=quality_status,
         quality_reason=quality_reason,
         backtest_assumed_slippage_bps=backtest_assumed_slippage_bps,
@@ -584,11 +723,21 @@ def summarize_execution_quality(
     backtest_slippage_bps_max: float | None = None,
 ) -> dict[str, object]:
     sample_count = len(records)
-    market_order_count = sum(1 for row in records if _normalized_order_type(row.order_type) == "market")
-    limit_order_count = sum(1 for row in records if _normalized_order_type(row.order_type) == "limit")
-    unknown_order_type_count = sum(1 for row in records if _normalized_order_type(row.order_type) == "unknown")
-    partial_count = sum(1 for row in records if row.partial_fill_flag)
-    unfilled_count = sum(1 for row in records if row.unfilled_flag)
+    market_buy_quote_order_count = sum(
+        1 for row in records if row.canonical_execution_kind == CANONICAL_MARKET_BUY_QUOTE_NOTIONAL
+    )
+    market_sell_base_order_count = sum(
+        1 for row in records if row.canonical_execution_kind == CANONICAL_MARKET_SELL_BASE_QTY
+    )
+    market_equivalent_order_count = sum(1 for row in records if row.market_equivalent)
+    limit_order_count = sum(1 for row in records if row.canonical_execution_kind == CANONICAL_LIMIT_QTY_PRICE)
+    legacy_unknown_order_type_count = sum(1 for row in records if row.legacy_unknown_order_type)
+    unsupported_unknown_order_type_count = sum(1 for row in records if row.unsupported_unknown_order_type)
+    unknown_order_type_count = legacy_unknown_order_type_count + unsupported_unknown_order_type_count
+    partial_count = sum(1 for row in records if row.material_partial_fill_flag)
+    unfilled_count = sum(1 for row in records if row.material_unfilled_flag)
+    raw_partial_count = sum(1 for row in records if row.partial_fill_flag)
+    raw_unfilled_count = sum(1 for row in records if row.unfilled_flag)
     insufficient_count = sum(1 for row in records if row.quality_status == QUALITY_INSUFFICIENT_EVIDENCE)
     model_breach_count = sum(1 for row in records if row.model_breach_flag is True)
     sufficient_model_count = sum(1 for row in records if row.model_breach_flag is not None)
@@ -597,6 +746,8 @@ def summarize_execution_quality(
     slip_submit = [float(row.slippage_vs_submit_ref_bps) for row in records if row.slippage_vs_submit_ref_bps is not None]
     partial_rate = partial_count / sample_count if sample_count else 0.0
     unfilled_rate = unfilled_count / sample_count if sample_count else 0.0
+    raw_partial_rate = raw_partial_count / sample_count if sample_count else 0.0
+    raw_unfilled_rate = raw_unfilled_count / sample_count if sample_count else 0.0
     model_breach_rate = model_breach_count / sufficient_model_count if sufficient_model_count else None
     p90_slippage = percentile(slip_signal, 90)
     p95_latency = percentile(submit_to_fill, 95)
@@ -635,9 +786,14 @@ def summarize_execution_quality(
 
     summary = {
         "sample_count": sample_count,
-        "market_order_count": market_order_count,
+        "market_order_count": market_equivalent_order_count,
+        "market_equivalent_order_count": market_equivalent_order_count,
+        "market_buy_quote_order_count": market_buy_quote_order_count,
+        "market_sell_base_order_count": market_sell_base_order_count,
         "limit_order_count": limit_order_count,
         "unknown_order_type_count": unknown_order_type_count,
+        "legacy_unknown_order_type_count": legacy_unknown_order_type_count,
+        "unsupported_unknown_order_type_count": unsupported_unknown_order_type_count,
         "median_submit_to_fill_ms": percentile(submit_to_fill, 50),
         "p90_submit_to_fill_ms": percentile(submit_to_fill, 90),
         "p95_submit_to_fill_ms": p95_latency,
@@ -648,6 +804,12 @@ def summarize_execution_quality(
         "p90_slippage_vs_submit_ref_bps": percentile(slip_submit, 90),
         "partial_fill_rate": partial_rate,
         "unfilled_rate": unfilled_rate,
+        "raw_partial_fill_rate": raw_partial_rate,
+        "raw_unfilled_rate": raw_unfilled_rate,
+        "material_partial_fill_count": partial_count,
+        "material_unfilled_count": unfilled_count,
+        "raw_partial_fill_count": raw_partial_count,
+        "raw_unfilled_count": raw_unfilled_count,
         "insufficient_evidence_count": insufficient_count,
         "backtest_slippage_bps_max": backtest_slippage_bps_max,
         "model_breach_count": model_breach_count if backtest_slippage_bps_max is not None else None,
@@ -667,8 +829,13 @@ def format_execution_quality_text(summary: dict[str, object]) -> str:
     for key in (
         "sample_count",
         "market_order_count",
+        "market_equivalent_order_count",
+        "market_buy_quote_order_count",
+        "market_sell_base_order_count",
         "limit_order_count",
         "unknown_order_type_count",
+        "legacy_unknown_order_type_count",
+        "unsupported_unknown_order_type_count",
         "median_submit_to_fill_ms",
         "p90_submit_to_fill_ms",
         "p95_submit_to_fill_ms",
@@ -679,6 +846,12 @@ def format_execution_quality_text(summary: dict[str, object]) -> str:
         "p90_slippage_vs_submit_ref_bps",
         "partial_fill_rate",
         "unfilled_rate",
+        "raw_partial_fill_rate",
+        "raw_unfilled_rate",
+        "material_partial_fill_count",
+        "material_unfilled_count",
+        "raw_partial_fill_count",
+        "raw_unfilled_count",
         "insufficient_evidence_count",
         "backtest_slippage_bps_max",
         "model_breach_count",
@@ -691,6 +864,8 @@ def format_execution_quality_text(summary: dict[str, object]) -> str:
         "market_p95_submit_to_fill_ms",
         "market_partial_fill_rate",
         "market_unfilled_rate",
+        "market_raw_partial_fill_rate",
+        "market_raw_unfilled_rate",
         "limit_median_slippage_bps",
         "limit_p90_slippage_bps",
         "limit_p95_slippage_bps",
@@ -699,6 +874,8 @@ def format_execution_quality_text(summary: dict[str, object]) -> str:
         "limit_p95_submit_to_fill_ms",
         "limit_partial_fill_rate",
         "limit_unfilled_rate",
+        "limit_raw_partial_fill_rate",
+        "limit_raw_unfilled_rate",
         "order_type_cost_delta",
         "quality_gate_status",
         "primary_issue",

@@ -3736,6 +3736,44 @@ def test_diagnose_fill_trade_linkage_reports_matchable_and_unmatchable_rows(
                 0.11,
             ),
         )
+        record_order_if_missing(
+            conn,
+            client_order_id="ambiguous_fill",
+            side="BUY",
+            qty_req=0.0002,
+            price=RESIDUAL_INCIDENT_PRICE,
+            ts_ms=1_777_242_600_000,
+            status="FILLED",
+        )
+        conn.execute(
+            """
+            INSERT INTO fills(client_order_id, fill_id, fill_ts, price, qty, fee, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                "ambiguous_fill",
+                "ambiguous-fill-id",
+                1_777_242_600_000,
+                RESIDUAL_INCIDENT_PRICE,
+                0.0002,
+                0.0,
+            ),
+        )
+        for offset in (0, 1):
+            conn.execute(
+                """
+                INSERT INTO trades(ts, pair, interval, side, price, qty, fee, cash_after, asset_after, client_order_id)
+                VALUES (?, ?, '1m', 'BUY', ?, ?, 0.0, 0.0, ?, ?)
+                """,
+                (
+                    1_777_242_600_000 + offset,
+                    settings.PAIR,
+                    RESIDUAL_INCIDENT_PRICE,
+                    0.0002,
+                    0.0002,
+                    "ambiguous_fill",
+                ),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -3744,10 +3782,45 @@ def test_diagnose_fill_trade_linkage_reports_matchable_and_unmatchable_rows(
     app_main(["diagnose-fill-trade-linkage", "--json"])
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["fills_missing_trade_id"] == 2
+    assert payload["fills_missing_trade_id"] == 3
     assert payload["missing_but_safely_matchable"] == 1
-    assert payload["ambiguous"] == 0
+    assert payload["ambiguous"] == 1
     assert payload["unmatchable"] == 1
+    assert payload["dry_run"] is True
+
+    conn = ensure_db(str(recovery_db))
+    try:
+        assert conn.execute("SELECT trade_id FROM fills WHERE client_order_id='linkable_buy'").fetchone()[
+            "trade_id"
+        ] is None
+    finally:
+        conn.close()
+
+    app_main(["diagnose-fill-trade-linkage", "--json", "--apply-safe"])
+    applied = json.loads(capsys.readouterr().out)
+
+    assert applied["apply_safe"] is True
+    assert applied["repaired_count"] == 1
+    assert applied["fills_missing_trade_id_after"] == 2
+
+    conn = ensure_db(str(recovery_db))
+    try:
+        linkable = conn.execute("SELECT trade_id FROM fills WHERE client_order_id='linkable_buy'").fetchone()
+        ambiguous = conn.execute("SELECT trade_id FROM fills WHERE client_order_id='ambiguous_fill'").fetchone()
+        unmatchable = conn.execute("SELECT trade_id FROM fills WHERE client_order_id='unmatched_fill'").fetchone()
+        repairs = conn.execute("SELECT COUNT(*) AS count FROM fill_trade_linkage_repairs").fetchone()
+    finally:
+        conn.close()
+
+    assert linkable["trade_id"] is not None
+    assert ambiguous["trade_id"] is None
+    assert unmatchable["trade_id"] is None
+    assert int(repairs["count"]) == 1
+
+    app_main(["diagnose-fill-trade-linkage", "--json", "--apply-safe"])
+    second = json.loads(capsys.readouterr().out)
+    assert second["repaired_count"] == 0
+    assert second["fills_missing_trade_id_after"] == 2
 
 
 def test_portfolio_anchor_projection_still_blocks_without_current_publication_attestation(recovery_db):

@@ -992,9 +992,65 @@ def test_target_delta_buy_rebalance_blocked_by_strategy_performance_gate_when_li
     assert summary.target_submit_plan["target_sizing"]["sizing_policy"] == "target_delta_exchange_floor_v1"
     assert summary.target_submit_plan["invariant_status"] == "passed"
     assert summary.target_submit_plan["strategy_performance_gate_blocked"] is True
+    assert summary.target_submit_plan["strategy_performance_gate_status"] == "blocked"
+    assert summary.target_submit_plan["strategy_performance_gate_enforced"] is True
+    assert summary.target_submit_plan["strategy_performance_gate_would_block_if_armed"] is True
     assert "STRATEGY_EXPECTANCY_NEGATIVE" in str(
         summary.target_submit_plan["strategy_performance_gate_reason_code"]
     )
+
+
+def test_strategy_performance_gate_status_visible_but_not_enforced_when_unarmed() -> None:
+    old = _set_live_armed_target_delta()
+    try:
+        object.__setattr__(settings, "LIVE_DRY_RUN", True)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", False)
+        object.__setattr__(settings, "TARGET_EXPOSURE_KRW", 100_000.0)
+        summary = build_execution_decision_summary(
+            decision_context={"raw_signal": "BUY", "market_price": 100_000_000.0},
+            readiness_payload=_readiness(broker_qty=0.0004) | {
+                "residual_proof_min_qty": 0.0001,
+                "residual_proof_min_notional_krw": 5000.0,
+            },
+            raw_signal="BUY",
+            final_signal="BUY",
+            previous_target_exposure_krw=0.0,
+            strategy_performance_gate=_blocked_performance_gate(),
+        )
+    finally:
+        _restore_settings(old)
+
+    assert summary.target_submit_plan is not None
+    assert summary.submit_expected is True
+    assert summary.final_action == "REBALANCE_TO_TARGET"
+    assert summary.target_submit_plan["strategy_performance_gate_status"] == "blocked"
+    assert summary.target_submit_plan["strategy_performance_gate_enforced"] is False
+    assert summary.target_submit_plan["strategy_performance_gate_would_block_if_armed"] is True
+    assert summary.as_dict()["actual_primary_block_layer"] == "none"
+
+
+def test_raw_hold_without_crossover_attributed_to_signal_absence() -> None:
+    old = {
+        "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
+        "MODE": settings.MODE,
+    }
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "lot_native")
+        object.__setattr__(settings, "MODE", "paper")
+        summary = build_execution_decision_summary(
+            decision_context={"raw_signal": "HOLD", "market_price": 100_000_000.0},
+            readiness_payload=_readiness(broker_qty=0.0),
+            raw_signal="HOLD",
+            final_signal="HOLD",
+            final_reason="opposite_cross_absent",
+        )
+    finally:
+        _restore_settings(old)
+
+    payload = summary.as_dict()
+    assert summary.submit_expected is False
+    assert payload["actual_primary_block_layer"] == "strategy_signal_absent"
+    assert payload["actual_primary_block_reason"] == "raw_hold_no_entry_or_exit_signal"
 
 
 def test_target_delta_hold_rebalance_buy_blocked_by_strategy_performance_gate_when_live_armed() -> None:
