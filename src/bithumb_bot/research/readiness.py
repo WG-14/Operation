@@ -11,6 +11,7 @@ from bithumb_bot.execution_quality import ExecutionQualityThresholds
 from .data_plane import (
     build_dataset_quality_report_sql,
     dataset_quality_policy_payload,
+    persistent_missing_overall_next_action,
     readiness_mode_payload,
     split_names,
     walk_forward_payload,
@@ -24,6 +25,7 @@ def build_research_readiness_report(
     manifest_path: str | Path,
     db_path: str | Path | None = None,
     execution_calibration_path: str | Path | None = None,
+    missing_classification_path: str | Path | None = None,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     resolved_manifest_path = Path(manifest_path).expanduser().resolve()
@@ -56,12 +58,19 @@ def build_research_readiness_report(
 
     walk_forward = walk_forward_payload(manifest)
     failed = failed or walk_forward["status"] == "FAIL"
+    persistent_missing_classification = _persistent_missing_classification_payload(
+        path=missing_classification_path,
+        manifest=manifest,
+        db_path=resolved_db_path,
+    )
+    failed = failed or persistent_missing_classification["status"] == "FAIL"
 
     next_actions = _next_actions(
         split_reports=split_reports,
         top_of_book=top_of_book,
         execution_calibration=execution_calibration,
         walk_forward=walk_forward,
+        persistent_missing_classification=persistent_missing_classification,
     )
 
     return {
@@ -85,6 +94,7 @@ def build_research_readiness_report(
         "top_of_book": top_of_book,
         "execution_calibration": execution_calibration,
         "walk_forward": walk_forward,
+        "persistent_missing_classification": persistent_missing_classification,
         "next_actions": next_actions,
     }
 
@@ -93,12 +103,14 @@ def cmd_research_readiness(
     *,
     manifest_path: str,
     execution_calibration_path: str | None = None,
+    missing_classification_path: str | None = None,
     as_json: bool = False,
 ) -> int:
     try:
         report = build_research_readiness_report(
             manifest_path=manifest_path,
             execution_calibration_path=execution_calibration_path,
+            missing_classification_path=missing_classification_path,
             progress_callback=(
                 None
                 if as_json
@@ -253,16 +265,109 @@ def _execution_calibration_payload(
     }
 
 
+def _persistent_missing_classification_payload(
+    *,
+    path: str | Path | None,
+    manifest: ExperimentManifest,
+    db_path: Path,
+) -> dict[str, Any]:
+    if path is None:
+        return {
+            "provided": False,
+            "artifact_path": None,
+            "artifact_hash": None,
+            "status": "NOT_PROVIDED",
+            "production_gate_effect": "none",
+            "summary": {},
+            "reasons": [],
+            "next_action": "none",
+        }
+    resolved_path = Path(path).expanduser().resolve()
+    try:
+        artifact = json.loads(resolved_path.read_text(encoding="utf-8"))
+        _validate_persistent_missing_classification_artifact(
+            artifact=artifact,
+            manifest=manifest,
+            db_path=db_path,
+        )
+    except Exception as exc:
+        return {
+            "provided": True,
+            "artifact_path": str(resolved_path),
+            "artifact_hash": None,
+            "status": "FAIL",
+            "production_gate_effect": "none",
+            "summary": {},
+            "reasons": [str(exc)],
+            "next_action": "regenerate classify-persistent-missing-candles from matching manifest, DB, missing ranges, and retry attempts",
+        }
+    summary = dict(artifact.get("summary") or {})
+    return {
+        "provided": True,
+        "artifact_path": str(resolved_path),
+        "artifact_hash": artifact.get("content_hash"),
+        "status": "DIAGNOSTIC_ONLY",
+        "production_gate_effect": "none",
+        "summary": {
+            "exchange_gap_candidate": int(summary.get("exchange_gap_candidate") or 0),
+            "api_unavailable_candidate": int(summary.get("api_unavailable_candidate") or 0),
+            "no_trade_missing_candidate": int(summary.get("no_trade_missing_candidate") or 0),
+            "unclassified_missing": int(summary.get("unclassified_missing") or 0),
+        },
+        "reasons": [],
+        "next_action": persistent_missing_overall_next_action(summary),
+    }
+
+
+def _validate_persistent_missing_classification_artifact(
+    *,
+    artifact: dict[str, Any],
+    manifest: ExperimentManifest,
+    db_path: Path,
+) -> None:
+    if artifact.get("artifact_type") != "persistent_missing_candle_classification":
+        raise ValueError("missing classification artifact_type must be persistent_missing_candle_classification")
+    if artifact.get("schema_version") != 1:
+        raise ValueError("unsupported missing classification schema_version")
+    embedded_hash = artifact.get("content_hash")
+    if not isinstance(embedded_hash, str) or not embedded_hash.startswith("sha256:"):
+        raise ValueError("missing classification content_hash is required")
+    recomputed_payload = {key: value for key, value in artifact.items() if key != "content_hash"}
+    from .hashing import sha256_prefixed
+
+    if sha256_prefixed(recomputed_payload) != embedded_hash:
+        raise ValueError("missing classification content_hash does not match artifact body")
+    if artifact.get("manifest_hash") != manifest.manifest_hash():
+        raise ValueError("missing classification manifest_hash does not match manifest")
+    if artifact.get("market") != manifest.market or artifact.get("interval") != manifest.interval:
+        raise ValueError("missing classification market/interval does not match manifest")
+    artifact_db = Path(str(artifact.get("db_path") or "")).expanduser().resolve()
+    if artifact_db != db_path:
+        raise ValueError("missing classification db_path does not match configured DB_PATH")
+    if artifact.get("policy_effect") != "diagnostic_only_no_gate_relaxation":
+        raise ValueError("missing classification policy_effect must not relax gates")
+    limitations = artifact.get("limitations") if isinstance(artifact.get("limitations"), dict) else {}
+    if limitations.get("synthetic_ohlcv_authorized") is not False:
+        raise ValueError("missing classification must not authorize synthetic OHLCV")
+    if limitations.get("production_gate_relaxed") is not False:
+        raise ValueError("missing classification must not relax production gates")
+
+
 def _next_actions(
     *,
     split_reports: dict[str, dict[str, Any]],
     top_of_book: dict[str, Any],
     execution_calibration: dict[str, Any],
     walk_forward: dict[str, Any],
+    persistent_missing_classification: dict[str, Any],
 ) -> list[str]:
     actions: list[str] = []
     if any(split["quality_status"] != "PASS" for split in split_reports.values()):
         actions.append("backfill missing historical candles for the manifest split ranges")
+    if persistent_missing_classification.get("provided") and persistent_missing_classification.get("status") != "NOT_PROVIDED":
+        action = str(persistent_missing_classification.get("next_action") or "none")
+        if action != "none":
+            actions.append(action)
     if top_of_book["status"] == "FAIL":
         actions.append(str(top_of_book["next_action"]))
     if execution_calibration["status"] == "FAIL":
@@ -317,5 +422,21 @@ def _print_readiness(report: dict[str, Any]) -> None:
         f"expected_min_windows={wf['expected_min_windows']} status={wf['status']} "
         f"reasons={','.join(wf['reasons']) if wf['reasons'] else 'none'}"
     )
+    pmc = report["persistent_missing_classification"]
+    print(
+        "  persistent_missing_classification="
+        f"provided={1 if pmc['provided'] else 0} status={pmc['status']} "
+        f"artifact_hash={pmc['artifact_hash']} production_gate_effect={pmc['production_gate_effect']} "
+        f"reasons={','.join(pmc['reasons']) if pmc['reasons'] else 'none'}"
+    )
+    if pmc["provided"]:
+        summary = pmc.get("summary") or {}
+        print(
+            "  persistent_missing_classification_summary="
+            f"exchange_gap_candidate={summary.get('exchange_gap_candidate', 0)} "
+            f"api_unavailable_candidate={summary.get('api_unavailable_candidate', 0)} "
+            f"no_trade_missing_candidate={summary.get('no_trade_missing_candidate', 0)} "
+            f"unclassified_missing={summary.get('unclassified_missing', 0)}"
+        )
     for action in report["next_actions"]:
         print(f"  next_action={action}")

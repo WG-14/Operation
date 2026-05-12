@@ -13,12 +13,15 @@ from bithumb_bot.db_core import ensure_db
 from bithumb_bot.historical_backfill import backfill_candles
 from bithumb_bot.public_api_minute_candles import MinuteCandle
 from bithumb_bot.research.data_plane import (
+    build_persistent_missing_candle_classification_artifact,
     build_dataset_quality_report_sql,
     retry_missing_candles_from_artifact,
+    write_persistent_missing_candle_classification_artifact,
     write_missing_candle_ranges_artifact,
 )
 from bithumb_bot.research.execution_calibration import build_calibration_artifact
 from bithumb_bot.research.experiment_manifest import load_manifest
+from bithumb_bot.research.hashing import sha256_prefixed
 
 
 class _DummyClient:
@@ -623,6 +626,50 @@ def _insert_day_candles(db_path: str, day_start_ts: int) -> None:
         conn.close()
 
 
+def _insert_day_candles_except(db_path: str, day_start_ts: int, excluded_ts: set[int]) -> None:
+    conn = ensure_db(db_path)
+    try:
+        rows = [
+            (
+                day_start_ts + index * 60_000,
+                "KRW-BTC",
+                "1m",
+                100.0,
+                101.0,
+                99.0,
+                100.5,
+                1.0,
+            )
+            for index in range(1440)
+            if day_start_ts + index * 60_000 not in excluded_ts
+        ]
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO candles(ts, pair, interval, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _rewrite_artifact(path: Path, mutate) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    payload.pop("content_hash", None)
+    payload["content_hash"] = sha256_prefixed(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def _remove_content_hash(path: Path) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("content_hash", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_research_readiness_json_reports_operator_fields_and_top_of_book_policy(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -951,6 +998,292 @@ def test_retry_missing_marks_recovered_when_backfill_restores_range(
     assert payload["attempts"][0]["after"]["missing_buckets"] == 0
 
 
+def test_persistent_missing_classification_artifact_binds_manifest_db_retry_and_counts(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    missing_ts = 1_672_531_200_000 + 42 * 60_000
+    _insert_day_candles_except(settings.DB_PATH, 1_672_531_200_000, {missing_ts})
+    _insert_day_candles(settings.DB_PATH, 1_672_617_600_000)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_payload = retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1,
+        max_attempts=1,
+        split="train",
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    out_classification = tmp_path / "classification.json"
+
+    payload = write_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        out_path=out_classification,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    assert out_classification.exists()
+    assert payload["artifact_type"] == "persistent_missing_candle_classification"
+    assert payload["schema_version"] == 1
+    assert payload["manifest_hash"] == load_manifest(manifest_path).manifest_hash()
+    assert payload["missing_ranges_hash"].startswith("sha256:")
+    assert payload["retry_attempts_hash"] == retry_payload["content_hash"]
+    assert payload["db_path"] == str(Path(settings.DB_PATH).resolve())
+    assert payload["market"] == "KRW-BTC"
+    assert payload["interval"] == "1m"
+    assert payload["policy_effect"] == "diagnostic_only_no_gate_relaxation"
+    assert payload["summary"]["exchange_gap_candidate"] == 1
+    assert payload["summary"]["persistent_range_count"] == 1
+    assert payload["summary"]["production_gate_effect"] == "none"
+    assert payload["ranges"][0]["gate_effect"] == "none"
+    assert payload["limitations"]["synthetic_ohlcv_authorized"] is False
+    assert payload["limitations"]["production_gate_relaxed"] is False
+    assert payload["content_hash"].startswith("sha256:")
+
+
+def test_persistent_missing_classification_excludes_recovered_ranges(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    _insert_day_candles(settings.DB_PATH, 1_672_531_200_000)
+    with sqlite3.connect(settings.DB_PATH) as conn:
+        conn.execute("DELETE FROM candles WHERE ts=?", (1_672_531_200_000 + 7 * 60_000,))
+        conn.commit()
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+
+    def fake_backfill(**kwargs):
+        with sqlite3.connect(settings.DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO candles(ts, pair, interval, open, high, low, close, volume)
+                VALUES (?, 'KRW-BTC', '1m', 100.0, 101.0, 99.0, 100.0, 1.0)
+                """,
+                (1_672_531_200_000 + 7 * 60_000,),
+            )
+            conn.commit()
+        return type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )()
+
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1,
+        max_attempts=1,
+        split="train",
+        limit=1,
+        out_path=out_retry,
+        backfill_func=fake_backfill,
+    )
+
+    payload = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    assert payload["ranges"] == []
+    assert payload["summary"]["persistent_range_count"] == 0
+    assert payload["summary"]["classified_range_count"] == 0
+
+
+def test_persistent_missing_classification_api_unavailable_preserves_evidence(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "INCOMPLETE", "reason": "retry_exhausted"})(), "coverage": {}},
+        )(),
+    )
+    _rewrite_artifact(
+        out_retry,
+        lambda payload: payload["attempts"][0].update(
+            {
+                "probe_evidence": {
+                    "error_class": "PublicApiTransientError",
+                    "http_status": 503,
+                    "endpoint": "/v1/candles/minutes/1",
+                    "params_masked": {"market": "KRW-BTC"},
+                }
+            }
+        ),
+    )
+
+    payload = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    first = payload["ranges"][0]
+    assert first["classification"] == "api_unavailable_candidate"
+    assert payload["summary"]["api_unavailable_candidate"] == 1
+    assert any(item["type"] == "optional_probe_evidence" for item in first["evidence"])
+    assert any(item["type"] == "api_unavailable_signal" for item in first["evidence"])
+
+
+def test_persistent_missing_classification_falls_back_to_unclassified_when_evidence_is_insufficient(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+
+    payload = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    assert payload["ranges"][0]["classification"] == "unclassified_missing"
+    assert payload["summary"]["unclassified_missing"] == 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (lambda missing_path, retry_path: _rewrite_artifact(missing_path, lambda p: p.update({"manifest_hash": "sha256:bad"})), "manifest_hash"),
+        (lambda missing_path, retry_path: _rewrite_artifact(missing_path, lambda p: p.update({"market": "KRW-ETH"})), "market/interval"),
+        (lambda missing_path, retry_path: _rewrite_artifact(missing_path, lambda p: p.update({"db_path": "/tmp/wrong.sqlite"})), "db_path"),
+        (lambda missing_path, retry_path: _rewrite_artifact(retry_path, lambda p: p.update({"schema_version": 999})), "schema_version"),
+        (lambda missing_path, retry_path: _remove_content_hash(retry_path), "content_hash"),
+        (lambda missing_path, retry_path: _rewrite_artifact(retry_path, lambda p: p.update({"missing_ranges_hash": "sha256:bad"})), "missing_ranges_hash"),
+    ],
+)
+def test_persistent_missing_classification_fails_closed_on_mismatched_lineage(
+    tmp_path: Path,
+    _settings_guard,
+    mutation,
+    match: str,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    mutation(out_missing, out_retry)
+
+    with pytest.raises(ValueError, match=match):
+        build_persistent_missing_candle_classification_artifact(
+            manifest_path=manifest_path,
+            missing_ranges_path=out_missing,
+            retry_attempts_path=out_retry,
+            generated_at="2026-05-12T00:00:00+00:00",
+        )
+
+
+def test_persistent_missing_classification_hash_is_deterministic_and_changes_with_evidence(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+
+    first = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+    second = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+    assert first["content_hash"] == second["content_hash"]
+
+    _rewrite_artifact(out_retry, lambda p: p["attempts"][0].update({"probe_evidence": {"http_status": 503}}))
+    changed = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+    assert changed["content_hash"] != first["content_hash"]
+    assert changed["ranges"][0]["classification"] == "api_unavailable_candidate"
+
+
 def test_missing_range_kst_early_morning_maps_to_previous_utc_retry_day(
     tmp_path: Path,
     _settings_guard,
@@ -1070,6 +1403,130 @@ def test_diagnostic_only_policy_is_report_metadata_not_gate_relaxation(
     assert payload["splits"]["train"]["quality_status"] == "FAIL"
     assert "missing_candles" in payload["splits"]["train"]["quality_reasons"]
     assert payload["status"] == "FAIL"
+
+
+def test_research_readiness_includes_missing_classification_without_relaxing_gates(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    out_classification = tmp_path / "classification.json"
+    write_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        out_path=out_classification,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    rc = main(
+        [
+            "research-readiness",
+            "--manifest",
+            str(manifest_path),
+            "--missing-classification",
+            str(out_classification),
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload["status"] == "FAIL"
+    assert payload["splits"]["train"]["quality_status"] == "FAIL"
+    assert "missing_candles" in payload["splits"]["train"]["quality_reasons"]
+    section = payload["persistent_missing_classification"]
+    assert section["provided"] is True
+    assert section["status"] == "DIAGNOSTIC_ONLY"
+    assert section["production_gate_effect"] == "none"
+    assert section["summary"]["unclassified_missing"] == 1
+    assert "PASS" not in section["status"]
+
+
+def test_classify_persistent_missing_cli_output_and_path_policy(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+
+    repo_local_out = Path.cwd() / "classification.json"
+    rc = main(
+        [
+            "classify-persistent-missing-candles",
+            "--manifest",
+            str(manifest_path),
+            "--missing-ranges",
+            str(out_missing),
+            "--retry-attempts",
+            str(out_retry),
+            "--out",
+            str(repo_local_out),
+        ]
+    )
+    assert rc == 1
+    assert "outside repository" in capsys.readouterr().out
+
+    out_classification = tmp_path / "classification.json"
+    rc = main(
+        [
+            "classify-persistent-missing-candles",
+            "--manifest",
+            str(manifest_path),
+            "--missing-ranges",
+            str(out_missing),
+            "--retry-attempts",
+            str(out_retry),
+            "--out",
+            str(out_classification),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert out_classification.exists()
+    assert "out=" in out
+    assert "artifact_hash=sha256:" in out
+    assert "unclassified_missing=1" in out
+    assert "production_gate_effect=none" in out
+    assert "next_action=" in out
+    assert "production ready" not in out.lower()
+    assert "quality gate pass" not in out.lower()
 
 
 def test_console_entrypoint_propagates_cli_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:

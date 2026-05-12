@@ -32,6 +32,9 @@ Canonical commands:
 uv run bithumb-bot sync-orderbook-top
 uv run bithumb-bot research-readiness --manifest examples/research/sma_filter_manifest.example.json
 uv run bithumb-bot backfill-candles --market KRW-BTC --interval 1m --start 2023-01-01 --end 2026-05-01 --batch-size 200
+uv run bithumb-bot research-missing-candles --manifest "$MANIFEST" --out "$DATA_ROOT/paper/reports/research/<experiment>/missing_ranges.json"
+uv run bithumb-bot retry-missing-candles --manifest "$MANIFEST" --missing-ranges "$DATA_ROOT/paper/reports/research/<experiment>/missing_ranges.json" --out "$DATA_ROOT/paper/reports/research/<experiment>/retry_attempts.json"
+uv run bithumb-bot classify-persistent-missing-candles --manifest "$MANIFEST" --missing-ranges "$DATA_ROOT/paper/reports/research/<experiment>/missing_ranges.json" --retry-attempts "$DATA_ROOT/paper/reports/research/<experiment>/retry_attempts.json" --out "$DATA_ROOT/paper/reports/research/<experiment>/persistent_missing_classification.json"
 uv run bithumb-bot research-backtest --manifest examples/research/sma_filter_manifest.example.json
 uv run bithumb-bot research-walk-forward --manifest examples/research/sma_filter_manifest.example.json
 uv run bithumb-bot research-promote-candidate --experiment-id sma_filter_v1_2026_05 --candidate-id candidate_001
@@ -88,7 +91,42 @@ uv run bithumb-bot retry-missing-candles \
 
 The retry artifact records every selected range, before/after coverage, retry UTC days, recovered bucket counts, and final classification such as `retried_recovered` or `retry_persistent_missing`. Persistent missing ranges are evidence for further investigation only. They do not authorize synthetic OHLCV candles and they do not weaken production gates.
 
-`dataset_quality_policy.missing_candle_policy=diagnostic_only` is currently report/canonical metadata only. It does not satisfy production readiness, does not convert missing candles into `PASS`, and does not permit `allow_classified_no_trade_missing` to synthesize OHLCV or bypass gates. Classifications such as `exchange_gap_candidate`, `api_unavailable_candidate`, `no_trade_missing_candidate`, and `unclassified_missing` require future operator evidence or raw API/maintenance binding before any reviewed policy can use them.
+Classify retry-persistent ranges into a diagnostic evidence artifact:
+
+```bash
+uv run bithumb-bot classify-persistent-missing-candles \
+  --manifest "$MANIFEST" \
+  --missing-ranges "$DATA_ROOT/paper/reports/research/<experiment>/missing_ranges.json" \
+  --retry-attempts "$DATA_ROOT/paper/reports/research/<experiment>/retry_attempts.json" \
+  --out "$DATA_ROOT/paper/reports/research/<experiment>/persistent_missing_classification.json"
+```
+
+The classifier writes `artifact_type=persistent_missing_candle_classification` with schema version 1. It binds to the manifest hash, missing-ranges hash, retry-attempts hash, resolved `DB_PATH`, DB schema fingerprint, market, and interval. It includes per-range candidate evidence and summary counts for `exchange_gap_candidate`, `api_unavailable_candidate`, `no_trade_missing_candidate`, and `unclassified_missing`. The artifact has `policy_effect=diagnostic_only_no_gate_relaxation`, `gate_effect=none` per range, and explicit limitations showing that synthetic OHLCV is not authorized, production gates are not relaxed, top-of-book is not satisfied, and execution calibration is not satisfied.
+
+Classification is an evidence-plane improvement, not a gate bypass. It does not generate synthetic candles, does not infer OHLCV from neighboring candles, does not satisfy top-of-book requirements, does not satisfy execution calibration, and does not turn missing candles into split-level `PASS`. `dataset_quality_policy.missing_candle_policy=diagnostic_only` remains report/canonical metadata only. It does not satisfy production readiness, does not convert missing candles into `PASS`, and does not permit `allow_classified_no_trade_missing` to synthesize OHLCV or bypass gates. Candidate classifications require operator review and additional exchange/API evidence before any future reviewed exception policy could use them.
+
+You may attach the classification artifact to readiness for visibility:
+
+```bash
+uv run bithumb-bot research-readiness \
+  --manifest "$MANIFEST" \
+  --missing-classification "$DATA_ROOT/paper/reports/research/<experiment>/persistent_missing_classification.json"
+```
+
+The readiness report then includes `persistent_missing_classification.status=DIAGNOSTIC_ONLY` and `production_gate_effect=none`. This section is diagnostic only. It does not change split `quality_status`, does not change top-level `status` from `FAIL` to `PASS`, and does not satisfy production-bound readiness while missing candles remain unresolved.
+
+Expected missing-candle evidence workflow:
+
+```text
+research-readiness
+-> backfill-candles
+-> research-missing-candles
+-> retry-missing-candles
+-> classify-persistent-missing-candles
+-> research-readiness with classification artifact
+-> resolve candle/top_of_book/execution_calibration gates separately
+-> research-backtest only after required gates pass
+```
 
 Backfill uses the repository env and path contract. Set `BITHUMB_ENV_FILE` or the appropriate explicit env selector, verify `MODE` and `DB_PATH`, and do not point runtime data at the repository. For large EC2 backfills, stop paper/live writers first if they share the same DB so ingestion and research do not compete with runtime writes.
 
@@ -123,7 +161,15 @@ uv run bithumb-bot retry-missing-candles \
   --max-attempts 1 \
   --out "$DATA_ROOT/paper/reports/research/sma_filter_prod_krw_btc/retry_attempts.json"
 
-uv run bithumb-bot research-readiness --manifest "$MANIFEST"
+uv run bithumb-bot classify-persistent-missing-candles \
+  --manifest "$MANIFEST" \
+  --missing-ranges "$DATA_ROOT/paper/reports/research/sma_filter_prod_krw_btc/missing_ranges.json" \
+  --retry-attempts "$DATA_ROOT/paper/reports/research/sma_filter_prod_krw_btc/retry_attempts.json" \
+  --out "$DATA_ROOT/paper/reports/research/sma_filter_prod_krw_btc/persistent_missing_classification.json"
+
+uv run bithumb-bot research-readiness \
+  --manifest "$MANIFEST" \
+  --missing-classification "$DATA_ROOT/paper/reports/research/sma_filter_prod_krw_btc/persistent_missing_classification.json"
 uv run bithumb-bot research-backtest --manifest "$MANIFEST"
 ```
 

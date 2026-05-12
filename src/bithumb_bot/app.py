@@ -160,7 +160,9 @@ from .research.cli import (
 )
 from .research.readiness import cmd_research_readiness
 from .research.data_plane import (
+    persistent_missing_overall_next_action,
     retry_missing_candles_from_artifact,
+    write_persistent_missing_candle_classification_artifact,
     write_missing_candle_ranges_artifact,
 )
 from .profile_cli import (
@@ -7464,6 +7466,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     research_readiness.add_argument("--manifest", required=True)
     research_readiness.add_argument("--execution-calibration")
+    research_readiness.add_argument("--missing-classification")
     research_readiness.add_argument("--json", action="store_true")
 
     missing_candles = sub.add_parser(
@@ -7492,6 +7495,19 @@ def main(argv: list[str] | None = None) -> int:
     retry_missing.add_argument("--split")
     retry_missing.add_argument("--limit", type=int)
     retry_missing.add_argument("--out", required=True)
+
+    classify_missing = sub.add_parser(
+        "classify-persistent-missing-candles",
+        help="classify persistent missing candle ranges from retry evidence",
+        description=(
+            "Create a diagnostic-only persistent missing candle classification artifact. "
+            "This never mutates the DB, generates synthetic OHLCV, or relaxes readiness gates."
+        ),
+    )
+    classify_missing.add_argument("--manifest", required=True)
+    classify_missing.add_argument("--missing-ranges", required=True)
+    classify_missing.add_argument("--retry-attempts", required=True)
+    classify_missing.add_argument("--out", required=True)
 
     backfill_candles_parser = sub.add_parser(
         "backfill-candles",
@@ -7910,6 +7926,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_research_readiness(
             manifest_path=str(args.manifest),
             execution_calibration_path=str(args.execution_calibration) if args.execution_calibration else None,
+            missing_classification_path=str(args.missing_classification) if args.missing_classification else None,
             as_json=bool(args.json),
         )
     elif args.cmd == "research-missing-candles":
@@ -7952,6 +7969,31 @@ def main(argv: list[str] | None = None) -> int:
             f"status=COMPLETE out={args.out} attempts={payload['attempt_count']} "
             f"retried_recovered={summary['retried_recovered']} "
             f"retry_persistent_missing={summary['retry_persistent_missing']}"
+        )
+        return 0
+    elif args.cmd == "classify-persistent-missing-candles":
+        try:
+            payload = write_persistent_missing_candle_classification_artifact(
+                manifest_path=str(args.manifest),
+                missing_ranges_path=str(args.missing_ranges),
+                retry_attempts_path=str(args.retry_attempts),
+                out_path=str(args.out),
+            )
+        except Exception as exc:
+            print(f"[CLASSIFY-PERSISTENT-MISSING-CANDLES] error={exc}")
+            return 1
+        summary = payload["summary"]
+        next_action = persistent_missing_overall_next_action(summary)
+        print(
+            "[CLASSIFY-PERSISTENT-MISSING-CANDLES] "
+            f"status=COMPLETE out={args.out} artifact_hash={payload['content_hash']} "
+            f"exchange_gap_candidate={summary['exchange_gap_candidate']} "
+            f"api_unavailable_candidate={summary['api_unavailable_candidate']} "
+            f"no_trade_missing_candidate={summary['no_trade_missing_candidate']} "
+            f"unclassified_missing={summary['unclassified_missing']} "
+            f"persistent_range_count={summary['persistent_range_count']} "
+            "production_gate_effect=none synthetic_ohlcv_authorized=0 "
+            f"next_action={next_action}"
         )
         return 0
     elif args.cmd == "backfill-candles":
