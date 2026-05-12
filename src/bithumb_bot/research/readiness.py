@@ -9,6 +9,7 @@ from bithumb_bot.config import settings
 from bithumb_bot.execution_quality import ExecutionQualityThresholds
 
 from .data_plane import (
+    PERSISTENT_MISSING_CLASSIFICATIONS,
     build_dataset_quality_report_sql,
     dataset_quality_policy_payload,
     persistent_missing_overall_next_action,
@@ -346,11 +347,54 @@ def _validate_persistent_missing_classification_artifact(
         raise ValueError("missing classification db_path does not match configured DB_PATH")
     if artifact.get("policy_effect") != "diagnostic_only_no_gate_relaxation":
         raise ValueError("missing classification policy_effect must not relax gates")
+    missing_ranges_hash = artifact.get("missing_ranges_hash")
+    if not isinstance(missing_ranges_hash, str) or not missing_ranges_hash.startswith("sha256:"):
+        raise ValueError("missing classification missing_ranges_hash is required")
+    retry_attempts_hash = artifact.get("retry_attempts_hash")
+    if not isinstance(retry_attempts_hash, str) or not retry_attempts_hash.startswith("sha256:"):
+        raise ValueError("missing classification retry_attempts_hash is required")
+    summary = artifact.get("summary") if isinstance(artifact.get("summary"), dict) else {}
+    if summary.get("production_gate_effect") != "none":
+        raise ValueError("missing classification summary production_gate_effect must be none")
+    allowed_summary_keys = set(PERSISTENT_MISSING_CLASSIFICATIONS) | {
+        "classified_range_count",
+        "persistent_range_count",
+        "production_gate_effect",
+    }
+    unexpected_summary_keys = sorted(str(key) for key in summary if key not in allowed_summary_keys)
+    if unexpected_summary_keys:
+        raise ValueError(f"missing classification summary has unsupported keys: {unexpected_summary_keys}")
     limitations = artifact.get("limitations") if isinstance(artifact.get("limitations"), dict) else {}
     if limitations.get("synthetic_ohlcv_authorized") is not False:
         raise ValueError("missing classification must not authorize synthetic OHLCV")
     if limitations.get("production_gate_relaxed") is not False:
         raise ValueError("missing classification must not relax production gates")
+    if limitations.get("top_of_book_satisfied") is not False:
+        raise ValueError("missing classification must not satisfy top-of-book")
+    if limitations.get("execution_calibration_satisfied") is not False:
+        raise ValueError("missing classification must not satisfy execution calibration")
+    ranges = artifact.get("ranges")
+    if not isinstance(ranges, list):
+        raise ValueError("missing classification ranges must be a list")
+    counts = {classification: 0 for classification in PERSISTENT_MISSING_CLASSIFICATIONS}
+    for item in ranges:
+        if not isinstance(item, dict):
+            raise ValueError("missing classification range must be an object")
+        classification = item.get("classification")
+        if classification not in PERSISTENT_MISSING_CLASSIFICATIONS:
+            raise ValueError("missing classification range has unsupported classification")
+        if item.get("gate_effect") != "none":
+            raise ValueError("missing classification range gate_effect must be none")
+        if item.get("confidence") != "candidate":
+            raise ValueError("missing classification range confidence must be candidate")
+        counts[str(classification)] += 1
+    for classification, count in counts.items():
+        if int(summary.get(classification) or 0) != count:
+            raise ValueError(f"missing classification summary count mismatch for {classification}")
+    if int(summary.get("persistent_range_count") or 0) != len(ranges):
+        raise ValueError("missing classification summary persistent_range_count does not match ranges")
+    if int(summary.get("classified_range_count") or 0) != len(ranges):
+        raise ValueError("missing classification summary classified_range_count does not match ranges")
 
 
 def _next_actions(

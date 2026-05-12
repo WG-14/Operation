@@ -89,7 +89,7 @@ uv run bithumb-bot retry-missing-candles \
   --out "$DATA_ROOT/paper/reports/research/<experiment>/retry_attempts.json"
 ```
 
-The retry artifact records every selected range, before/after coverage, retry UTC days, recovered bucket counts, and final classification such as `retried_recovered` or `retry_persistent_missing`. Persistent missing ranges are evidence for further investigation only. They do not authorize synthetic OHLCV candles and they do not weaken production gates.
+The retry artifact records every selected range, before/after coverage, retry UTC days, recovered bucket counts, and final classification such as `retried_recovered` or `retry_persistent_missing`. If an individual bounded backfill attempt raises, `retry-missing-candles` preserves structured error evidence in that day's `backfill_attempts` entry and continues the selected retry workflow. API transient, rate-limit, retry-exhaustion, retryable status, and request-failure evidence can support a later `api_unavailable_candidate` classification. Persistent missing ranges and retry errors are recovery evidence for further investigation only. They do not authorize synthetic OHLCV candles and they do not weaken production gates.
 
 Classify retry-persistent ranges into a diagnostic evidence artifact:
 
@@ -113,7 +113,7 @@ uv run bithumb-bot research-readiness \
   --missing-classification "$DATA_ROOT/paper/reports/research/<experiment>/persistent_missing_classification.json"
 ```
 
-The readiness report then includes `persistent_missing_classification.status=DIAGNOSTIC_ONLY` and `production_gate_effect=none`. This section is diagnostic only. It does not change split `quality_status`, does not change top-level `status` from `FAIL` to `PASS`, and does not satisfy production-bound readiness while missing candles remain unresolved.
+The readiness report then includes `persistent_missing_classification.status=DIAGNOSTIC_ONLY` and `production_gate_effect=none`. Readiness validates classification artifacts semantically, not only by content hash: malformed counts, unsafe classifications, gate-relaxing range fields, unsafe limitation flags, or invalid lineage hashes fail readiness. This section is diagnostic only. It does not change split `quality_status`, does not change top-level `status` from `FAIL` to `PASS`, and does not satisfy production-bound readiness while missing candles remain unresolved.
 
 Expected missing-candle evidence workflow:
 

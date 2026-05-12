@@ -670,6 +670,43 @@ def _remove_content_hash(path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _mutate_artifact_without_rehash(path: Path, mutate) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def _write_valid_persistent_missing_classification(tmp_path: Path) -> tuple[Path, Path]:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    out_classification = tmp_path / "classification.json"
+    write_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        out_path=out_classification,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+    return manifest_path, out_classification
+
+
 def test_research_readiness_json_reports_operator_fields_and_top_of_book_policy(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -998,6 +1035,60 @@ def test_retry_missing_marks_recovered_when_backfill_restores_range(
     assert payload["attempts"][0]["after"]["missing_buckets"] == 0
 
 
+def test_retry_missing_records_backfill_exception_evidence_for_classification(
+    tmp_path: Path,
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+
+    def failing_backfill(**kwargs):
+        raise RuntimeError("public api transient failure after retries status=503")
+
+    payload = retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=failing_backfill,
+    )
+
+    assert out_retry.exists()
+    assert payload["artifact_type"] == "missing_candle_retry_attempts"
+    assert payload["content_hash"] == sha256_prefixed({key: value for key, value in payload.items() if key != "content_hash"})
+    first = payload["attempts"][0]
+    assert first["classification"] == "retry_persistent_missing"
+    assert first["after"]["missing_buckets"] > 0
+    attempt = first["backfill_attempts"][0]
+    assert attempt["progress_status"] == "ERROR"
+    assert attempt["progress_reason"] == "backfill_exception"
+    assert attempt["error_class"] == "RuntimeError"
+    assert "status=503" in attempt["error_message"]
+    assert attempt["api_unavailable_evidence"] is True
+    assert attempt["coverage"] is None
+
+    classification = build_persistent_missing_candle_classification_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        retry_attempts_path=out_retry,
+        generated_at="2026-05-12T00:00:00+00:00",
+    )
+
+    classified_range = classification["ranges"][0]
+    assert classified_range["classification"] == "api_unavailable_candidate"
+    assert classification["summary"]["api_unavailable_candidate"] == 1
+    assert classification["summary"]["production_gate_effect"] == "none"
+    assert classified_range["gate_effect"] == "none"
+    assert any(item["type"] == "api_unavailable_signal" for item in classified_range["evidence"])
+    refs = next(item["evidence_refs"] for item in classified_range["evidence"] if item["type"] == "api_unavailable_signal")
+    assert any("error_message=" in ref or "api_unavailable_evidence=True" in ref for ref in refs)
+
+
 def test_persistent_missing_classification_artifact_binds_manifest_db_retry_and_counts(
     tmp_path: Path,
     _settings_guard,
@@ -1188,6 +1279,117 @@ def test_persistent_missing_classification_falls_back_to_unclassified_when_evide
 
     assert payload["ranges"][0]["classification"] == "unclassified_missing"
     assert payload["summary"]["unclassified_missing"] == 1
+
+
+def test_missing_ranges_content_hash_mismatch_fails_retry_and_classification_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    _mutate_artifact_without_rehash(
+        out_missing,
+        lambda p: p["splits"]["train"]["ranges"][0].update({"bucket_count": 999}),
+    )
+
+    with pytest.raises(ValueError, match="missing ranges content_hash does not match artifact body"):
+        retry_missing_candles_from_artifact(
+            manifest_path=manifest_path,
+            missing_ranges_path=out_missing,
+            min_buckets=1,
+            max_attempts=1,
+            limit=1,
+            out_path=tmp_path / "retry.json",
+            backfill_func=lambda **kwargs: None,
+        )
+
+    rc = main(
+        [
+            "classify-persistent-missing-candles",
+            "--manifest",
+            str(manifest_path),
+            "--missing-ranges",
+            str(out_missing),
+            "--retry-attempts",
+            str(out_retry),
+            "--out",
+            str(tmp_path / "classification.json"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "missing ranges content_hash does not match artifact body" in out
+
+
+def test_missing_ranges_content_hash_required_for_retry_and_classification_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    _settings_guard,
+) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    out_missing = tmp_path / "missing.json"
+    write_missing_candle_ranges_artifact(manifest_path=manifest_path, out_path=out_missing)
+    out_retry = tmp_path / "retry.json"
+    retry_missing_candles_from_artifact(
+        manifest_path=manifest_path,
+        missing_ranges_path=out_missing,
+        min_buckets=1000,
+        max_attempts=1,
+        limit=1,
+        out_path=out_retry,
+        backfill_func=lambda **kwargs: type(
+            "Result",
+            (),
+            {"progress": type("Progress", (), {"status": "COMPLETE", "reason": "range_covered"})(), "coverage": {}},
+        )(),
+    )
+    _remove_content_hash(out_missing)
+
+    with pytest.raises(ValueError, match="missing ranges content_hash is required"):
+        retry_missing_candles_from_artifact(
+            manifest_path=manifest_path,
+            missing_ranges_path=out_missing,
+            min_buckets=1,
+            max_attempts=1,
+            limit=1,
+            out_path=tmp_path / "retry.json",
+            backfill_func=lambda **kwargs: None,
+        )
+
+    rc = main(
+        [
+            "classify-persistent-missing-candles",
+            "--manifest",
+            str(manifest_path),
+            "--missing-ranges",
+            str(out_missing),
+            "--retry-attempts",
+            str(out_retry),
+            "--out",
+            str(tmp_path / "classification.json"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "missing ranges content_hash is required" in out
 
 
 @pytest.mark.parametrize(
@@ -1459,6 +1661,77 @@ def test_research_readiness_includes_missing_classification_without_relaxing_gat
     assert section["production_gate_effect"] == "none"
     assert section["summary"]["unclassified_missing"] == 1
     assert "PASS" not in section["status"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (
+            lambda p: p["summary"].update({"api_unavailable_candidate": 99}),
+            "summary count mismatch",
+        ),
+        (
+            lambda p: p["ranges"][0].update({"gate_effect": "relaxed"}),
+            "gate_effect must be none",
+        ),
+        (
+            lambda p: p["ranges"][0].update({"classification": "pass_missing"}),
+            "unsupported classification",
+        ),
+        (
+            lambda p: p["limitations"].update(
+                {"top_of_book_satisfied": True, "execution_calibration_satisfied": True}
+            ),
+            "top-of-book",
+        ),
+        (
+            lambda p: p["limitations"].update({"execution_calibration_satisfied": True}),
+            "execution calibration",
+        ),
+        (
+            lambda p: p["summary"].update({"production_gate_effect": "relaxed"}),
+            "production_gate_effect must be none",
+        ),
+        (
+            lambda p: p.update({"missing_ranges_hash": "not-a-hash"}),
+            "missing_ranges_hash is required",
+        ),
+        (
+            lambda p: p.update({"retry_attempts_hash": "not-a-hash"}),
+            "retry_attempts_hash is required",
+        ),
+    ],
+)
+def test_research_readiness_rejects_semantically_unsafe_missing_classification(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    _settings_guard,
+    mutation,
+    reason: str,
+) -> None:
+    manifest_path, out_classification = _write_valid_persistent_missing_classification(tmp_path)
+    _rewrite_artifact(out_classification, mutation)
+
+    rc = main(
+        [
+            "research-readiness",
+            "--manifest",
+            str(manifest_path),
+            "--missing-classification",
+            str(out_classification),
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    section = payload["persistent_missing_classification"]
+    assert section["provided"] is True
+    assert section["status"] == "FAIL"
+    assert section["production_gate_effect"] == "none"
+    assert any(reason in item for item in section["reasons"])
+    assert payload["status"] == "FAIL"
+    assert payload["splits"]["train"]["quality_status"] == "FAIL"
 
 
 def test_classify_persistent_missing_cli_output_and_path_policy(

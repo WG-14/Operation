@@ -277,13 +277,23 @@ def retry_missing_candles_from_artifact(
         backfill_results: list[dict[str, Any]] = []
         for attempt_index in range(max_attempts):
             for day in item["retry_utc_days"]:
-                result = backfill_func(
-                    market=manifest.market,
-                    interval=manifest.interval,
-                    start=str(day),
-                    end=str(day),
-                    dry_run=False,
-                )
+                try:
+                    result = backfill_func(
+                        market=manifest.market,
+                        interval=manifest.interval,
+                        start=str(day),
+                        end=str(day),
+                        dry_run=False,
+                    )
+                except Exception as exc:
+                    backfill_results.append(
+                        _backfill_exception_attempt_payload(
+                            attempt_index=attempt_index + 1,
+                            retry_utc_day=str(day),
+                            exc=exc,
+                        )
+                    )
+                    continue
                 backfill_results.append(
                     {
                         "attempt_index": attempt_index + 1,
@@ -866,6 +876,12 @@ def _validate_missing_artifact(*, artifact: dict[str, Any], manifest: Experiment
         raise ValueError("missing ranges artifact_type must be missing_candle_ranges")
     if artifact.get("schema_version") != 1:
         raise ValueError("unsupported missing ranges schema_version")
+    embedded_hash = artifact.get("content_hash")
+    if not isinstance(embedded_hash, str) or not embedded_hash.startswith("sha256:"):
+        raise ValueError("missing ranges content_hash is required")
+    recomputed_payload = {key: value for key, value in artifact.items() if key != "content_hash"}
+    if sha256_prefixed(recomputed_payload) != embedded_hash:
+        raise ValueError("missing ranges content_hash does not match artifact body")
     if artifact.get("manifest_hash") != manifest.manifest_hash():
         raise ValueError("missing ranges manifest_hash does not match manifest")
     if artifact.get("market") != manifest.market or artifact.get("interval") != manifest.interval:
@@ -912,6 +928,33 @@ def _validate_retry_attempts_artifact(
     for item in artifact.get("attempts") or []:
         if item.get("classification") not in MISSING_CLASSIFICATIONS:
             raise ValueError("retry attempts artifact has unsupported classification")
+
+
+def _backfill_exception_attempt_payload(
+    *,
+    attempt_index: int,
+    retry_utc_day: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    return {
+        "attempt_index": int(attempt_index),
+        "retry_utc_day": retry_utc_day,
+        "progress_status": "ERROR",
+        "progress_reason": "backfill_exception",
+        "error_class": exc.__class__.__name__,
+        "error_message": str(exc),
+        "api_unavailable_evidence": _is_api_unavailable_exception(exc),
+        "coverage": None,
+    }
+
+
+def _is_api_unavailable_exception(exc: Exception) -> bool:
+    return _has_api_unavailable_evidence(
+        {
+            "error_class": exc.__class__.__name__,
+            "error_message": str(exc),
+        }
+    )
 
 
 def _validate_report_artifact_out_path(path: str | Path) -> Path:
@@ -1128,12 +1171,16 @@ def _has_api_unavailable_evidence(payload: Any) -> bool:
             token in lowered_value
             for token in (
                 "publicapitransienterror",
+                "public api transient",
+                "api transient",
                 "retryable http status exhausted",
+                "retryable status",
                 "retry exhausted",
                 "retry_exhausted",
                 "rate_limited",
                 "rate limit",
                 "api_unavailable",
+                "api unavailable",
                 "request failed",
                 "http 429",
                 "status=429",
