@@ -7,21 +7,58 @@ from typing import Any
 from bithumb_bot.paths import PathManager, PathPolicyError
 from bithumb_bot.storage_io import write_json_atomic
 
-from .hashing import content_hash_payload, sha256_prefixed
+from .hashing import report_content_hash_payload, sha256_prefixed
 
 
 @dataclass(frozen=True)
 class ResearchReportPaths:
     derived_path: Path
     report_path: Path
+    candidate_events_path: Path
+    candidate_results_dir: Path
+    candidate_failures_dir: Path
 
 
 def research_paths(manager: PathManager, experiment_id: str, report_name: str) -> ResearchReportPaths:
-    derived_path = manager.data_dir() / "derived" / "research" / experiment_id / f"{report_name}_candidates.json"
+    research_derived_root = manager.data_dir() / "derived" / "research" / experiment_id
+    derived_path = research_derived_root / f"{report_name}_candidates.json"
     report_path = manager.data_dir() / "reports" / "research" / experiment_id / f"{report_name}_report.json"
+    candidate_events_path = research_derived_root / "candidate_events.jsonl"
+    candidate_results_dir = research_derived_root / "candidate_results"
+    candidate_failures_dir = research_derived_root / "candidate_failures"
     _ensure_research_output_path_allowed(manager, derived_path)
     _ensure_research_output_path_allowed(manager, report_path)
-    return ResearchReportPaths(derived_path=derived_path, report_path=report_path)
+    _ensure_research_output_path_allowed(manager, candidate_events_path)
+    _ensure_research_output_path_allowed(manager, candidate_results_dir)
+    _ensure_research_output_path_allowed(manager, candidate_failures_dir)
+    return ResearchReportPaths(
+        derived_path=derived_path,
+        report_path=report_path,
+        candidate_events_path=candidate_events_path,
+        candidate_results_dir=candidate_results_dir,
+        candidate_failures_dir=candidate_failures_dir,
+    )
+
+
+def research_artifact_refs(paths: ResearchReportPaths, *, manager: PathManager) -> dict[str, str]:
+    data_dir = manager.data_dir().resolve()
+    return {
+        "derived_candidates": _relative_artifact_ref(paths.derived_path, data_dir),
+        "report": _relative_artifact_ref(paths.report_path, data_dir),
+        "candidate_events": _relative_artifact_ref(paths.candidate_events_path, data_dir),
+        "candidate_results_dir": _relative_artifact_ref(paths.candidate_results_dir, data_dir),
+        "candidate_failures_dir": _relative_artifact_ref(paths.candidate_failures_dir, data_dir),
+    }
+
+
+def research_artifact_paths(paths: ResearchReportPaths) -> dict[str, str]:
+    return {
+        "derived_path": str(paths.derived_path.resolve()),
+        "report_path": str(paths.report_path.resolve()),
+        "candidate_events_path": str(paths.candidate_events_path.resolve()),
+        "candidate_results_dir": str(paths.candidate_results_dir.resolve()),
+        "candidate_failures_dir": str(paths.candidate_failures_dir.resolve()),
+    }
 
 
 def write_research_report(
@@ -32,8 +69,10 @@ def write_research_report(
     payload: dict[str, Any],
 ) -> tuple[ResearchReportPaths, str]:
     paths = research_paths(manager, experiment_id, report_name)
-    content_hash = sha256_prefixed(content_hash_payload(payload))
     report_payload = dict(payload)
+    report_payload.setdefault("artifact_refs", research_artifact_refs(paths, manager=manager))
+    report_payload.setdefault("artifact_paths", research_artifact_paths(paths))
+    content_hash = sha256_prefixed(report_content_hash_payload(report_payload))
     report_payload["content_hash"] = content_hash
     write_json_atomic(paths.derived_path, {"candidates": report_payload.get("candidates", [])})
     write_json_atomic(paths.report_path, report_payload)
@@ -45,3 +84,7 @@ def _ensure_research_output_path_allowed(manager: PathManager, path: Path) -> No
     resolved = path.resolve()
     if PathManager._is_within(resolved, project_root):
         raise PathPolicyError(f"research output path must be outside repository: {resolved}")
+
+
+def _relative_artifact_ref(path: Path, data_dir: Path) -> str:
+    return path.resolve().relative_to(data_dir).as_posix()

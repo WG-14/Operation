@@ -8,7 +8,7 @@ from typing import Any
 from bithumb_bot.paths import PathManager, PathPolicyError
 from bithumb_bot.storage_io import write_json_atomic
 
-from .hashing import content_hash_payload, sha256_prefixed
+from .hashing import content_hash_payload, report_content_hash_payload, sha256_prefixed
 from .lineage import build_promotion_lineage, validate_lineage_artifact, LineageValidationError
 from .deployment_policy import validate_production_calibration_policy
 from .metrics_contract import METRICS_SCHEMA_VERSION
@@ -388,9 +388,7 @@ def _verify_report_content_hash(report: dict[str, Any], *, label: str) -> str:
     expected = str(report.get("content_hash") or "").strip()
     if not expected.startswith("sha256:"):
         raise PromotionGateError(f"promotion refused: {label}_content_hash_missing")
-    actual = sha256_prefixed(
-        content_hash_payload({key: value for key, value in report.items() if key != "content_hash"})
-    )
+    actual = sha256_prefixed(report_content_hash_payload(report))
     if actual != expected:
         raise PromotionGateError(f"promotion refused: {label}_hash_mismatch")
     return actual

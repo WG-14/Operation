@@ -24,7 +24,7 @@ from bithumb_bot.research.execution_calibration import build_calibration_artifac
 from bithumb_bot.research.execution_model import ExecutionFill, ExecutionRequest, FixedBpsExecutionModel, StressExecutionModel
 from bithumb_bot.research.experiment_manifest import ExecutionTimingPolicy, ManifestValidationError, parse_manifest
 from bithumb_bot.research.parameter_space import candidate_id
-from bithumb_bot.research.promotion_gate import PromotionGateError, promote_candidate
+from bithumb_bot.research.promotion_gate import PromotionGateError, _verify_report_content_hash, promote_candidate
 from bithumb_bot.research.validation_protocol import run_research_backtest
 from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
 
@@ -211,6 +211,44 @@ def test_same_manifest_and_dataset_produce_same_content_hash(tmp_path, monkeypat
     assert first["candidates"][0]["market_regime_coverage"]
     assert "regime_gate_result" in first["candidates"][0]
     assert Path(first["artifact_paths"]["report_path"]).exists()
+    persisted = json.loads(Path(first["artifact_paths"]["report_path"]).read_text(encoding="utf-8"))
+    assert persisted["content_hash"] == first["content_hash"]
+    assert persisted["artifact_refs"] == first["artifact_refs"]
+    assert persisted["artifact_paths"] == first["artifact_paths"]
+    assert persisted["artifact_refs"] == {
+        "derived_candidates": "derived/research/deterministic_sma/backtest_candidates.json",
+        "report": "reports/research/deterministic_sma/backtest_report.json",
+        "candidate_events": "derived/research/deterministic_sma/candidate_events.jsonl",
+        "candidate_results_dir": "derived/research/deterministic_sma/candidate_results",
+        "candidate_failures_dir": "derived/research/deterministic_sma/candidate_failures",
+    }
+    assert _verify_report_content_hash(persisted, label="backtest_report") == persisted["content_hash"]
+
+
+def test_report_content_hash_is_independent_of_data_root(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    manifest = parse_manifest(_manifest())
+
+    reports = []
+    for root_name in ("runtime_a", "runtime_b"):
+        runtime_root = tmp_path / root_name
+        for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+            monkeypatch.setenv(key, str(runtime_root / f"{key.lower()}_root"))
+        monkeypatch.setenv("MODE", "paper")
+        reports.append(
+            run_research_backtest(
+                manifest=manifest,
+                db_path=db_path,
+                manager=PathManager.from_env(Path.cwd()),
+                generated_at="2026-05-03T00:00:00+00:00",
+            )
+        )
+
+    first, second = reports
+    assert first["content_hash"] == second["content_hash"]
+    assert first["artifact_refs"] == second["artifact_refs"]
+    assert first["artifact_paths"]["report_path"] != second["artifact_paths"]["report_path"]
 
 
 def test_sma_backtest_attaches_entry_and_exit_regime_snapshots() -> None:
@@ -572,13 +610,19 @@ def test_research_sweep_continues_after_guard_failure_and_writes_candidate_artif
     assert Path(report["artifact_paths"]["candidate_events_path"]).exists()
     assert Path(report["artifact_paths"]["candidate_results_dir"]).is_dir()
     assert Path(report["artifact_paths"]["candidate_failures_dir"]).is_dir()
+    persisted = json.loads(Path(report["artifact_paths"]["report_path"]).read_text(encoding="utf-8"))
+    assert persisted["artifact_refs"]["candidate_events"] == "derived/research/bounded_sweep/candidate_events.jsonl"
+    assert persisted["artifact_refs"]["candidate_results_dir"] == "derived/research/bounded_sweep/candidate_results"
+    assert persisted["artifact_refs"]["candidate_failures_dir"] == "derived/research/bounded_sweep/candidate_failures"
+    assert persisted["artifact_paths"] == report["artifact_paths"]
     root = manager.data_dir() / "derived" / "research" / "bounded_sweep"
     assert (root / "candidate_events.jsonl").exists()
     assert list((root / "candidate_results").glob("candidate_*.json"))
     failures = list((root / "candidate_failures").glob("candidate_*.json"))
     assert failures
-    failed = [candidate for candidate in report["candidates"] if candidate.get("failure_artifact_path")]
+    failed = [candidate for candidate in persisted["candidates"] if candidate.get("failure_artifact_path")]
     assert failed
+    assert failed[0]["failure_artifact_ref"].startswith("derived/research/bounded_sweep/candidate_failures/")
     assert Path(failed[0]["failure_artifact_path"]).exists()
     assert failed[0]["resource_guard"]["status"] == "TRIPPED"
 

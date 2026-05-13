@@ -5,6 +5,21 @@ import json
 from typing import Any
 
 
+REPORT_TOP_LEVEL_HASH_EXCLUDED_FIELDS = frozenset(
+    {
+        "content_hash",
+        "generated_at",
+        "created_at",
+        "artifact_paths",
+    }
+)
+REPORT_RUNTIME_ONLY_FIELDS = frozenset(
+    {
+        "failure_artifact_path",
+    }
+)
+
+
 def canonical_json_bytes(payload: Any) -> bytes:
     return json.dumps(
         payload,
@@ -25,3 +40,26 @@ def sha256_prefixed(payload: Any) -> str:
 
 def content_hash_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in {"generated_at", "created_at"}}
+
+
+def report_content_hash_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    logical_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in REPORT_TOP_LEVEL_HASH_EXCLUDED_FIELDS
+    }
+    return _strip_report_runtime_only_fields(logical_payload)
+
+
+def _strip_report_runtime_only_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_report_runtime_only_fields(item)
+            for key, item in value.items()
+            if key not in REPORT_RUNTIME_ONLY_FIELDS
+        }
+    if isinstance(value, list):
+        return [_strip_report_runtime_only_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return [_strip_report_runtime_only_fields(item) for item in value]
+    return value

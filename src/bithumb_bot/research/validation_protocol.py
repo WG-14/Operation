@@ -39,7 +39,7 @@ from .metrics_gate_policy import metrics_gate_policy_from_acceptance_gate, metri
 from .metrics_contract import METRICS_SCHEMA_VERSION
 from .parameter_space import candidate_id, iter_parameter_candidates
 from .promotion_gate import build_candidate_profile
-from .report_writer import ResearchReportPaths, write_research_report
+from .report_writer import research_artifact_paths, research_artifact_refs, write_research_report
 from bithumb_bot.storage_io import append_jsonl, write_json_atomic
 from .strategy_registry import research_strategy_data_requirements, resolve_research_strategy
 
@@ -94,6 +94,10 @@ def _candidate_result_path(manager: PathManager, experiment_id: str, candidate_i
 
 def _candidate_failure_path(manager: PathManager, experiment_id: str, candidate_id: str) -> Path:
     return _research_artifact_root(manager, experiment_id) / "candidate_failures" / f"{candidate_id}.json"
+
+
+def _data_dir_relative_ref(manager: PathManager, path: Path) -> str:
+    return path.resolve().relative_to(manager.data_dir().resolve()).as_posix()
 
 
 def _append_candidate_event(
@@ -244,7 +248,8 @@ def run_research_backtest(
         payload=report,
     )
     report["content_hash"] = content_hash
-    report["artifact_paths"] = _path_payload(paths, manager=manager, experiment_id=manifest.experiment_id)
+    report["artifact_refs"] = research_artifact_refs(paths, manager=manager)
+    report["artifact_paths"] = research_artifact_paths(paths)
     _emit_progress(
         progress_callback,
         stage="complete",
@@ -329,7 +334,8 @@ def run_research_walk_forward(
         payload=report,
     )
     report["content_hash"] = content_hash
-    report["artifact_paths"] = _path_payload(paths, manager=manager, experiment_id=manifest.experiment_id)
+    report["artifact_refs"] = research_artifact_refs(paths, manager=manager)
+    report["artifact_paths"] = research_artifact_paths(paths)
     _emit_progress(
         progress_callback,
         stage="complete",
@@ -605,6 +611,7 @@ def _evaluate_candidates(
                 "scenario_acceptance_gate_result": gate_result,
                 "scenario_fail_reasons": fail_reasons,
                 "resource_guard": base.get("resource_guard"),
+                "failure_artifact_ref": base.get("failure_artifact_ref"),
                 "failure_artifact_path": base.get("failure_artifact_path"),
                 "retained_detail_summary": base.get("retained_detail_summary"),
                 "train_resource_usage": base.get("train_resource_usage"),
@@ -700,6 +707,7 @@ def _evaluate_candidates(
                 "validation_execution_event_summary": primary.get("validation_execution_event_summary"),
                 "final_holdout_execution_event_summary": primary.get("final_holdout_execution_event_summary"),
                 "resource_guard": primary.get("resource_guard"),
+                "failure_artifact_ref": primary.get("failure_artifact_ref"),
                 "failure_artifact_path": primary.get("failure_artifact_path"),
                 "retained_detail_summary": primary.get("retained_detail_summary"),
                 "train_resource_usage": primary.get("train_resource_usage"),
@@ -993,6 +1001,7 @@ def _write_failed_candidate_evidence(
     if not manifest.research_run.artifact_policy.failed_candidate_evidence:
         return
     path = _candidate_failure_path(manager, manifest.experiment_id, str(candidate["candidate_id"]))
+    candidate["failure_artifact_ref"] = _data_dir_relative_ref(manager, path)
     candidate["failure_artifact_path"] = str(path)
     write_json_atomic(path, candidate)
 
@@ -1928,17 +1937,6 @@ def _candidate_rank_key(candidate: dict[str, Any]) -> tuple[int, int, float, flo
         -float(cagr) if cagr is not None else -float(validation.get("return_pct") or 0.0),
         float(dependency) if dependency is not None else 0.0,
     )
-
-
-def _path_payload(paths: ResearchReportPaths, *, manager: PathManager, experiment_id: str) -> dict[str, str]:
-    root = _research_artifact_root(manager, experiment_id)
-    return {
-        "derived_path": str(paths.derived_path),
-        "report_path": str(paths.report_path),
-        "candidate_events_path": str(root / "candidate_events.jsonl"),
-        "candidate_results_dir": str(root / "candidate_results"),
-        "candidate_failures_dir": str(root / "candidate_failures"),
-    }
 
 
 def _require_enough_candles(snapshots: Any) -> None:

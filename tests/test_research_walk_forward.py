@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -63,6 +66,44 @@ def _manager(tmp_path: Path, monkeypatch) -> PathManager:
     for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
         monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
     return PathManager.from_env(Path.cwd())
+
+
+def _ts(day: str, minute: int) -> int:
+    base = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(base.timestamp() * 1000) + minute * 60_000
+
+
+def _create_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE candles(
+                ts INTEGER PRIMARY KEY,
+                pair TEXT,
+                interval TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL
+            )
+            """
+        )
+        pattern = [100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96]
+        for day in ("2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-05", "2023-01-06"):
+            for index in range(24 * 60):
+                close = pattern[index % len(pattern)]
+                conn.execute(
+                    """
+                    INSERT INTO candles(ts, pair, interval, open, high, low, close, volume)
+                    VALUES (?, 'KRW-BTC', '1m', ?, ?, ?, ?, 1.0)
+                    """,
+                    (_ts(day, index), close, close * 1.01, close * 0.99, close),
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _run(return_pct: float) -> BacktestRun:
@@ -212,6 +253,27 @@ def test_insufficient_windows_fails_clearly(tmp_path, monkeypatch) -> None:
             db_path=tmp_path / "missing.sqlite",
             manager=_manager(tmp_path, monkeypatch),
         )
+
+
+def test_walk_forward_report_persists_artifact_discovery_metadata(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    manager = _manager(tmp_path, monkeypatch)
+
+    report = run_research_walk_forward(
+        manifest=_manifest(),
+        db_path=db_path,
+        manager=manager,
+        generated_at="2026-05-03T00:00:00+00:00",
+    )
+
+    persisted = json.loads(Path(report["artifact_paths"]["report_path"]).read_text(encoding="utf-8"))
+    assert persisted["content_hash"] == report["content_hash"]
+    assert persisted["artifact_refs"] == report["artifact_refs"]
+    assert persisted["artifact_paths"] == report["artifact_paths"]
+    assert persisted["artifact_refs"]["candidate_events"] == "derived/research/walk_unit/candidate_events.jsonl"
+    assert persisted["artifact_refs"]["candidate_results_dir"] == "derived/research/walk_unit/candidate_results"
+    assert persisted["artifact_refs"]["candidate_failures_dir"] == "derived/research/walk_unit/candidate_failures"
 
 
 def test_repeated_positive_test_windows_pass_aggregate_walk_forward(monkeypatch) -> None:
