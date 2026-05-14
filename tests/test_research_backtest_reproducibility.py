@@ -1362,17 +1362,12 @@ def test_research_backtest_promotes_candidate_when_base_and_stress_pass(
     assert candidate["final_holdout_metrics"]["trade_count"] is not None
     assert candidate["candidate_profile_hash"].startswith("sha256:")
 
-    result = promote_candidate(
-        experiment_id="scenario_aggregation_positive_integration",
-        candidate_id=candidate["parameter_candidate_id"],
-        manager=manager,
-    )
-
-    assert result.artifact["gate_result"] == "PASS"
-    assert result.artifact["scenario_policy"] == "must_pass_base_and_survive_stress"
-    assert result.artifact["scenario_pass_count"] == 2
-    assert result.artifact["scenario_fail_count"] == 0
-    assert result.artifact["candidate_profile_hash"] == candidate["candidate_profile_hash"]
+    with pytest.raises(PromotionGateError, match="probe_grade_pass_not_promotable"):
+        promote_candidate(
+            experiment_id="scenario_aggregation_positive_integration",
+            candidate_id=candidate["parameter_candidate_id"],
+            manager=manager,
+        )
 
 
 def test_stress_report_is_candidate_order_independent(tmp_path, monkeypatch) -> None:

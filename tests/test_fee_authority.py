@@ -11,6 +11,7 @@ from bithumb_bot.fee_authority import (
     build_fee_authority_snapshot,
 )
 from bithumb_bot.order_sizing import build_buy_execution_sizing
+from bithumb_bot.strategy.sma import _evaluate_entry_edge_filter
 
 
 pytestmark = pytest.mark.fast_regression
@@ -134,6 +135,21 @@ def test_config_fee_estimate_is_degraded_fallback_not_parallel_authority() -> No
     assert fallback.degraded is True
     assert float(fallback.bid_fee) == pytest.approx(0.004)
     assert "fee_source_not_chance_doc" in fallback.degraded_reason
+
+
+def test_sma_cost_edge_uses_effective_fee_without_0025_floor() -> None:
+    blocked, details = _evaluate_entry_edge_filter(
+        base_signal="BUY",
+        gap_ratio=0.0014,
+        slippage_bps=1.0,
+        live_fee_rate_estimate=0.0004,
+        edge_buffer_ratio=0.0,
+        strategy_min_expected_edge_ratio=0.0,
+    )
+
+    assert blocked is False
+    assert details["roundtrip_fee_ratio"] == pytest.approx(0.0008)
+    assert details["required_edge_ratio"] == pytest.approx(0.0009)
 
 
 def test_persisted_snapshot_fee_authority_is_operator_visible_degraded() -> None:

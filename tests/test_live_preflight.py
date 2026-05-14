@@ -224,6 +224,42 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
     parameters = _candidate_profile_for_current_settings()
     if sma_short is not None:
         parameters["SMA_SHORT"] = int(sma_short)
+    base_cost_assumption = {
+        "label": "test_runtime_base_cost",
+        "role": "base",
+        "fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE),
+        "fee_source": "operator_declared_test_fee",
+        "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+        "slippage_bps": float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
+        "slippage_source": "test_calibration",
+        "promotable_as_base": True,
+        "source": "execution_model",
+    }
+    execution_model = {
+        "source": "execution_model",
+        "scenario_policy": "single_scenario",
+        "calibration_required": True,
+        "calibration_strictness": "fail",
+        "scenarios": [
+            {
+                "type": "fixed_bps",
+                "fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE),
+                "slippage_bps": float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
+                "latency_ms": 0,
+                "partial_fill_rate": 0.0,
+                "order_failure_rate": 0.0,
+                "market_order_extra_cost_bps": 0.0,
+                "seed": None,
+                "source": "execution_model",
+                "scenario_policy": "single_scenario",
+                "scenario_role": "base",
+                "scenario_role_source": "manifest",
+                "cost_assumption": base_cost_assumption,
+                "model_params_hash": "sha256:model",
+            }
+        ],
+        "model_params_hash": "sha256:model",
+    }
     candidate = {
         "experiment_id": "live-exp",
         "manifest_hash": "sha256:manifest",
@@ -236,12 +272,9 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
             "fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE),
             "slippage_bps": float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
         },
-        "execution_model": {
-            "type": "fixed_bps",
-            "fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE),
-            "slippage_bps": float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
-            "model_params_hash": "sha256:model",
-        },
+        "base_cost_assumption": base_cost_assumption,
+        "cost_assumption_contract": execution_model,
+        "execution_model": execution_model,
         "execution_calibration_required": True,
         "execution_calibration_strictness": "fail",
         "execution_calibration_gate": {

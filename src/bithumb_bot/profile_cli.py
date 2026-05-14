@@ -528,6 +528,8 @@ def _validate_research_export_profile_binding(
         "parameter_candidate_id": candidate_id_value,
         "parameter_values": params,
         "cost_model": cost,
+        "base_cost_assumption": profile_candidate.get("base_cost_assumption"),
+        "cost_assumption_contract": profile_candidate.get("cost_assumption_contract"),
         "execution_model": profile_candidate.get("execution_model"),
         "execution_calibration_required": profile_candidate.get("execution_calibration_required"),
         "execution_calibration_strictness": profile_candidate.get("execution_calibration_strictness"),

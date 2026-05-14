@@ -89,6 +89,7 @@ def validate_production_calibration_policy(
     execution_model = source.get("execution_model")
     if execution_model_source == "legacy_cost_model" or not isinstance(execution_model, dict):
         reasons.append("production_execution_model_required")
+    reasons.extend(_production_cost_assumption_reasons(source))
     if source.get("execution_calibration_required") is not True:
         reasons.append("production_execution_calibration_required")
     if str(source.get("execution_calibration_strictness") or "").strip().lower() != "fail":
@@ -175,3 +176,45 @@ def _extend_scenario_gate_reasons(gate: dict[str, Any], reasons: list[str]) -> N
         artifact_policy = scenario_gate.get("artifact_fill_reference_policy")
         if artifact_policy is not None and str(artifact_policy) != str(expected_policy):
             reasons.append("execution_calibration_fill_reference_policy_mismatch")
+
+
+def _production_cost_assumption_reasons(source: dict[str, Any]) -> list[str]:
+    execution_model_source = str(source.get("execution_model_source") or "").strip()
+    execution_model = source.get("execution_model")
+    if execution_model_source == "legacy_cost_model" or not isinstance(execution_model, dict):
+        return ["production_legacy_cost_model_not_promotable"]
+    scenarios = execution_model.get("scenarios")
+    if not isinstance(scenarios, list) or not scenarios:
+        return ["production_base_cost_assumption_required"]
+    if all(str(item.get("scenario_role") or "").strip() == "stress" for item in scenarios if isinstance(item, dict)):
+        stress_only = True
+    else:
+        stress_only = False
+    reasons: list[str] = ["production_stress_only_cost_model_not_promotable"] if stress_only else []
+    base_assumptions: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            continue
+        if str(scenario.get("scenario_role") or "").strip() != "base":
+            continue
+        assumption = scenario.get("cost_assumption")
+        if isinstance(assumption, dict):
+            base_assumptions.append(assumption)
+        else:
+            base_assumptions.append(scenario)
+    if not base_assumptions:
+        reasons.append("production_base_cost_assumption_required")
+    for assumption in base_assumptions:
+        if not str(assumption.get("label") or assumption.get("cost_assumption_label") or "").strip():
+            reasons.append("production_cost_assumption_label_required")
+        fee_source = str(assumption.get("fee_source") or "").strip()
+        slippage_source = str(assumption.get("slippage_source") or "").strip()
+        if not fee_source or fee_source in {"legacy_cost_model", "stress_assumption"}:
+            reasons.append("production_cost_assumption_source_required")
+        if not slippage_source:
+            reasons.append("production_cost_assumption_source_required")
+        if str(assumption.get("role") or assumption.get("scenario_role") or "").strip() == "stress":
+            reasons.append("production_stress_only_cost_model_not_promotable")
+        if assumption.get("promotable_as_base") is not True:
+            reasons.append("production_stress_only_cost_model_not_promotable")
+    return reasons

@@ -28,8 +28,33 @@
     "SMA_FILTER_VOL_MIN_RANGE_RATIO": [0.002, 0.003, 0.005]
   },
   "cost_model": {
-    "fee_rate": 0.0025,
-    "slippage_bps": [5, 10, 20]
+    "fee_rate": 0.0004,
+    "slippage_bps": [10]
+  },
+  "execution_model": {
+    "scenario_policy": "must_pass_base_and_survive_stress",
+    "scenarios": [
+      {
+        "scenario_role": "base",
+        "label": "research_realistic_bithumb_app_fee_0004",
+        "fee_rate": 0.0004,
+        "fee_source": "operator_declared_bithumb_app_fee",
+        "fee_authority_policy": "research_declared_runtime_reference",
+        "slippage_bps": 10,
+        "slippage_source": "research_assumption",
+        "promotable_as_base": false
+      },
+      {
+        "scenario_role": "stress",
+        "label": "research_stress_fee_0025_slippage_20bps",
+        "fee_rate": 0.0025,
+        "fee_source": "stress_assumption",
+        "fee_authority_policy": "not_promotable_as_runtime_base",
+        "slippage_bps": 20,
+        "slippage_source": "stress_assumption",
+        "promotable_as_base": false
+      }
+    ]
   },
   "acceptance_gate": {
     "min_trade_count": 30,

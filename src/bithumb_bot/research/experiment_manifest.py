@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from bithumb_bot.market_regime import RegimeAcceptanceGate
 
-from .deployment_policy import DEPLOYMENT_TIERS, normalize_deployment_tier
+from .deployment_policy import DEPLOYMENT_TIERS, is_production_bound_target, normalize_deployment_tier
 from .hashing import sha256_prefixed
 
 
@@ -101,6 +101,36 @@ class CostModel:
 
 
 @dataclass(frozen=True)
+class ScenarioCostAssumption:
+    label: str
+    role: str
+    fee_rate: float
+    fee_source: str
+    fee_authority_policy: str
+    slippage_bps: float
+    slippage_source: str
+    valid_for: dict[str, object] | None = None
+    promotable_as_base: bool = False
+    source: str = "execution_model"
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "label": self.label,
+            "role": self.role,
+            "fee_rate": self.fee_rate,
+            "fee_source": self.fee_source,
+            "fee_authority_policy": self.fee_authority_policy,
+            "slippage_bps": self.slippage_bps,
+            "slippage_source": self.slippage_source,
+            "promotable_as_base": self.promotable_as_base,
+            "source": self.source,
+        }
+        if self.valid_for is not None:
+            payload["valid_for"] = dict(self.valid_for)
+        return payload
+
+
+@dataclass(frozen=True)
 class ExecutionScenario:
     type: str
     fee_rate: float
@@ -114,9 +144,10 @@ class ExecutionScenario:
     scenario_policy: str = "single_scenario"
     scenario_role: str = "base"
     scenario_role_source: str = "derived"
+    cost_assumption: ScenarioCostAssumption | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "type": self.type,
             "fee_rate": self.fee_rate,
             "slippage_bps": self.slippage_bps,
@@ -130,6 +161,14 @@ class ExecutionScenario:
             "scenario_role": self.scenario_role,
             "scenario_role_source": self.scenario_role_source,
         }
+        if self.cost_assumption is not None:
+            payload["cost_assumption"] = self.cost_assumption.as_dict()
+            payload["cost_assumption_label"] = self.cost_assumption.label
+            payload["fee_source"] = self.cost_assumption.fee_source
+            payload["fee_authority_policy"] = self.cost_assumption.fee_authority_policy
+            payload["slippage_source"] = self.cost_assumption.slippage_source
+            payload["promotable_as_base"] = self.cost_assumption.promotable_as_base
+        return payload
 
 
 @dataclass(frozen=True)
@@ -196,6 +235,7 @@ class AcceptanceGate:
     max_avg_holding_time_minutes: float | None = None
     max_fee_drag_ratio: float | None = None
     max_slippage_drag_ratio: float | None = None
+    max_single_trade_dependency_score: float | None = None
     reject_open_position_at_end: bool = False
     metrics_contract_required: bool = False
     regime_acceptance_gate: RegimeAcceptanceGate = field(default_factory=RegimeAcceptanceGate)
@@ -219,6 +259,7 @@ class AcceptanceGate:
             "max_avg_holding_time_minutes": self.max_avg_holding_time_minutes,
             "max_fee_drag_ratio": self.max_fee_drag_ratio,
             "max_slippage_drag_ratio": self.max_slippage_drag_ratio,
+            "max_single_trade_dependency_score": self.max_single_trade_dependency_score,
         }
         payload.update(optional_fields)
         payload["reject_open_position_at_end"] = self.reject_open_position_at_end
@@ -370,12 +411,20 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
     _parse_dataset_quality_policy(payload.get("dataset_quality_policy"))
     deployment_tier = _parse_deployment_tier(payload.get("deployment_tier") or payload.get("promotion_target"))
     acceptance_gate = _parse_acceptance_gate(_required_dict(payload, "acceptance_gate"))
+    if is_production_bound_target(deployment_tier) and acceptance_gate.max_single_trade_dependency_score is None:
+        acceptance_gate = replace(acceptance_gate, max_single_trade_dependency_score=0.8)
     walk_forward = _parse_walk_forward(payload.get("walk_forward"))
     research_run = _parse_research_run(payload.get("research_run"))
     if acceptance_gate.walk_forward_required and walk_forward is None:
         raise ManifestValidationError("walk_forward is required when acceptance_gate.walk_forward_required=true")
 
     _validate_split_order(dataset.split)
+    cost_policy_reasons = production_cost_assumption_policy_reasons(
+        deployment_tier=deployment_tier,
+        execution_model=execution_model,
+    )
+    if cost_policy_reasons:
+        raise ManifestValidationError(",".join(cost_policy_reasons))
 
     return ExperimentManifest(
         experiment_id=experiment_id,
@@ -585,6 +634,19 @@ def _parse_execution_model(value: Any, cost_model: CostModel) -> ExecutionModelC
                 slippage_bps=float(slippage),
                 source="legacy_cost_model",
                 scenario_policy="legacy_cost_model_single_pass",
+                scenario_role="base",
+                scenario_role_source="legacy_cost_model",
+                cost_assumption=ScenarioCostAssumption(
+                    label="legacy_cost_model",
+                    role="base",
+                    fee_rate=cost_model.fee_rate,
+                    fee_source="legacy_cost_model",
+                    fee_authority_policy="unspecified_legacy",
+                    slippage_bps=float(slippage),
+                    slippage_source="legacy_cost_model",
+                    promotable_as_base=False,
+                    source="legacy_cost_model",
+                ),
             )
             for slippage in cost_model.slippage_bps
         )
@@ -608,13 +670,17 @@ def _parse_execution_model(value: Any, cost_model: CostModel) -> ExecutionModelC
         "seed",
         "calibration_required",
         "calibration_strictness",
+        "scenarios",
+        "label",
+        "fee_source",
+        "fee_authority_policy",
+        "slippage_source",
+        "valid_for",
+        "promotable_as_base",
     }
     unknown = sorted(set(value) - allowed_fields)
     if unknown:
         raise ManifestValidationError(f"execution_model unsupported fields: {','.join(unknown)}")
-    model_type = _required_str(value, "type")
-    if model_type not in {"fixed_bps", "stress"}:
-        raise ManifestValidationError("execution_model.type must be fixed_bps or stress")
     explicit_scenario_policy = value.get("scenario_policy")
     scenario_policy = str(explicit_scenario_policy or "").strip()
     if scenario_policy and scenario_policy not in {
@@ -624,40 +690,69 @@ def _parse_execution_model(value: Any, cost_model: CostModel) -> ExecutionModelC
         raise ManifestValidationError(
             "execution_model.scenario_policy must be single_scenario or must_pass_base_and_survive_stress"
         )
-    scenario_role = _optional_scenario_role(value.get("scenario_role"))
-    scenario_role_source = "manifest" if scenario_role is not None else "derived"
     strictness = str(value.get("calibration_strictness") or "fail").strip().lower()
     if strictness not in {"fail", "warn"}:
         raise ManifestValidationError("execution_model.calibration_strictness must be fail or warn")
-    fees = _number_array(value, "fee_rate", default=(cost_model.fee_rate,))
-    slippages = _number_array(value, "slippage_bps", default=cost_model.slippage_bps)
-    latencies = _int_array(value, "latency_ms", default=(0,))
-    partial_rates = _number_array(value, "partial_fill_rate", default=(0.0,))
-    failure_rates = _number_array(value, "order_failure_rate", default=(0.0,))
-    market_extra = _number_array(value, "market_order_extra_cost_bps", default=(0.0,))
-    seed = value.get("seed")
-    parsed_seed = None if seed is None else int(seed)
-    scenarios = []
-    for index, (fee, slippage, latency, partial, failure, extra) in enumerate(itertools.product(
-        fees, slippages, latencies, partial_rates, failure_rates, market_extra
-    )):
-        active_role = scenario_role or _derived_scenario_role(index)
-        scenarios.append(
-            ExecutionScenario(
-                type=model_type,
-                fee_rate=float(fee),
-                slippage_bps=float(slippage),
-                latency_ms=int(latency),
-                partial_fill_rate=float(partial),
-                order_failure_rate=float(failure),
-                market_order_extra_cost_bps=float(extra),
-                seed=parsed_seed,
-                source="execution_model",
+    explicit_scenarios = value.get("scenarios")
+    if explicit_scenarios is not None:
+        if not isinstance(explicit_scenarios, list) or not explicit_scenarios:
+            raise ManifestValidationError("execution_model.scenarios must be a non-empty array")
+        scenarios = [
+            _parse_explicit_execution_scenario(
+                raw,
+                index=index,
+                parent=value,
                 scenario_policy=scenario_policy or "pending_default",
-                scenario_role=active_role,
-                scenario_role_source=scenario_role_source,
             )
-        )
+            for index, raw in enumerate(explicit_scenarios)
+        ]
+    else:
+        model_type = _required_str(value, "type")
+        if model_type not in {"fixed_bps", "stress"}:
+            raise ManifestValidationError("execution_model.type must be fixed_bps or stress")
+        scenario_role = _optional_scenario_role(value.get("scenario_role"))
+        scenario_role_source = "manifest" if scenario_role is not None else "derived"
+        fees = _number_array(value, "fee_rate", default=(cost_model.fee_rate,))
+        slippages = _number_array(value, "slippage_bps", default=cost_model.slippage_bps)
+        latencies = _int_array(value, "latency_ms", default=(0,))
+        partial_rates = _number_array(value, "partial_fill_rate", default=(0.0,))
+        failure_rates = _number_array(value, "order_failure_rate", default=(0.0,))
+        market_extra = _number_array(value, "market_order_extra_cost_bps", default=(0.0,))
+        seed = value.get("seed")
+        parsed_seed = None if seed is None else int(seed)
+        scenarios = []
+        for index, (fee, slippage, latency, partial, failure, extra) in enumerate(itertools.product(
+            fees, slippages, latencies, partial_rates, failure_rates, market_extra
+        )):
+            active_role = scenario_role or _derived_scenario_role(index)
+            scenarios.append(
+                ExecutionScenario(
+                    type=model_type,
+                    fee_rate=float(fee),
+                    slippage_bps=float(slippage),
+                    latency_ms=int(latency),
+                    partial_fill_rate=float(partial),
+                    order_failure_rate=float(failure),
+                    market_order_extra_cost_bps=float(extra),
+                    seed=parsed_seed,
+                    source="execution_model",
+                    scenario_policy=scenario_policy or "pending_default",
+                    scenario_role=active_role,
+                    scenario_role_source=scenario_role_source,
+                    cost_assumption=_scenario_cost_assumption(
+                        label=str(value.get("label") or "").strip(),
+                        role=active_role,
+                        fee_rate=float(fee),
+                        fee_source=str(value.get("fee_source") or "").strip(),
+                        fee_authority_policy=str(value.get("fee_authority_policy") or "").strip(),
+                        slippage_bps=float(slippage),
+                        slippage_source=str(value.get("slippage_source") or "").strip(),
+                        valid_for=value.get("valid_for"),
+                        promotable_as_base=value.get("promotable_as_base"),
+                        source="execution_model",
+                    ),
+                )
+            )
     if not scenarios:
         raise ManifestValidationError("execution_model produced no scenarios")
     if not scenario_policy:
@@ -676,6 +771,7 @@ def _parse_execution_model(value: Any, cost_model: CostModel) -> ExecutionModelC
                 scenario_policy=scenario_policy,
                 scenario_role=scenario.scenario_role,
                 scenario_role_source=scenario.scenario_role_source,
+                cost_assumption=scenario.cost_assumption,
             )
             for scenario in scenarios
         ]
@@ -691,6 +787,148 @@ def _parse_execution_model(value: Any, cost_model: CostModel) -> ExecutionModelC
         calibration_required=bool(value.get("calibration_required", False)),
         calibration_strictness=strictness,
     )
+
+
+def _parse_explicit_execution_scenario(
+    raw: Any,
+    *,
+    index: int,
+    parent: dict[str, Any],
+    scenario_policy: str,
+) -> ExecutionScenario:
+    if not isinstance(raw, dict):
+        raise ManifestValidationError("execution_model.scenarios entries must be objects")
+    allowed_fields = {
+        "type",
+        "scenario_role",
+        "label",
+        "fee_rate",
+        "fee_source",
+        "fee_authority_policy",
+        "slippage_bps",
+        "slippage_source",
+        "valid_for",
+        "promotable_as_base",
+        "latency_ms",
+        "partial_fill_rate",
+        "order_failure_rate",
+        "market_order_extra_cost_bps",
+        "seed",
+    }
+    unknown = sorted(set(raw) - allowed_fields)
+    if unknown:
+        raise ManifestValidationError(f"execution_model.scenarios unsupported fields: {','.join(unknown)}")
+    model_type = str(raw.get("type") or parent.get("type") or "fixed_bps").strip()
+    if model_type not in {"fixed_bps", "stress"}:
+        raise ManifestValidationError("execution_model.scenarios.type must be fixed_bps or stress")
+    role = _optional_scenario_role(raw.get("scenario_role"))
+    if role is None:
+        raise ManifestValidationError("execution_model.scenarios.scenario_role must be base or stress")
+    fee = _finite_non_negative_float(raw.get("fee_rate"), "execution_model.scenarios.fee_rate")
+    slippage = _finite_non_negative_float(raw.get("slippage_bps"), "execution_model.scenarios.slippage_bps")
+    return ExecutionScenario(
+        type=model_type,
+        fee_rate=fee,
+        slippage_bps=slippage,
+        latency_ms=_positive_or_zero_int(raw.get("latency_ms", parent.get("latency_ms", 0)), "execution_model.scenarios.latency_ms"),
+        partial_fill_rate=_finite_non_negative_float(
+            raw.get("partial_fill_rate", parent.get("partial_fill_rate", 0.0)),
+            "execution_model.scenarios.partial_fill_rate",
+        ),
+        order_failure_rate=_finite_non_negative_float(
+            raw.get("order_failure_rate", parent.get("order_failure_rate", 0.0)),
+            "execution_model.scenarios.order_failure_rate",
+        ),
+        market_order_extra_cost_bps=_finite_non_negative_float(
+            raw.get("market_order_extra_cost_bps", parent.get("market_order_extra_cost_bps", 0.0)),
+            "execution_model.scenarios.market_order_extra_cost_bps",
+        ),
+        seed=None if raw.get("seed", parent.get("seed")) is None else int(raw.get("seed", parent.get("seed"))),
+        source="execution_model",
+        scenario_policy=scenario_policy,
+        scenario_role=role,
+        scenario_role_source="manifest",
+        cost_assumption=_scenario_cost_assumption(
+            label=str(raw.get("label") or "").strip(),
+            role=role,
+            fee_rate=fee,
+            fee_source=str(raw.get("fee_source") or "").strip(),
+            fee_authority_policy=str(raw.get("fee_authority_policy") or "").strip(),
+            slippage_bps=slippage,
+            slippage_source=str(raw.get("slippage_source") or "").strip(),
+            valid_for=raw.get("valid_for"),
+            promotable_as_base=raw.get("promotable_as_base"),
+            source="execution_model",
+        ),
+    )
+
+
+def _scenario_cost_assumption(
+    *,
+    label: str,
+    role: str,
+    fee_rate: float,
+    fee_source: str,
+    fee_authority_policy: str,
+    slippage_bps: float,
+    slippage_source: str,
+    valid_for: Any,
+    promotable_as_base: Any,
+    source: str,
+) -> ScenarioCostAssumption:
+    valid_for_payload = None
+    if valid_for is not None:
+        if not isinstance(valid_for, dict):
+            raise ManifestValidationError("cost assumption valid_for must be an object when supplied")
+        valid_for_payload = dict(valid_for)
+    return ScenarioCostAssumption(
+        label=label,
+        role=role,
+        fee_rate=fee_rate,
+        fee_source=fee_source,
+        fee_authority_policy=fee_authority_policy or "runtime_fee_authority_or_config_fallback",
+        slippage_bps=slippage_bps,
+        slippage_source=slippage_source,
+        valid_for=valid_for_payload,
+        promotable_as_base=(
+            bool(promotable_as_base)
+            if promotable_as_base is not None
+            else bool(role == "base" and label and fee_source and slippage_source and source != "legacy_cost_model")
+        ),
+        source=source,
+    )
+
+
+def production_cost_assumption_policy_reasons(
+    *,
+    deployment_tier: str,
+    execution_model: ExecutionModelConfig,
+) -> list[str]:
+    if not is_production_bound_target(deployment_tier):
+        return []
+    reasons: list[str] = []
+    if execution_model.source == "legacy_cost_model":
+        reasons.append("production_legacy_cost_model_not_promotable")
+    scenarios = list(execution_model.scenarios)
+    base_assumptions = [
+        scenario.cost_assumption
+        for scenario in scenarios
+        if scenario.scenario_role == "base" and scenario.cost_assumption is not None
+    ]
+    if not base_assumptions:
+        reasons.append("production_base_cost_assumption_required")
+    if scenarios and all(scenario.scenario_role == "stress" for scenario in scenarios):
+        reasons.append("production_stress_only_cost_model_not_promotable")
+    for assumption in base_assumptions:
+        if not assumption.label:
+            reasons.append("production_cost_assumption_label_required")
+        if not assumption.fee_source or assumption.fee_source in {"legacy_cost_model", "stress_assumption"}:
+            reasons.append("production_cost_assumption_source_required")
+        if not assumption.slippage_source:
+            reasons.append("production_cost_assumption_source_required")
+        if assumption.role == "stress" or not assumption.promotable_as_base:
+            reasons.append("production_stress_only_cost_model_not_promotable")
+    return sorted(set(reasons))
 
 
 def _parse_execution_timing(value: Any) -> ExecutionTimingPolicy:
@@ -832,6 +1070,7 @@ def _parse_acceptance_gate(payload: dict[str, Any]) -> AcceptanceGate:
         "max_avg_holding_time_minutes",
         "max_fee_drag_ratio",
         "max_slippage_drag_ratio",
+        "max_single_trade_dependency_score",
         "reject_open_position_at_end",
         "metrics_contract_required",
     }
@@ -874,6 +1113,10 @@ def _parse_acceptance_gate(payload: dict[str, Any]) -> AcceptanceGate:
         max_slippage_drag_ratio=_optional_finite_non_negative_float(
             payload.get("max_slippage_drag_ratio"),
             "acceptance_gate.max_slippage_drag_ratio",
+        ),
+        max_single_trade_dependency_score=_optional_pct(
+            payload.get("max_single_trade_dependency_score"),
+            "acceptance_gate.max_single_trade_dependency_score",
         ),
         reject_open_position_at_end=bool(payload.get("reject_open_position_at_end", False)),
         metrics_contract_required=bool(payload.get("metrics_contract_required", False)),

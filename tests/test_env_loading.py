@@ -110,6 +110,22 @@ def test_live_fill_fee_strict_env_is_loaded(monkeypatch):
         importlib.reload(config_module)
 
 
+def test_fee_rate_defaults_and_fallbacks_use_realistic_base_fee(monkeypatch):
+    for key in ("FEE_RATE", "LIVE_FEE_RATE_ESTIMATE", "PAPER_FEE_RATE", "PAPER_FEE_RATE_ESTIMATE"):
+        monkeypatch.delenv(key, raising=False)
+
+    import bithumb_bot.config as config_module
+
+    reloaded = importlib.reload(config_module)
+    try:
+        assert reloaded.settings.FEE_RATE == 0.0004
+        assert reloaded.settings.LIVE_FEE_RATE_ESTIMATE == 0.0004
+        assert reloaded.settings.PAPER_FEE_RATE == 0.0004
+        assert reloaded.settings.PAPER_FEE_RATE_ESTIMATE == 0.0004
+    finally:
+        importlib.reload(config_module)
+
+
 def test_describe_explicit_env_file_reports_source_key(monkeypatch):
     monkeypatch.delenv("BITHUMB_ENV_FILE", raising=False)
     monkeypatch.setenv("BITHUMB_ENV_FILE_LIVE", "/tmp/live.env")

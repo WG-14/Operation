@@ -367,6 +367,7 @@ def _evaluate_candidates(
     runner = resolve_research_strategy(manifest.strategy_name)
     metrics_gate_policy = metrics_gate_policy_from_acceptance_gate(manifest.acceptance_gate)
     metrics_gate_policy_digest = metrics_gate_policy_hash(metrics_gate_policy)
+    probe_warnings = _probe_grade_gate_warnings(manifest)
     _emit_progress(
         progress_callback,
         stage="workload",
@@ -568,6 +569,21 @@ def _evaluate_candidates(
                 "fee_rate": scenario.fee_rate,
                 "slippage_bps": float(scenario.slippage_bps),
             }
+            cost_assumption = (
+                scenario.cost_assumption.as_dict()
+                if scenario.cost_assumption is not None
+                else {
+                    "label": "",
+                    "role": scenario.scenario_role,
+                    "fee_rate": scenario.fee_rate,
+                    "fee_source": "",
+                    "fee_authority_policy": "runtime_fee_authority_or_config_fallback",
+                    "slippage_bps": float(scenario.slippage_bps),
+                    "slippage_source": "",
+                    "promotable_as_base": False,
+                    "source": scenario.source,
+                }
+            )
             execution_model_payload = _scenario_payload(scenario)
             scenario_result = {
                 "scenario_id": scenario_id,
@@ -579,6 +595,7 @@ def _evaluate_candidates(
                 "execution_model_hash": execution_model_payload["model_params_hash"],
                 "model_params_hash": execution_model_payload["model_params_hash"],
                 "cost_model": cost_model,
+                "cost_assumption": cost_assumption,
                 "execution_calibration_gate": calibration_gate,
                 "execution_timing_policy": manifest.execution_timing.as_dict(),
                 "execution_reality_summary": execution_reality_summary,
@@ -643,6 +660,7 @@ def _evaluate_candidates(
                     "scenario_policy": manifest.execution_model.scenario_policy,
                     "scenario_results": [],
                     "execution_model_source": manifest.execution_model.source,
+                    "cost_assumption_contract": manifest.execution_model.as_dict(),
                     "deployment_tier": manifest.deployment_tier,
                     "execution_calibration_required": manifest.execution_model.calibration_required,
                     "execution_calibration_strictness": manifest.execution_model.calibration_strictness,
@@ -662,6 +680,7 @@ def _evaluate_candidates(
                 set(candidate_payload.get("warnings") or ())
                 | set(base.get("warnings") or ())
                 | set(dataset_warning_codes)
+                | set(probe_warnings)
             )
             if candidate_payload.get("_primary_scenario_result") is None:
                 candidate_payload["_primary_scenario_result"] = scenario_result
@@ -675,6 +694,8 @@ def _evaluate_candidates(
         candidate_payload.update(
             {
                 "cost_model": primary.get("cost_model"),
+                "base_cost_assumption": _primary_base_cost_assumption(candidate_payload),
+                "cost_assumption_contract": manifest.execution_model.as_dict(),
                 "execution_model": primary.get("execution_model"),
                 "execution_calibration_gate": _combined_calibration_gate(candidate_payload.get("scenario_results") or []),
                 "train_metrics": primary.get("train_metrics"),
@@ -919,6 +940,28 @@ def _failed_candidate_base_result(
     }
 
 
+def _probe_grade_gate_warnings(manifest: ExperimentManifest) -> list[str]:
+    gate = manifest.acceptance_gate
+    warnings: set[str] = set()
+    if manifest.deployment_tier == "research_only" and gate.min_trade_count <= 5:
+        warnings.add("probe_grade_gate_detected")
+    if gate.min_profit_factor <= 1.0:
+        warnings.add("probe_grade_gate_detected")
+    if not gate.metrics_contract_required:
+        warnings.add("probe_grade_gate_detected")
+    if not gate.walk_forward_required:
+        warnings.add("probe_grade_gate_detected")
+    if not gate.final_holdout_required_for_promotion:
+        warnings.add("probe_grade_gate_detected")
+    if gate.min_cagr_pct is None or (
+        gate.min_expectancy_per_trade_krw is None and gate.min_expectancy_per_trade_pct is None
+    ):
+        warnings.add("probe_grade_gate_detected")
+    if warnings:
+        warnings.add("probe_grade_pass_not_promotable")
+    return sorted(warnings)
+
+
 def _failed_metrics_payload() -> dict[str, Any]:
     return {
         "return_pct": 0.0,
@@ -1156,6 +1199,7 @@ def _metrics_v2_gate_reasons(*, gate, metrics_v2: dict[str, Any] | None, prefix:
             gate.max_avg_holding_time_minutes,
             gate.max_fee_drag_ratio,
             gate.max_slippage_drag_ratio,
+            gate.max_single_trade_dependency_score,
         )
     ) or gate.reject_open_position_at_end or gate.metrics_contract_required
     if not has_v2_gate:
@@ -1219,6 +1263,13 @@ def _metrics_v2_gate_reasons(*, gate, metrics_v2: dict[str, Any] | None, prefix:
         threshold=gate.max_slippage_drag_ratio,
         missing_code=f"{prefix}metrics_v2_required_field_missing",
         failed_code=f"{prefix}max_slippage_drag_ratio_failed",
+    )
+    _append_max_reason(
+        reasons,
+        value=trade_quality.get("single_trade_dependency_score"),
+        threshold=gate.max_single_trade_dependency_score,
+        missing_code=f"{prefix}metrics_v2_required_field_missing",
+        failed_code=f"{prefix}max_single_trade_dependency_score_failed",
     )
     if gate.reject_open_position_at_end and bool(return_risk.get("open_position_at_end")):
         reasons.append(f"{prefix}open_position_at_end_failed")
@@ -1605,6 +1656,8 @@ def _report_payload(
         "regime_acceptance_gate": manifest.acceptance_gate.regime_acceptance_gate.as_dict(),
         "execution_model": manifest.execution_model.as_dict(),
         "execution_model_source": manifest.execution_model.source,
+        "cost_assumption_contract": manifest.execution_model.as_dict(),
+        "base_cost_assumption": _report_base_cost_assumption(candidates),
         "research_run": manifest.research_run.as_dict(),
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "metrics_gate_policy": metrics_gate_policy_from_acceptance_gate(manifest.acceptance_gate),
@@ -1647,6 +1700,28 @@ def _report_payload(
         "lineage_hash": lineage["lineage_hash"],
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _primary_base_cost_assumption(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    scenario_results = candidate.get("scenario_results")
+    if not isinstance(scenario_results, list):
+        return None
+    for result in scenario_results:
+        if not isinstance(result, dict) or result.get("scenario_role") != "base":
+            continue
+        assumption = result.get("cost_assumption")
+        return dict(assumption) if isinstance(assumption, dict) else None
+    return None
+
+
+def _report_base_cost_assumption(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        assumption = candidate.get("base_cost_assumption")
+        if isinstance(assumption, dict):
+            return dict(assumption)
+    return None
 
 
 def _execution_model_from_scenario(scenario: ExecutionScenario, *, seed_context: dict[str, Any] | None = None):

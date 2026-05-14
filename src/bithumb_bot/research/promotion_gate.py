@@ -41,6 +41,8 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         "candidate_id": candidate.get("parameter_candidate_id"),
         "parameter_values": candidate.get("parameter_values"),
         "cost_model": candidate.get("cost_model"),
+        "base_cost_assumption": candidate.get("base_cost_assumption"),
+        "cost_assumption_contract": candidate.get("cost_assumption_contract"),
         "source_experiment": candidate.get("experiment_id"),
         "manifest_hash": candidate.get("manifest_hash"),
         "dataset_snapshot_id": candidate.get("dataset_snapshot_id"),
@@ -122,6 +124,7 @@ def evaluate_candidate_for_promotion(candidate: dict[str, Any]) -> tuple[bool, l
     _extend_execution_calibration_reasons(candidate, reasons)
     _extend_production_calibration_policy_reasons(candidate, reasons)
     _extend_metrics_contract_reasons(candidate, reasons)
+    _extend_probe_grade_reasons(candidate, reasons)
     profile_hash = candidate.get("candidate_profile_hash")
     if not profile_hash:
         reasons.append("candidate_profile_hash_missing")
@@ -159,7 +162,19 @@ def validate_backtest_candidate_for_promotion(candidate: dict[str, Any] | None) 
     _extend_execution_calibration_reasons(candidate, reasons, prefix="backtest_")
     _extend_production_calibration_policy_reasons(candidate, reasons, prefix="backtest_")
     _extend_metrics_contract_reasons(candidate, reasons, prefix="backtest_")
+    _extend_probe_grade_reasons(candidate, reasons, prefix="backtest_")
     return not reasons, reasons
+
+
+def _extend_probe_grade_reasons(
+    candidate: dict[str, Any],
+    reasons: list[str],
+    *,
+    prefix: str = "",
+) -> None:
+    warnings = {str(item) for item in candidate.get("warnings") or []}
+    if "probe_grade_gate_detected" in warnings or "probe_grade_pass_not_promotable" in warnings:
+        reasons.extend([f"{prefix}probe_grade_pass_not_promotable", "probe_grade_pass_not_promotable"])
 
 
 def _extend_metrics_contract_reasons(
@@ -486,6 +501,8 @@ def promote_candidate(
         "walk_forward_report_path": str((research_report_dir / "walk_forward_report.json").resolve()) if walk_forward_required else None,
         "walk_forward_report_hash": None,
         "deployment_tier": candidate.get("deployment_tier") or "research_only",
+        "base_cost_assumption": candidate.get("base_cost_assumption"),
+        "cost_assumption_contract": candidate.get("cost_assumption_contract"),
         "production_calibration_policy_result": candidate.get("production_calibration_policy_result")
         or production_calibration_policy_result.as_dict(),
         "production_calibration_policy_reasons": candidate.get("production_calibration_policy_reasons")

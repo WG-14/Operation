@@ -269,7 +269,7 @@ def test_config_live_fee_rate_estimate_defaults_when_unset() -> None:
     )
 
     assert proc.returncode == 0
-    assert float(proc.stdout.strip()) == 0.0025
+    assert float(proc.stdout.strip()) == 0.0004
 
 
 def test_config_live_fee_rate_estimate_supports_env_override() -> None:

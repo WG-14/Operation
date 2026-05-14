@@ -15,6 +15,7 @@ METRICS_GATE_POLICY_FIELDS = (
     "max_avg_holding_time_minutes",
     "max_fee_drag_ratio",
     "max_slippage_drag_ratio",
+    "max_single_trade_dependency_score",
     "reject_open_position_at_end",
     "metrics_contract_required",
 )
@@ -30,6 +31,7 @@ def metrics_gate_policy_from_acceptance_gate(gate: Any) -> dict[str, object]:
         "max_avg_holding_time_minutes": getattr(gate, "max_avg_holding_time_minutes", None),
         "max_fee_drag_ratio": getattr(gate, "max_fee_drag_ratio", None),
         "max_slippage_drag_ratio": getattr(gate, "max_slippage_drag_ratio", None),
+        "max_single_trade_dependency_score": getattr(gate, "max_single_trade_dependency_score", None),
         "reject_open_position_at_end": bool(getattr(gate, "reject_open_position_at_end", False)),
         "metrics_contract_required": bool(getattr(gate, "metrics_contract_required", False)),
     }

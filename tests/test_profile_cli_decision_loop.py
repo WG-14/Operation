@@ -212,6 +212,22 @@ def _golden_manifest() -> dict[str, object]:
             "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": [0.0],
         },
         "cost_model": {"fee_rate": 0.0, "slippage_bps": [0.0]},
+        "execution_model": {
+            "scenario_policy": "single_scenario",
+            "scenarios": [
+                {
+                    "scenario_role": "base",
+                    "label": "golden_profile_base_cost",
+                    "fee_rate": 0.0,
+                    "fee_source": "test_zero_fee",
+                    "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+                    "slippage_bps": 0.0,
+                    "slippage_source": "test_zero_slippage",
+                    "promotable_as_base": True,
+                }
+            ],
+            "calibration_required": True,
+        },
         "execution_timing": {
             "signal_basis": "closed_candle",
             "decision_time": "candle_close",
@@ -253,6 +269,8 @@ def _write_golden_profile(tmp_path: Path, manifest_payload: dict[str, object], d
     snapshot = load_dataset_split(db_path=db_path, manifest=manifest, split_name="validation")
     params = {key: values[0] for key, values in manifest.parameter_space.items()}
     selected_candidate_id = candidate_id(params, 0)
+    execution_model = manifest.execution_model.as_dict()
+    base_cost_assumption = execution_model["scenarios"][0]["cost_assumption"]
     candidate = {
         "experiment_id": manifest.experiment_id,
         "manifest_hash": manifest.manifest_hash(),
@@ -262,12 +280,9 @@ def _write_golden_profile(tmp_path: Path, manifest_payload: dict[str, object], d
         "parameter_candidate_id": selected_candidate_id,
         "parameter_values": params,
         "cost_model": {"fee_rate": 0.0, "slippage_bps": 0.0},
-        "execution_model": {
-            "type": "fixed_bps",
-            "fee_rate": 0.0,
-            "slippage_bps": 0.0,
-            "model_params_hash": "sha256:model",
-        },
+        "base_cost_assumption": base_cost_assumption,
+        "cost_assumption_contract": execution_model,
+        "execution_model": execution_model,
         "execution_calibration_required": True,
         "execution_calibration_strictness": "fail",
         "execution_calibration_gate": {

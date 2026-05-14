@@ -19,6 +19,7 @@ import sqlite3
 import math
 import json
 from dataclasses import asdict, replace
+from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from .marketdata import cmd_sync, cmd_sync_orderbook_top, cmd_ticker, cmd_candles
@@ -71,6 +72,14 @@ from .run_lock import read_run_lock_status
 from .runtime_state import disable_trading_until, enable_trading, refresh_open_order_health
 from .notifier import notify
 from .observability import safety_event
+from .approved_profile import (
+    PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+    approved_profile_path_from_env,
+    load_approved_profile,
+    profile_runtime_cost_match_status,
+)
+from .fee_authority import build_fee_authority_snapshot
+from .strategy.sma import _compute_required_entry_edge_ratio
 from .broker.order_rules import (
     build_buy_price_none_diagnostic_fields,
     get_cached_order_rule_snapshot,
@@ -831,6 +840,21 @@ CONFIG_DUMP_FIELDS = (
     "STRATEGY_NAME",
     "PAIR",
     "INTERVAL",
+    "FEE_RATE",
+    "LIVE_FEE_RATE_ESTIMATE",
+    "PAPER_FEE_RATE",
+    "PAPER_FEE_RATE_ESTIMATE",
+    "SLIPPAGE_BPS",
+    "STRATEGY_ENTRY_SLIPPAGE_BPS",
+    "MAX_MARKET_SLIPPAGE_BPS",
+    "LIVE_PRICE_PROTECTION_MAX_SLIPPAGE_BPS",
+    "ENTRY_EDGE_BUFFER_RATIO",
+    "SMA_COST_EDGE_ENABLED",
+    "SMA_COST_EDGE_MIN_RATIO",
+    "STRATEGY_MIN_EXPECTED_EDGE_RATIO",
+    "MIN_NET_EDGE_KRW",
+    "MIN_MARGIN_AFTER_COST_RATIO",
+    "APPROVED_STRATEGY_PROFILE_PATH",
     "LIVE_PERFORMANCE_GATE_ENABLED",
     "LIVE_PERFORMANCE_GATE_MIN_SAMPLE",
     "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW",
@@ -861,11 +885,82 @@ def _masked_config_value(key: str, value: object, *, masked: bool) -> object:
 
 def cmd_config_dump(*, masked: bool = False) -> None:
     env_summary = get_last_explicit_env_load_summary()
+    cost_floor_ratio, required_edge_ratio = _compute_required_entry_edge_ratio(
+        slippage_bps=float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
+        live_fee_rate_estimate=float(settings.LIVE_FEE_RATE_ESTIMATE),
+        edge_buffer_ratio=float(settings.ENTRY_EDGE_BUFFER_RATIO),
+        strategy_min_expected_edge_ratio=float(settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO),
+    )
+    fee_authority_payload: dict[str, object]
+    try:
+        cached_resolution = get_cached_order_rule_snapshot(str(settings.PAIR))
+        if cached_resolution is None:
+            cached_resolution = SimpleNamespace(
+                rules=SimpleNamespace(
+                    bid_fee=float(settings.LIVE_FEE_RATE_ESTIMATE),
+                    ask_fee=float(settings.LIVE_FEE_RATE_ESTIMATE),
+                    maker_bid_fee=float(settings.LIVE_FEE_RATE_ESTIMATE),
+                    maker_ask_fee=float(settings.LIVE_FEE_RATE_ESTIMATE),
+                ),
+                source={
+                    "bid_fee": "missing",
+                    "ask_fee": "missing",
+                    "maker_bid_fee": "missing",
+                    "maker_ask_fee": "missing",
+                },
+                source_mode="config_dump_no_cached_fee_authority",
+                fallback_used=True,
+                snapshot_persisted=False,
+                stale=False,
+                retrieved_at_sec=0.0,
+                expires_at_sec=0.0,
+            )
+        fee_authority = build_fee_authority_snapshot(cached_resolution)
+        fee_authority_payload = fee_authority.as_dict()
+    except Exception as exc:
+        fee_authority_payload = {
+            "available": False,
+            "error_type": type(exc).__name__,
+            "diagnostic_summary": "fee_authority_unavailable",
+        }
+    approved_profile_path = approved_profile_path_from_env()
+    approved_profile_cost: object = None
+    approved_profile_hash: object = None
+    profile_cost_status: dict[str, object] = {"status": "WARN", "reason": "approved_profile_not_configured"}
+    if approved_profile_path:
+        try:
+            approved_profile = load_approved_profile(approved_profile_path)
+            approved_profile_cost = approved_profile.get("base_cost_assumption") or approved_profile.get("cost_model")
+            approved_profile_hash = approved_profile.get("profile_content_hash")
+            runtime_contract = {
+                "cost_model": {
+                    "fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE),
+                    "slippage_bps": float(settings.STRATEGY_ENTRY_SLIPPAGE_BPS),
+                    "fee_authority_degraded": bool(fee_authority_payload.get("degraded")),
+                }
+            }
+            profile_cost_status = profile_runtime_cost_match_status(approved_profile, runtime_contract)
+        except Exception as exc:
+            profile_cost_status = {
+                "status": "FAIL",
+                "reason": f"approved_profile_unreadable:{type(exc).__name__}",
+                "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+            }
     payload: dict[str, object] = {
         "env_loaded": bool(env_summary.loaded),
         "env_file": env_summary.env_file or "",
         "env_source_key": env_summary.source_key or "",
         "env_override": bool(env_summary.override),
+        "effective_fee_authority": fee_authority_payload,
+        "effective_roundtrip_fee_rate": float(settings.LIVE_FEE_RATE_ESTIMATE) * 2.0,
+        "effective_cost_floor_ratio": cost_floor_ratio,
+        "effective_required_entry_edge_ratio": required_edge_ratio,
+        "approved_profile_path": _masked_config_value("APPROVED_STRATEGY_PROFILE_PATH", approved_profile_path, masked=masked),
+        "approved_profile_hash": approved_profile_hash,
+        "approved_profile_cost_assumption": approved_profile_cost,
+        "profile_runtime_cost_match_status": profile_cost_status.get("status"),
+        "profile_runtime_cost_match_reason": profile_cost_status.get("reason"),
+        "profile_runtime_cost_operator_next_step": profile_cost_status.get("operator_next_step") or "none",
     }
     for key in CONFIG_DUMP_FIELDS:
         payload[key] = _masked_config_value(key, getattr(settings, key, os.getenv(key, "")), masked=masked)

@@ -580,20 +580,18 @@ class Settings:
     RESIDUAL_BUY_SIZING_MODE: str = os.getenv("RESIDUAL_BUY_SIZING_MODE", "telemetry").strip().lower() or "telemetry"
     # 怨듯넻 湲곕낯 ?섏닔猷뚯쑉. ?댁쁺?먯꽌??LIVE/PAPER ?섏닔猷뚯쑉??媛곴컖 紐낆떆?쒕떎.
     FEE_RATE: float = float(os.getenv("FEE_RATE", "0.0004"))
-    # live pretrade ?붽퀬/?꾧툑 寃利??꾩슜 蹂댁닔??異붿젙 ?섏닔猷뚯쑉.
-    # ?곗꽑?쒖쐞: LIVE_FEE_RATE_ESTIMATE > FEE_RATE > 0.0025(default)
+    # Live pretrade cost estimate fallback: LIVE_FEE_RATE_ESTIMATE > FEE_RATE > 0.0004.
     LIVE_FEE_RATE_ESTIMATE: float = parse_float_env(
-        "LIVE_FEE_RATE_ESTIMATE", os.getenv("FEE_RATE", "0.0025")
+        "LIVE_FEE_RATE_ESTIMATE", os.getenv("FEE_RATE", "0.0004")
     )
-    # paper 泥닿껐/?먯씡 ?쒕??덉씠???꾩슜 ?섏닔猷뚯쑉.
-    # ?곗꽑?쒖쐞:
-    #   PAPER_FEE_RATE > PAPER_FEE_RATE_ESTIMATE > FEE_RATE > LIVE_FEE_RATE_ESTIMATE > 0.0025
+    # Paper fill/PnL cost estimate fallback:
+    #   PAPER_FEE_RATE > PAPER_FEE_RATE_ESTIMATE > FEE_RATE > LIVE_FEE_RATE_ESTIMATE > 0.0004
     PAPER_FEE_RATE: float = float(
         os.getenv(
             "PAPER_FEE_RATE",
             os.getenv(
                 "PAPER_FEE_RATE_ESTIMATE",
-                os.getenv("FEE_RATE", os.getenv("LIVE_FEE_RATE_ESTIMATE", "0.0025")),
+                os.getenv("FEE_RATE", os.getenv("LIVE_FEE_RATE_ESTIMATE", "0.0004")),
             ),
         )
     )

@@ -35,18 +35,51 @@
     "SMA_FILTER_VOL_MIN_RANGE_RATIO": [0.003]
   },
   "cost_model": {
-    "fee_rate": 0.0025,
+    "fee_rate": 0.0004,
     "slippage_bps": [10]
   },
   "execution_model": {
-    "type": "stress",
-    "fee_rate": [0.0025],
-    "slippage_bps": [10, 20],
-    "latency_ms": [500, 1500],
-    "partial_fill_rate": [0.0, 0.02],
-    "order_failure_rate": [0.0, 0.01],
-    "market_order_extra_cost_bps": [0.0],
     "scenario_policy": "must_pass_base_and_survive_stress",
+    "scenarios": [
+      {
+        "scenario_role": "base",
+        "label": "realistic_bithumb_app_fee_0004_slippage_10bps",
+        "fee_rate": 0.0004,
+        "fee_source": "operator_declared_bithumb_app_fee",
+        "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+        "slippage_bps": 10,
+        "slippage_source": "production_execution_calibration_target",
+        "valid_for": {
+          "market": "KRW-BTC",
+          "account_fee_tier": "bithumb_app_0.04pct_operator_declared"
+        },
+        "promotable_as_base": true,
+        "type": "stress",
+        "latency_ms": 500,
+        "partial_fill_rate": 0.0,
+        "order_failure_rate": 0.0,
+        "market_order_extra_cost_bps": 0.0
+      },
+      {
+        "scenario_role": "stress",
+        "label": "stress_fee_0025_slippage_20bps_latency_1500ms",
+        "fee_rate": 0.0025,
+        "fee_source": "stress_assumption",
+        "fee_authority_policy": "not_promotable_as_runtime_base",
+        "slippage_bps": 20,
+        "slippage_source": "stress_assumption",
+        "valid_for": {
+          "market": "KRW-BTC",
+          "purpose": "survival_validation_only"
+        },
+        "promotable_as_base": false,
+        "type": "stress",
+        "latency_ms": 1500,
+        "partial_fill_rate": 0.02,
+        "order_failure_rate": 0.01,
+        "market_order_extra_cost_bps": 0.0
+      }
+    ],
     "calibration_required": true,
     "calibration_strictness": "fail"
   },
@@ -75,6 +108,7 @@
     "max_avg_holding_time_minutes": null,
     "max_fee_drag_ratio": null,
     "max_slippage_drag_ratio": null,
+    "max_single_trade_dependency_score": 0.8,
     "reject_open_position_at_end": true,
     "metrics_contract_required": true,
     "regime_acceptance_gate": {

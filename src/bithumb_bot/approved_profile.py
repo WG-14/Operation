@@ -52,6 +52,11 @@ COST_MODEL_ENV_KEYS = (
     "MAX_MARKET_SLIPPAGE_BPS",
     "SLIPPAGE_BPS",
 )
+PROFILE_RUNTIME_COST_MISMATCH_ACTION = (
+    "Profile/runtime cost mismatch. Regenerate or select an approved profile whose base cost assumption "
+    "matches the current runtime fee/slippage contract, or adjust the runtime env and rerun "
+    "config/runtime-contract dump."
+)
 
 
 class ApprovedProfileError(ValueError):
@@ -270,6 +275,8 @@ def _candidate_like_from_promotion(payload: dict[str, Any]) -> dict[str, Any]:
         "parameter_candidate_id": payload.get("candidate_id") or profile.get("candidate_id"),
         "parameter_values": profile.get("parameter_values"),
         "cost_model": profile.get("cost_model"),
+        "base_cost_assumption": profile.get("base_cost_assumption"),
+        "cost_assumption_contract": profile.get("cost_assumption_contract"),
         "execution_model": profile.get("execution_model"),
         "execution_calibration_required": profile.get("execution_calibration_required"),
         "execution_calibration_strictness": profile.get("execution_calibration_strictness"),
@@ -394,6 +401,8 @@ def build_approved_profile(
         "interval": str(interval),
         "strategy_parameters": _strategy_parameters_from_promotion(verified_promotion),
         "cost_model": _cost_model_from_promotion(verified_promotion),
+        "base_cost_assumption": promotion_source.get("base_cost_assumption"),
+        "cost_assumption_contract": promotion_source.get("cost_assumption_contract"),
         "regime_policy": dict(live_policy),
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
         "parent_profile_hash": parent_hash,
@@ -449,6 +458,8 @@ def validate_approved_profile(profile: dict[str, Any]) -> dict[str, Any]:
         raise ApprovedProfileError("strategy_parameters_missing")
     if not isinstance(profile.get("cost_model"), dict):
         raise ApprovedProfileError("cost_model_missing")
+    if profile.get("base_cost_assumption") is not None and not isinstance(profile.get("base_cost_assumption"), dict):
+        raise ApprovedProfileError("base_cost_assumption_invalid")
     if mode in LIVE_COMPATIBLE_PROFILE_MODES or mode == "paper":
         policy = validate_production_calibration_policy(
             profile,
@@ -787,7 +798,7 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
                 "PAPER_FEE_RATE",
                 "PAPER_FEE_RATE_ESTIMATE",
                 "FEE_RATE",
-                default="0.0025",
+                default="0.0004",
             ),
             "slippage_bps": _value(
                 "STRATEGY_ENTRY_SLIPPAGE_BPS",
@@ -869,7 +880,63 @@ def diff_profile_to_runtime(
             continue
         if not _values_equal(expected, runtime_cost[key]):
             mismatches.append({"field": f"cost_model.{key}", "expected": expected, "actual": runtime_cost[key]})
+    cost_status = profile_runtime_cost_match_status(profile, runtime)
+    if cost_status["status"] == "FAIL":
+        mismatches.append(
+            {
+                "field": "runtime_profile_cost_mismatch",
+                "expected": cost_status.get("expected"),
+                "actual": cost_status.get("actual"),
+                "reason": cost_status.get("reason"),
+                "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+            }
+        )
     return tuple(mismatches)
+
+
+def profile_runtime_cost_match_status(profile: dict[str, Any] | None, runtime: dict[str, Any]) -> dict[str, object]:
+    if not isinstance(profile, dict):
+        return {"status": "WARN", "reason": "approved_profile_not_loaded"}
+    assumption = profile.get("base_cost_assumption")
+    if not isinstance(assumption, dict):
+        return {"status": "WARN", "reason": "approved_profile_base_cost_assumption_missing"}
+    if str(assumption.get("role") or "").strip() != "base" or assumption.get("promotable_as_base") is not True:
+        return {
+            "status": "FAIL",
+            "reason": "stress_cost_is_not_runtime_base_cost",
+            "expected": assumption,
+            "actual": runtime.get("cost_model"),
+            "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+        }
+    runtime_cost = runtime.get("cost_model") if isinstance(runtime.get("cost_model"), dict) else {}
+    expected = {
+        "fee_rate": assumption.get("fee_rate"),
+        "slippage_bps": assumption.get("slippage_bps"),
+    }
+    actual = {
+        "fee_rate": runtime_cost.get("fee_rate"),
+        "slippage_bps": runtime_cost.get("slippage_bps"),
+    }
+    if not _values_equal(expected["fee_rate"], actual["fee_rate"]) or not _values_equal(
+        expected["slippage_bps"],
+        actual["slippage_bps"],
+    ):
+        return {
+            "status": "FAIL",
+            "reason": "runtime_profile_cost_mismatch",
+            "expected": expected,
+            "actual": actual,
+            "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+        }
+    if runtime_cost.get("fee_authority_degraded") is True:
+        return {
+            "status": "WARN",
+            "reason": "runtime_fee_authority_degraded",
+            "expected": expected,
+            "actual": actual,
+            "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
+        }
+    return {"status": "PASS", "reason": "runtime_profile_cost_match", "expected": expected, "actual": actual}
 
 
 def _compare_profile_mode(mismatches: list[dict[str, object]], profile: dict[str, Any], runtime: dict[str, Any]) -> None:

@@ -239,19 +239,49 @@ def _candidate_with_required_metrics_contract(**overrides) -> dict[str, object]:
 
 
 def _production_candidate(**overrides):
+    base_cost_assumption = {
+        "label": "test_realistic_fee_0004_slippage_5bps",
+        "role": "base",
+        "fee_rate": 0.0004,
+        "fee_source": "operator_declared_bithumb_app_fee",
+        "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+        "slippage_bps": 5.0,
+        "slippage_source": "test_execution_calibration",
+        "promotable_as_base": True,
+        "source": "execution_model",
+    }
+    execution_model = {
+        "source": "execution_model",
+        "scenario_policy": "single_scenario",
+        "calibration_required": True,
+        "calibration_strictness": "fail",
+        "scenarios": [
+            {
+                "type": "fixed_bps",
+                "fee_rate": 0.0004,
+                "slippage_bps": 5.0,
+                "latency_ms": 0,
+                "partial_fill_rate": 0.0,
+                "order_failure_rate": 0.0,
+                "market_order_extra_cost_bps": 0.0,
+                "seed": None,
+                "source": "execution_model",
+                "scenario_policy": "single_scenario",
+                "scenario_role": "base",
+                "scenario_role_source": "manifest",
+                "cost_assumption": base_cost_assumption,
+                "model_params_hash": "sha256:model",
+            }
+        ],
+        "model_params_hash": "sha256:model",
+    }
     payload = _candidate(
         deployment_tier="paper_candidate",
+        cost_model={"fee_rate": 0.0004, "slippage_bps": 5.0},
+        base_cost_assumption=base_cost_assumption,
+        cost_assumption_contract=execution_model,
         execution_model_source="execution_model",
-        execution_model={
-            "type": "fixed_bps",
-            "fee_rate": 0.0,
-            "slippage_bps": 5.0,
-            "latency_ms": 0,
-            "partial_fill_rate": 0.0,
-            "order_failure_rate": 0.0,
-            "market_order_extra_cost_bps": 0.0,
-            "model_params_hash": "sha256:model",
-        },
+        execution_model=execution_model,
         execution_calibration_required=True,
         execution_calibration_strictness="fail",
         execution_calibration_gate={

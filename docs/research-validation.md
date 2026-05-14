@@ -6,6 +6,20 @@ Research manifests define hypotheses, data splits, parameter spaces, cost models
 Root `backtest.py` and any simple close-price SMA script are smoke backtests only. This is a smoke backtest only. It must not be used as evidence for strategy promotion, approved profiles, live readiness, or capital allocation. Official evidence comes from the `research-backtest` and `research-walk-forward` CLI paths, their managed artifacts, and explicit promotion/profile gates.
 Runtime env/profile values should be treated as verified outputs of that process, not mutable knobs to tune until a backtest looks good.
 
+## Cost Assumption Contract
+
+Production-bound manifests (`paper_candidate`, `live_dry_run_candidate`, and `small_live_candidate`) must define explicit execution scenarios with typed cost assumptions. At least one scenario must be a `base` cost assumption with a label, fee source, fee authority policy, slippage source, and `promotable_as_base=true`. Stress scenarios must be labeled as stress and are survival evidence only; they are not runtime base cost authority.
+
+Use the realistic account fee as the base assumption. For the current Bithumb app-fee operating reference, examples use `fee_rate=0.0004` and `slippage_bps=10` for the base scenario. A `fee_rate=0.0025` scenario is stress/conservative validation unless the operator explicitly documents that it is the actual account fee tier. Legacy top-level `cost_model` remains accepted for `research_only` compatibility, but it is marked as legacy cost provenance and cannot satisfy production-bound promotion requirements by itself.
+
+Approved profiles bind the promoted base cost assumption into the profile hash. Runtime verification compares that base fee/slippage against the effective runtime contract. On mismatch, run:
+
+```bash
+uv run bithumb-bot config-dump --masked
+```
+
+Then regenerate or select an approved profile whose base cost assumption matches the current runtime fee/slippage contract, or adjust the runtime env and rerun the dump.
+
 ## Lifecycle
 
 ```text
