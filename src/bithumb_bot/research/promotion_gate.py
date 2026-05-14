@@ -53,6 +53,8 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         "dataset_quality_report_hashes": candidate.get("dataset_quality_report_hashes"),
         "top_of_book_quality_summary": candidate.get("top_of_book_quality_summary"),
         "execution_timing_policy": candidate.get("execution_timing_policy"),
+        "execution_reality_contract": candidate.get("execution_reality_contract"),
+        "execution_contract_hash": candidate.get("execution_contract_hash"),
         "execution_reality_summary": candidate.get("execution_reality_summary"),
         "execution_event_summary": candidate.get("execution_event_summary"),
         "train_execution_event_summary": candidate.get("train_execution_event_summary"),
@@ -130,6 +132,7 @@ def evaluate_candidate_for_promotion(candidate: dict[str, Any]) -> tuple[bool, l
         reasons.append("candidate_profile_hash_missing")
     elif sha256_prefixed(build_candidate_profile(candidate)) != profile_hash:
         reasons.append("candidate_profile_hash_mismatch")
+    _extend_execution_contract_reasons(candidate, reasons)
     if not _candidate_has_regime_policy(candidate):
         reasons.append("regime_policy_missing")
     return not reasons, reasons
@@ -152,6 +155,7 @@ def validate_backtest_candidate_for_promotion(candidate: dict[str, Any] | None) 
         reasons.extend(["backtest_candidate_profile_hash_missing", "candidate_profile_hash_missing"])
     elif sha256_prefixed(build_candidate_profile(candidate)) != profile_hash:
         reasons.extend(["backtest_candidate_profile_hash_mismatch", "candidate_profile_hash_mismatch"])
+    _extend_execution_contract_reasons(candidate, reasons, prefix="backtest_")
     if not _candidate_has_regime_policy(candidate):
         reasons.extend(["backtest_regime_policy_missing", "regime_policy_missing"])
     _extend_final_holdout_reasons(candidate, reasons, prefix="backtest_")
@@ -296,6 +300,26 @@ def _extend_execution_reality_reasons(
             f"{prefix}execution_reality_level_below_required",
             "execution_reality_level_below_required",
         ])
+
+
+def _extend_execution_contract_reasons(
+    candidate: dict[str, Any],
+    reasons: list[str],
+    *,
+    prefix: str = "",
+) -> None:
+    contract = candidate.get("execution_reality_contract")
+    contract_hash = candidate.get("execution_contract_hash")
+    if not isinstance(contract, dict):
+        reasons.extend([f"{prefix}execution_reality_contract_missing", "execution_reality_contract_missing"])
+        return
+    from bithumb_bot.execution_reality_contract import contract_hash_matches, unsupported_capability_reasons
+
+    if not contract_hash_matches(contract, contract_hash):
+        reasons.extend([f"{prefix}execution_contract_hash_mismatch", "execution_contract_hash_mismatch"])
+    capability_reasons = unsupported_capability_reasons(contract)
+    reasons.extend([f"{prefix}{reason}" for reason in capability_reasons])
+    reasons.extend(capability_reasons)
 
 
 def _extend_execution_event_reasons(
@@ -548,6 +572,8 @@ def promote_candidate(
         "metrics_v2_summary": _promotion_metrics_v2_summary(candidate),
         "scenario_policy": candidate.get("scenario_policy"),
         "execution_timing_policy": candidate.get("execution_timing_policy"),
+        "execution_reality_contract": candidate.get("execution_reality_contract"),
+        "execution_contract_hash": candidate.get("execution_contract_hash"),
         "execution_reality_summary": candidate.get("execution_reality_summary"),
         "execution_event_summary": _candidate_execution_event_summary(candidate),
         "train_execution_event_summary": candidate.get("train_execution_event_summary"),

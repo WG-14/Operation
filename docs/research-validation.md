@@ -372,6 +372,14 @@ Top-of-book remains optional for `sma_with_filter`; candle-only runs still work 
 
 Top-of-book fields are metadata for current research execution evidence. Fill pricing still uses candle close as `reference_price` plus the configured fixed/stress bps model. Quote-aware execution pricing, spread gates, full depth, trade ticks, queue position, market impact, latency-aware quote replay, and intra-candle path reconstruction remain future work unless explicitly implemented and tested.
 
+## Execution Reality Contract
+
+Research, candidate profiles, promotion artifacts, approved profiles, and paper execution evidence carry an `execution_reality_contract` plus deterministic `execution_contract_hash`. The hash is content-based, canonical, and excludes runtime-only timestamps such as `generated_at`.
+
+The contract records the fill-reference policy, quote wait and missing-quote policy, required promotion reality level, top-of-book requirements, calibration binding, execution model assumptions for latency, partial fills, and order failure, and explicit unsupported capabilities. Top-of-book is classified as quote evidence only: `top_of_book_is_full_depth=false`, depth, trade ticks, queue position, market impact, and intra-candle path reconstruction remain unavailable unless a future patch implements real storage/API support and tests.
+
+Production-bound promotion/profile verification fails closed when the contract is missing, hash-mismatched, or requires unsupported execution capabilities. Profiles also compare their contract to the source promotion artifact, and profile/runtime comparison reports field-level execution contract mismatches when a runtime contract is supplied.
+
 The research CLI prints an operator-facing run summary derived from the report payload without mutating the persisted artifact. The summary includes candidate gate counts, top candidate fail reasons, walk-forward window counts, top window fail reasons, promotion eligibility, nearest failed candidate diagnostics, and a conservative next action.
 `nearest_failed_candidate_id` is diagnostic only and must not be used as a promotion candidate. `promotion_allowed=0` means do not run `research-promote-candidate`.
 

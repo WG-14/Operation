@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import settings
+from ..execution_reality_contract import build_execution_reality_contract
 from ..markets import canonical_market_with_raw
 from ..risk import evaluate_buy_guardrails
 from ..db_core import ensure_db, get_portfolio, init_portfolio
@@ -182,6 +183,61 @@ def _build_paper_execution_request(
         "requested_qty": round(float(trade_qty), 12),
         "reference_price": round(float(reference_price), 8),
     }
+    model_name = _paper_execution_model_name()
+    execution_reality_level = (
+        "paper_stress_top_of_book"
+        if model_name == "stress"
+        else "paper_immediate_top_of_book"
+    )
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="paper_top_of_book",
+        decision_guard_ms=0,
+        max_quote_wait_ms=0,
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="top_of_book_after_decision",
+        allow_same_candle_close_fill=False,
+        quote_source=(quote_context.quote_source if quote_context is not None else "unknown"),
+        quote_age_limit_ms=(quote_context.quote_age_ms if quote_context is not None else None),
+        top_of_book_required=True,
+        top_of_book_is_full_depth=False,
+        depth_required=False,
+        trade_tick_required=False,
+        queue_position_required=False,
+        intra_candle_path_available=False,
+        latency_model={
+            "type": model_name,
+            "latency_ms": int(getattr(settings, "PAPER_EXECUTION_LATENCY_MS", 0)) if model_name == "stress" else 0,
+        },
+        partial_fill_model={
+            "type": model_name,
+            "partial_fill_rate": (
+                float(getattr(settings, "PAPER_EXECUTION_PARTIAL_FILL_RATE", 0.0))
+                if model_name == "stress"
+                else 0.0
+            ),
+        },
+        order_failure_model={
+            "type": model_name,
+            "order_failure_rate": (
+                float(getattr(settings, "PAPER_EXECUTION_ORDER_FAILURE_RATE", 0.0))
+                if model_name == "stress"
+                else 0.0
+            ),
+        },
+        fee_source="paper_runtime_settings",
+        slippage_source="paper_runtime_settings",
+        calibration_required=False,
+        execution_reality_level=execution_reality_level,
+        extra={
+            "quote_evidence_available": quote_context is not None,
+            "depth_available": False,
+            "trade_ticks_available": False,
+            "queue_position_available": False,
+            "market_impact_model_available": False,
+            "intra_candle_path_required": False,
+            "market": market,
+        },
+    )
     return PaperExecutionRequest(
         signal_ts=int(ts),
         decision_ts=int(ts),
@@ -195,11 +251,8 @@ def _build_paper_execution_request(
         spread_bps=(float(quote_context.spread_bps) if quote_context is not None else None),
         quote_source=(quote_context.quote_source if quote_context is not None else "unknown"),
         quote_age_ms=(quote_context.quote_age_ms if quote_context is not None else None),
-        execution_reality_level=(
-            "paper_stress_top_of_book"
-            if _paper_execution_model_name() == "stress"
-            else "paper_immediate_top_of_book"
-        ),
+        execution_reality_level=execution_reality_level,
+        execution_reality_contract=execution_contract,
         base_seed=seed,
         seed_derivation_inputs=seed_inputs,
     )

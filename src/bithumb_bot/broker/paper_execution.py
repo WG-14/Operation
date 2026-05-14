@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..execution_reality_contract import build_execution_reality_contract
 from ..research.execution_model import ExecutionRequest, StressExecutionModel
 
 
@@ -21,6 +22,7 @@ class PaperExecutionRequest:
     quote_source: str | None = None
     quote_age_ms: int | None = None
     execution_reality_level: str = "paper_top_of_book"
+    execution_reality_contract: dict[str, Any] | None = None
     base_seed: int | None = None
     seed_derivation_inputs: dict[str, Any] | None = None
 
@@ -189,6 +191,33 @@ def _base_evidence(
     latency_ms: int,
     derived_seed_hash: str | None,
 ) -> dict[str, Any]:
+    contract = request.execution_reality_contract or build_execution_reality_contract(
+        fill_reference_policy="paper_top_of_book",
+        missing_quote_policy="fail",
+        quote_source=request.quote_source or "unknown",
+        quote_age_limit_ms=request.quote_age_ms,
+        top_of_book_required=True,
+        top_of_book_is_full_depth=False,
+        depth_required=False,
+        trade_tick_required=False,
+        queue_position_required=False,
+        intra_candle_path_available=False,
+        fee_source="paper_runtime_settings",
+        slippage_source="paper_runtime_settings",
+        calibration_required=False,
+        execution_reality_level=request.execution_reality_level,
+        latency_model={"type": model_name, "latency_ms": int(latency_ms)},
+        partial_fill_model={"type": model_name, "fill_status": fill_status},
+        order_failure_model={"type": model_name, "fill_status": fill_status},
+        extra={
+            "quote_evidence_available": request.best_bid is not None and request.best_ask is not None,
+            "depth_available": False,
+            "trade_ticks_available": False,
+            "queue_position_available": False,
+            "market_impact_model_available": False,
+            "intra_candle_path_required": False,
+        },
+    )
     return {
         "execution_model_name": model_name,
         "execution_model_version": model_version,
@@ -206,4 +235,6 @@ def _base_evidence(
         "quote_source": request.quote_source or "unknown",
         "quote_age_ms": request.quote_age_ms,
         "execution_reality_level": request.execution_reality_level,
+        "execution_reality_contract": contract,
+        "execution_contract_hash": contract["execution_contract_hash"],
     }

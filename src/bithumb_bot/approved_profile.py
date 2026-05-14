@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .paths import PathManager, PathPolicyError
+from .execution_reality_contract import (
+    contract_hash_matches,
+    execution_contract_mismatch_reasons,
+    unsupported_capability_reasons,
+)
 from .evidence_chain import validate_profile_transition_evidence
 from .decision_equivalence import compute_decision_equivalence_hash
 from .research.hashing import content_hash_payload, sha256_prefixed
@@ -286,6 +291,8 @@ def _candidate_like_from_promotion(payload: dict[str, Any]) -> dict[str, Any]:
         "execution_calibration_policy_source": profile.get("execution_calibration_policy_source"),
         "production_calibration_policy_result": profile.get("production_calibration_policy_result"),
         "production_calibration_policy_reasons": profile.get("production_calibration_policy_reasons"),
+        "execution_reality_contract": profile.get("execution_reality_contract"),
+        "execution_contract_hash": profile.get("execution_contract_hash"),
         "deployment_tier": profile.get("deployment_tier") or payload.get("deployment_tier"),
         "experiment_id": payload.get("strategy_profile_source_experiment") or profile.get("source_experiment"),
         "manifest_hash": payload.get("manifest_hash") or profile.get("manifest_hash"),
@@ -370,6 +377,8 @@ def build_approved_profile(
         "execution_calibration_policy_source": production_policy.policy_source,
         "execution_model": promotion_source.get("execution_model"),
         "execution_model_source": promotion_source.get("execution_model_source"),
+        "execution_reality_contract": promotion_source.get("execution_reality_contract"),
+        "execution_contract_hash": promotion_source.get("execution_contract_hash"),
         "execution_calibration_required": promotion_source.get("execution_calibration_required"),
         "execution_calibration_strictness": promotion_source.get("execution_calibration_strictness"),
         "execution_calibration_gate": promotion_source.get("execution_calibration_gate"),
@@ -469,6 +478,14 @@ def validate_approved_profile(profile: dict[str, Any]) -> dict[str, Any]:
             raise ApprovedProfileError(
                 "production_calibration_policy_failed:" + ",".join(policy.reasons)
             )
+    contract = profile.get("execution_reality_contract")
+    if not isinstance(contract, dict):
+        raise ApprovedProfileError("execution_reality_contract_missing")
+    if not contract_hash_matches(contract, profile.get("execution_contract_hash")):
+        raise ApprovedProfileError("execution_contract_hash_mismatch")
+    unsupported = unsupported_capability_reasons(contract)
+    if unsupported:
+        raise ApprovedProfileError("execution_contract_unsupported_capability:" + ",".join(unsupported))
     regime_policy = profile.get("regime_policy")
     if not isinstance(regime_policy, dict):
         raise ApprovedProfileError("regime_policy_missing")
@@ -514,6 +531,15 @@ def verify_profile_source_artifact(profile: dict[str, Any]) -> dict[str, Any]:
     for key in ("candidate_profile_hash", "manifest_hash", "dataset_content_hash", "strategy_name"):
         if not _values_equal(validated.get(key), promotion.get(key)):
             raise ApprovedProfileError(f"source_promotion_{key}_mismatch")
+    profile_contract = validated.get("execution_reality_contract")
+    promotion_profile = promotion.get("candidate_profile") if isinstance(promotion.get("candidate_profile"), dict) else {}
+    promotion_contract = promotion.get("execution_reality_contract") or promotion_profile.get("execution_reality_contract")
+    contract_mismatches = execution_contract_mismatch_reasons(
+        expected=promotion_contract if isinstance(promotion_contract, dict) else None,
+        observed=profile_contract if isinstance(profile_contract, dict) else None,
+    )
+    if contract_mismatches:
+        raise ApprovedProfileError("source_promotion_execution_contract_mismatch")
     if promotion.get("lineage_required"):
         if not str(validated.get("lineage_hash") or "").strip():
             raise ApprovedProfileError("lineage_hash_missing")
@@ -891,6 +917,13 @@ def diff_profile_to_runtime(
                 "operator_next_step": PROFILE_RUNTIME_COST_MISMATCH_ACTION,
             }
         )
+    runtime_contract = runtime.get("execution_reality_contract")
+    if isinstance(runtime_contract, dict):
+        for mismatch in execution_contract_mismatch_reasons(
+            expected=profile.get("execution_reality_contract"),
+            observed=runtime_contract,
+        ):
+            mismatches.append(mismatch)
     return tuple(mismatches)
 
 

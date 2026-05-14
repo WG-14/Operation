@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from bithumb_bot.paths import PathManager
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.backtest_engine import BacktestRun
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
@@ -233,6 +234,17 @@ def test_walk_forward_required_refuses_missing_evidence(tmp_path, monkeypatch) -
         },
         "walk_forward_required": True,
     }
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="warn",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        fee_source="test",
+        slippage_source="test",
+    )
+    candidate["execution_reality_contract"] = execution_contract
+    candidate["execution_contract_hash"] = execution_contract["execution_contract_hash"]
     candidate["candidate_profile_hash"] = "sha256:placeholder"
     candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
     report = {"experiment_id": "walk_unit", "candidates": [candidate]}

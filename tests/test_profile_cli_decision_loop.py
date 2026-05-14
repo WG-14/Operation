@@ -12,6 +12,7 @@ from bithumb_bot.decision_equivalence import (
     compare_decision_export_artifacts,
     load_decision_export_artifact,
 )
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.profile_cli import (
     _candidate_regime_policy_from_approved_profile,
     _validate_research_export_profile_binding,
@@ -271,6 +272,20 @@ def _write_golden_profile(tmp_path: Path, manifest_payload: dict[str, object], d
     selected_candidate_id = candidate_id(params, 0)
     execution_model = manifest.execution_model.as_dict()
     base_cost_assumption = execution_model["scenarios"][0]["cost_assumption"]
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source=base_cost_assumption.get("fee_source"),
+        slippage_source=base_cost_assumption.get("slippage_source"),
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+    )
     candidate = {
         "experiment_id": manifest.experiment_id,
         "manifest_hash": manifest.manifest_hash(),
@@ -308,6 +323,8 @@ def _write_golden_profile(tmp_path: Path, manifest_payload: dict[str, object], d
         },
         "execution_calibration_artifact_hash": "sha256:calibration",
         "execution_calibration_artifact_hashes": ["sha256:calibration"],
+        "execution_reality_contract": execution_contract,
+        "execution_contract_hash": execution_contract["execution_contract_hash"],
         "regime_classifier_version": "market_regime_v2",
         "allowed_live_regimes": ["downtrend_normal_vol_unknown", "downtrend_low_vol_unknown"],
         "blocked_live_regimes": [],

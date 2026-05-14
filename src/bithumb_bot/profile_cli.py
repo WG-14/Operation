@@ -539,6 +539,8 @@ def _validate_research_export_profile_binding(
         "execution_calibration_policy_source": profile_candidate.get("execution_calibration_policy_source"),
         "production_calibration_policy_result": profile_candidate.get("production_calibration_policy_result"),
         "production_calibration_policy_reasons": profile_candidate.get("production_calibration_policy_reasons"),
+        "execution_reality_contract": profile_candidate.get("execution_reality_contract"),
+        "execution_contract_hash": profile_candidate.get("execution_contract_hash"),
         "deployment_tier": profile_candidate.get("deployment_tier"),
         "experiment_id": source_promotion.get("strategy_profile_source_experiment"),
         "manifest_hash": manifest.manifest_hash(),  # type: ignore[attr-defined]

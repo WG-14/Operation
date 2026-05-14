@@ -7,6 +7,7 @@ import pytest
 
 from bithumb_bot.paths import PathManager
 from bithumb_bot import app as app_module
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research import cli as research_cli
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.lineage import build_research_lineage, compute_lineage_hash, reproduce_promotion
@@ -23,6 +24,20 @@ def _manager(tmp_path: Path, monkeypatch) -> PathManager:
 
 
 def _candidate(**overrides):
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="warn",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="test",
+        slippage_source="test",
+        calibration_required=False,
+        calibration_artifact_hash=None,
+    )
     payload = {
         "experiment_id": "promo_exp",
         "manifest_hash": "sha256:manifest",
@@ -43,6 +58,8 @@ def _candidate(**overrides):
             "allow_same_candle_close_fill": False,
             "source": "test",
         },
+        "execution_reality_contract": execution_contract,
+        "execution_contract_hash": execution_contract["execution_contract_hash"],
         "execution_reality_summary": {
             "signal_event_count": 4,
             "fillable_signal_event_count": 4,
@@ -145,7 +162,8 @@ def _candidate(**overrides):
         "walk_forward_required": False,
     }
     payload.update(overrides)
-    explicit_hash = payload.pop("candidate_profile_hash", None)
+    explicit_hash = overrides.get("candidate_profile_hash")
+    payload.pop("candidate_profile_hash", None)
     payload["candidate_profile_hash"] = explicit_hash or sha256_prefixed(build_candidate_profile(payload))
     return payload
 
@@ -324,8 +342,26 @@ def _production_candidate(**overrides):
         },
         production_calibration_policy_reasons=[],
     )
+    if "execution_reality_contract" not in overrides and "execution_contract_hash" not in overrides:
+        execution_contract = build_execution_reality_contract(
+            fill_reference_policy="next_candle_open",
+            missing_quote_policy="warn",
+            min_execution_reality_level_for_promotion="candle_next_open",
+            allow_same_candle_close_fill=False,
+            top_of_book_required=False,
+            latency_model={"type": "fixed_bps", "latency_ms": 0},
+            partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+            order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+            fee_source="operator_declared_bithumb_app_fee",
+            slippage_source="test_execution_calibration",
+            calibration_required=True,
+            calibration_artifact_hash="sha256:calibration",
+        )
+        payload["execution_reality_contract"] = execution_contract
+        payload["execution_contract_hash"] = execution_contract["execution_contract_hash"]
     payload.update(overrides)
-    explicit_hash = payload.pop("candidate_profile_hash", None)
+    explicit_hash = overrides.get("candidate_profile_hash")
+    payload.pop("candidate_profile_hash", None)
     payload["candidate_profile_hash"] = explicit_hash or sha256_prefixed(build_candidate_profile(payload))
     return payload
 

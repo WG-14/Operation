@@ -31,11 +31,26 @@ from bithumb_bot.evidence_chain import (
 from bithumb_bot.decision_equivalence import compare_decision_equivalence, compute_decision_equivalence_hash
 from bithumb_bot.profile_cli import cmd_profile_diff, cmd_profile_generate, cmd_profile_promote, cmd_profile_verify
 from bithumb_bot.paths import PathConfig, PathManager, PathPolicyError
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.promotion_gate import build_candidate_profile
 from bithumb_bot.storage_io import write_json_atomic
 
 
 def _candidate() -> dict[str, object]:
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="warn",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="operator_declared_test_fee",
+        slippage_source="test_calibration",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+    )
     payload = {
         "experiment_id": "exp1",
         "manifest_hash": "sha256:manifest",
@@ -175,6 +190,8 @@ def _candidate() -> dict[str, object]:
             "operator_next_step": "none",
         },
         "production_calibration_policy_reasons": [],
+        "execution_reality_contract": execution_contract,
+        "execution_contract_hash": execution_contract["execution_contract_hash"],
         "deployment_tier": "paper_candidate",
         "regime_classifier_version": "market_regime_v2",
         "allowed_live_regimes": ["uptrend_normal_vol_unknown"],

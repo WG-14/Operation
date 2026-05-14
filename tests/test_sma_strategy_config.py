@@ -8,6 +8,7 @@ import pytest
 
 from bithumb_bot.approved_profile import build_approved_profile
 from bithumb_bot.config import settings
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.promotion_gate import build_candidate_profile
 from bithumb_bot.strategy.sma import SmaCrossStrategy, create_sma_strategy
@@ -126,6 +127,20 @@ def _write_paper_profile(tmp_path: Path, *, sma_short: int) -> Path:
         ],
         "model_params_hash": "sha256:model",
     }
+    execution_contract = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="operator_declared_test_fee",
+        slippage_source="test_calibration",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+    )
     candidate = {
         "experiment_id": "paper-exp",
         "manifest_hash": "sha256:manifest",
@@ -166,6 +181,8 @@ def _write_paper_profile(tmp_path: Path, *, sma_short: int) -> Path:
         },
         "execution_calibration_artifact_hash": "sha256:calibration",
         "execution_calibration_artifact_hashes": ["sha256:calibration"],
+        "execution_reality_contract": execution_contract,
+        "execution_contract_hash": execution_contract["execution_contract_hash"],
         "regime_classifier_version": "market_regime_v2",
         "allowed_live_regimes": ["uptrend_normal_vol_unknown"],
         "blocked_live_regimes": ["downtrend_normal_vol_unknown"],

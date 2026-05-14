@@ -154,6 +154,8 @@ def test_stress_failure_records_failed_order_without_fill_or_trade(tmp_path: Pat
         assert dedup_count == 0
         assert evidence["fill_status"] == "failed"
         assert evidence["filled_qty"] == pytest.approx(0.0)
+        assert evidence["execution_contract_hash"].startswith("sha256:")
+        assert evidence["execution_reality_contract"]["execution_contract_hash"] == evidence["execution_contract_hash"]
     finally:
         _restore(old)
 
@@ -193,6 +195,7 @@ def test_stress_partial_fill_keeps_order_open_and_dedup_claimed(tmp_path: Path, 
         assert dedup["order_status"] == "PARTIAL"
         assert evidence["fill_status"] == "partial"
         assert evidence["remaining_qty"] > 0.0
+        assert evidence["execution_contract_hash"].startswith("sha256:")
     finally:
         _restore(old)
 
@@ -222,6 +225,7 @@ def test_stress_execution_is_deterministic_across_isolated_dbs(tmp_path: Path, m
                     "remaining_qty": evidence["remaining_qty"],
                     "execution_model_params_hash": evidence["execution_model_params_hash"],
                     "derived_seed_hash": evidence["derived_seed_hash"],
+                    "execution_contract_hash": evidence["execution_contract_hash"],
                 }
             )
     finally:

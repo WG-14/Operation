@@ -7,6 +7,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Callable
 
+from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.execution_quality import ExecutionQualityThresholds
 from bithumb_bot.paths import PathManager
 from bithumb_bot.market_regime import MARKET_REGIME_VERSION, evaluate_regime_acceptance_gate
@@ -585,6 +586,12 @@ def _evaluate_candidates(
                 }
             )
             execution_model_payload = _scenario_payload(scenario)
+            execution_contract = _execution_reality_contract(
+                manifest=manifest,
+                scenario=scenario,
+                calibration_hash=calibration_gate.get("artifact_hash") if isinstance(calibration_gate, dict) else None,
+                top_of_book_available=int(top_of_book_quality_summary.get("joined_quote_count") or 0) > 0,
+            )
             scenario_result = {
                 "scenario_id": scenario_id,
                 "scenario_index": scenario_index,
@@ -598,6 +605,8 @@ def _evaluate_candidates(
                 "cost_assumption": cost_assumption,
                 "execution_calibration_gate": calibration_gate,
                 "execution_timing_policy": manifest.execution_timing.as_dict(),
+                "execution_reality_contract": execution_contract,
+                "execution_contract_hash": execution_contract["execution_contract_hash"],
                 "execution_reality_summary": execution_reality_summary,
                 "train_execution_event_summary": base.get("train_execution_event_summary") or {},
                 "validation_execution_event_summary": base.get("validation_execution_event_summary") or {},
@@ -654,6 +663,12 @@ def _evaluate_candidates(
                     },
                     "top_of_book_quality_summary": top_of_book_quality_summary,
                     "execution_timing_policy": manifest.execution_timing.as_dict(),
+                    "execution_reality_contract": _execution_reality_contract(
+                        manifest=manifest,
+                        scenario=scenario,
+                        calibration_hash=calibration_gate.get("artifact_hash") if isinstance(calibration_gate, dict) else None,
+                        top_of_book_available=int(top_of_book_quality_summary.get("joined_quote_count") or 0) > 0,
+                    ),
                     "strategy_name": manifest.strategy_name,
                     "parameter_candidate_id": base["candidate_id"],
                     "parameter_values": params,
@@ -722,6 +737,8 @@ def _evaluate_candidates(
                 "walk_forward_gate_result": primary.get("walk_forward_gate_result"),
                 "parameter_stability": primary.get("parameter_stability"),
                 "execution_timing_policy": manifest.execution_timing.as_dict(),
+                "execution_reality_contract": primary.get("execution_reality_contract"),
+                "execution_contract_hash": primary.get("execution_contract_hash"),
                 "execution_reality_summary": primary.get("execution_reality_summary"),
                 "execution_event_summary": primary.get("execution_event_summary"),
                 "train_execution_event_summary": primary.get("train_execution_event_summary"),
@@ -1562,6 +1579,12 @@ def _report_payload(
         if isinstance(execution_calibration, dict) and execution_calibration.get("content_hash")
         else None
     )
+    report_execution_contract = _execution_reality_contract(
+        manifest=manifest,
+        scenario=_base_report_scenario(manifest),
+        calibration_hash=calibration_hash,
+        top_of_book_available=top_of_book_joined_count > 0,
+    )
     parameter_grid_size = 1
     for values in manifest.parameter_space.values():
         parameter_grid_size *= len(values)
@@ -1646,6 +1669,8 @@ def _report_payload(
         },
         "top_of_book_quality_summary": top_of_book_quality_summary,
         "execution_timing_policy": manifest.execution_timing.as_dict(),
+        "execution_reality_contract": report_execution_contract,
+        "execution_contract_hash": report_execution_contract["execution_contract_hash"],
         "execution_reality_level": _report_execution_reality_level(candidates),
         "execution_reality_gate_status": _report_execution_reality_gate_status(candidates),
         "execution_reality_gate_reasons": _report_execution_reality_gate_reasons(candidates),
@@ -1967,6 +1992,83 @@ def _report_execution_event_summary(candidates: list[dict[str, Any]]) -> dict[st
                 )
             }
     return None
+
+
+def _base_report_scenario(manifest: ExperimentManifest) -> ExecutionScenario:
+    for scenario in manifest.execution_model.scenarios:
+        if scenario.scenario_role == "base":
+            return scenario
+    return manifest.execution_model.scenarios[0]
+
+
+def _execution_reality_contract(
+    *,
+    manifest: ExperimentManifest,
+    scenario: ExecutionScenario,
+    calibration_hash: object | None,
+    top_of_book_available: bool,
+) -> dict[str, Any]:
+    top = manifest.dataset.top_of_book
+    cost = scenario.cost_assumption.as_dict() if scenario.cost_assumption is not None else {}
+    latency_model: dict[str, Any] = {
+        "type": scenario.type,
+        "latency_ms": int(scenario.latency_ms),
+    }
+    partial_fill_model: dict[str, Any] = {
+        "type": scenario.type,
+        "partial_fill_rate": float(scenario.partial_fill_rate),
+    }
+    order_failure_model: dict[str, Any] = {
+        "type": scenario.type,
+        "order_failure_rate": float(scenario.order_failure_rate),
+    }
+    limitations = [
+        "top_of_book_is_quote_evidence_not_liquidity_depth",
+        "full_orderbook_depth_unavailable",
+        "queue_position_unavailable",
+        "trade_ticks_unavailable",
+        "market_impact_model_unavailable",
+        "intra_candle_path_reconstruction_unavailable",
+    ]
+    if top is None:
+        limitations.append("top_of_book_not_requested")
+    return build_execution_reality_contract(
+        fill_reference_policy=manifest.execution_timing.fill_reference_policy,
+        decision_guard_ms=manifest.execution_timing.decision_guard_ms,
+        max_quote_wait_ms=manifest.execution_timing.max_quote_wait_ms,
+        missing_quote_policy=manifest.execution_timing.missing_quote_policy,
+        min_execution_reality_level_for_promotion=manifest.execution_timing.min_execution_reality_level_for_promotion,
+        allow_same_candle_close_fill=manifest.execution_timing.allow_same_candle_close_fill,
+        quote_source=(top.quote_source if top is not None else None),
+        quote_age_limit_ms=(top.join_tolerance_ms if top is not None else manifest.execution_timing.max_quote_wait_ms),
+        top_of_book_required=bool(top.required) if top is not None else False,
+        top_of_book_is_full_depth=False,
+        depth_required=manifest.execution_timing.depth_required,
+        trade_tick_required=manifest.execution_timing.trade_tick_required,
+        queue_position_required=manifest.execution_timing.queue_position_required,
+        intra_candle_path_available=False,
+        latency_model=latency_model,
+        partial_fill_model=partial_fill_model,
+        order_failure_model=order_failure_model,
+        fee_source=cost.get("fee_source"),
+        slippage_source=cost.get("slippage_source"),
+        calibration_required=manifest.execution_model.calibration_required,
+        calibration_artifact_hash=(
+            str(calibration_hash) if isinstance(calibration_hash, str) and calibration_hash.startswith("sha256:") else None
+        ),
+        limitations=limitations,
+        extra={
+            "quote_evidence_available": bool(top_of_book_available),
+            "depth_available": False,
+            "trade_ticks_available": False,
+            "queue_position_available": False,
+            "market_impact_model_available": False,
+            "intra_candle_path_required": manifest.execution_timing.intra_candle_path_required,
+            "deployment_tier": manifest.deployment_tier,
+            "scenario_role": scenario.scenario_role,
+            "scenario_type": scenario.type,
+        },
+    )
 
 
 def _policy_intra_candle_limitation(fill_reference_policy: str) -> str:

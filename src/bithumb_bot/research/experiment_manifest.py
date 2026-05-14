@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from bithumb_bot.execution_reality_contract import unsupported_capability_reasons
 from bithumb_bot.market_regime import RegimeAcceptanceGate
 
 from .deployment_policy import DEPLOYMENT_TIERS, is_production_bound_target, normalize_deployment_tier
@@ -200,6 +201,10 @@ class ExecutionTimingPolicy:
     missing_quote_policy: str = "warn"
     allow_same_candle_close_fill: bool = True
     min_execution_reality_level_for_promotion: str | None = None
+    depth_required: bool = False
+    trade_tick_required: bool = False
+    queue_position_required: bool = False
+    intra_candle_path_required: bool = False
     source: str = "legacy_default"
 
     def as_dict(self) -> dict[str, object]:
@@ -216,6 +221,10 @@ class ExecutionTimingPolicy:
         }
         if self.min_execution_reality_level_for_promotion is not None:
             payload["min_execution_reality_level_for_promotion"] = self.min_execution_reality_level_for_promotion
+        payload["depth_required"] = self.depth_required
+        payload["trade_tick_required"] = self.trade_tick_required
+        payload["queue_position_required"] = self.queue_position_required
+        payload["intra_candle_path_required"] = self.intra_candle_path_required
         return payload
 
 
@@ -417,6 +426,11 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
     research_run = _parse_research_run(payload.get("research_run"))
     if acceptance_gate.walk_forward_required and walk_forward is None:
         raise ManifestValidationError("walk_forward is required when acceptance_gate.walk_forward_required=true")
+    _validate_execution_reality_manifest_policy(
+        deployment_tier=deployment_tier,
+        dataset=dataset,
+        execution_timing=execution_timing,
+    )
 
     _validate_split_order(dataset.split)
     cost_policy_reasons = production_cost_assumption_policy_reasons(
@@ -946,6 +960,10 @@ def _parse_execution_timing(value: Any) -> ExecutionTimingPolicy:
         "missing_quote_policy",
         "allow_same_candle_close_fill",
         "min_execution_reality_level_for_promotion",
+        "depth_required",
+        "trade_tick_required",
+        "queue_position_required",
+        "intra_candle_path_required",
     }
     unknown = sorted(set(value) - allowed_fields)
     if unknown:
@@ -985,6 +1003,24 @@ def _parse_execution_timing(value: Any) -> ExecutionTimingPolicy:
         "latency_adjusted_top_of_book",
     }:
         raise ManifestValidationError("execution_timing.min_execution_reality_level_for_promotion is unsupported")
+    depth_required = bool(value.get("depth_required", False))
+    trade_tick_required = bool(value.get("trade_tick_required", False))
+    queue_position_required = bool(value.get("queue_position_required", False))
+    intra_candle_path_required = bool(value.get("intra_candle_path_required", False))
+    unsupported = unsupported_capability_reasons(
+        {
+            "depth_required": depth_required,
+            "trade_tick_required": trade_tick_required,
+            "queue_position_required": queue_position_required,
+            "intra_candle_path_required": intra_candle_path_required,
+            "depth_available": False,
+            "trade_ticks_available": False,
+            "queue_position_available": False,
+            "intra_candle_path_available": False,
+        }
+    )
+    if unsupported:
+        raise ManifestValidationError(",".join(unsupported))
     return ExecutionTimingPolicy(
         signal_basis=signal_basis,
         decision_time=decision_time,
@@ -995,8 +1031,52 @@ def _parse_execution_timing(value: Any) -> ExecutionTimingPolicy:
         missing_quote_policy=missing_quote_policy,
         allow_same_candle_close_fill=allow_same,
         min_execution_reality_level_for_promotion=min_level,
+        depth_required=depth_required,
+        trade_tick_required=trade_tick_required,
+        queue_position_required=queue_position_required,
+        intra_candle_path_required=intra_candle_path_required,
         source="manifest",
     )
+
+
+def _validate_execution_reality_manifest_policy(
+    *,
+    deployment_tier: str,
+    dataset: DatasetSpec,
+    execution_timing: ExecutionTimingPolicy,
+) -> None:
+    if not is_production_bound_target(deployment_tier):
+        return
+    if execution_timing.source == "legacy_default":
+        return
+    reasons: list[str] = []
+    if execution_timing.fill_reference_policy == "candle_close_legacy":
+        reasons.append("production_execution_reference_price_candle_close_not_promotable")
+    min_level = execution_timing.min_execution_reality_level_for_promotion
+    if min_level is None:
+        reasons.append("production_min_execution_reality_level_required")
+    elif min_level == "candle_close_optimistic":
+        reasons.append("production_execution_reality_level_below_required")
+    if execution_timing.allow_same_candle_close_fill:
+        reasons.append("production_same_candle_close_fill_not_allowed")
+    if execution_timing.fill_reference_policy in {"first_orderbook_after_decision", "latency_adjusted_orderbook"}:
+        top = dataset.top_of_book
+        if top is None:
+            reasons.append("production_top_of_book_required")
+        else:
+            if not top.required:
+                reasons.append("production_top_of_book_required")
+            if top.missing_policy != "fail":
+                reasons.append("production_missing_quote_policy_must_fail")
+            if float(top.min_coverage_pct) < 100.0:
+                reasons.append("production_top_of_book_min_coverage_must_be_100")
+    if execution_timing.missing_quote_policy != "fail" and execution_timing.fill_reference_policy in {
+        "first_orderbook_after_decision",
+        "latency_adjusted_orderbook",
+    }:
+        reasons.append("production_missing_quote_policy_must_fail")
+    if reasons:
+        raise ManifestValidationError(",".join(sorted(set(reasons))))
 
 
 def _optional_scenario_role(value: Any) -> str | None:
