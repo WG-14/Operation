@@ -7,7 +7,7 @@ from bithumb_bot.research.experiment_manifest import ManifestValidationError, pa
 
 
 def _manifest(*, deployment_tier: str = "paper_candidate") -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "experiment_id": "cost_contract_test",
         "hypothesis": "Cost assumptions are explicit.",
         "strategy_name": "sma_with_filter",
@@ -67,6 +67,13 @@ def _manifest(*, deployment_tier: str = "paper_candidate") -> dict[str, object]:
             },
         },
     }
+    if deployment_tier != "research_only":
+        payload["execution_timing"] = {
+            "fill_reference_policy": "next_candle_open",
+            "allow_same_candle_close_fill": False,
+            "min_execution_reality_level_for_promotion": "candle_next_open",
+        }
+    return payload
 
 
 def _base_scenario() -> dict[str, object]:

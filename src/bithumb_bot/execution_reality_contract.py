@@ -30,6 +30,87 @@ REALITY_ORDER = {
 }
 
 
+PRODUCTION_EXECUTION_TIMING_REQUIRED_FIELDS = (
+    "fill_reference_policy",
+    "allow_same_candle_close_fill",
+    "min_execution_reality_level_for_promotion",
+)
+
+
+def evaluate_execution_reality_policy(
+    *,
+    production_bound: bool,
+    execution_timing: Any,
+    execution_timing_declared: bool,
+    execution_timing_declared_fields: set[str] | frozenset[str] | None = None,
+    dataset_top_of_book: Any | None = None,
+    context: str = "manifest",
+) -> dict[str, Any]:
+    """Evaluate execution timing invariants at a production trust boundary."""
+    declared_fields = set(execution_timing_declared_fields or set())
+    observed_fields = {
+        field: _field_value(execution_timing, field)
+        for field in (
+            "fill_reference_policy",
+            "missing_quote_policy",
+            "allow_same_candle_close_fill",
+            "min_execution_reality_level_for_promotion",
+            "source",
+        )
+    }
+    result: dict[str, Any] = {
+        "status": "PASS",
+        "context": context,
+        "production_bound": bool(production_bound),
+        "reasons": [],
+        "required_fields": list(PRODUCTION_EXECUTION_TIMING_REQUIRED_FIELDS),
+        "declared_fields": sorted(declared_fields),
+        "observed_fields": observed_fields,
+    }
+    if not production_bound:
+        return result
+
+    reasons: list[str] = []
+    missing_required_fields = [
+        field
+        for field in PRODUCTION_EXECUTION_TIMING_REQUIRED_FIELDS
+        if field not in declared_fields
+    ]
+    if not execution_timing_declared or missing_required_fields:
+        reasons.append("production_execution_timing_required")
+    if _field_value(execution_timing, "source") == "legacy_default":
+        reasons.append("production_legacy_execution_timing_not_promotable")
+
+    fill_policy = str(_field_value(execution_timing, "fill_reference_policy") or "")
+    min_level = _field_value(execution_timing, "min_execution_reality_level_for_promotion")
+    if fill_policy == "candle_close_legacy":
+        reasons.append("production_execution_reference_price_candle_close_not_promotable")
+    if min_level is None:
+        reasons.append("production_min_execution_reality_level_required")
+    elif min_level == "candle_close_optimistic":
+        reasons.append("production_execution_reality_level_below_required")
+    if bool(_field_value(execution_timing, "allow_same_candle_close_fill")):
+        reasons.append("production_same_candle_close_fill_not_allowed")
+
+    if fill_policy in {"first_orderbook_after_decision", "latency_adjusted_orderbook"}:
+        top = dataset_top_of_book
+        if top is None or not bool(_field_value(top, "required")):
+            reasons.append("production_top_of_book_required")
+        if top is not None:
+            if _field_value(top, "missing_policy") != "fail":
+                reasons.append("production_missing_quote_policy_must_fail")
+            if float(_field_value(top, "min_coverage_pct") or 0.0) < 100.0:
+                reasons.append("production_top_of_book_min_coverage_must_be_100")
+        if _field_value(execution_timing, "missing_quote_policy") != "fail":
+            reasons.append("production_missing_quote_policy_must_fail")
+
+    reasons = sorted(set(reasons))
+    result["reasons"] = reasons
+    if reasons:
+        result["status"] = "FAIL"
+    return result
+
+
 def execution_contract_hash(contract: dict[str, Any]) -> str:
     return execution_condition_contract_hash(contract)
 
@@ -198,6 +279,12 @@ def _strip_runtime_only(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_strip_runtime_only(item) for item in value)
     return value
+
+
+def _field_value(value: Any, field: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(field)
+    return getattr(value, field, None)
 
 
 def _level_for_fill_reference_policy(fill_reference_policy: str) -> str:

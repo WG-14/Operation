@@ -623,6 +623,14 @@ def _write_manifest(path: Path, *, calibration_required: bool = False, calibrati
     )
 
 
+def _safe_production_execution_timing() -> dict[str, object]:
+    return {
+        "fill_reference_policy": "next_candle_open",
+        "allow_same_candle_close_fill": False,
+        "min_execution_reality_level_for_promotion": "candle_next_open",
+    }
+
+
 def _insert_day_candles(db_path: str, day_start_ts: int) -> None:
     conn = ensure_db(db_path)
     try:
@@ -897,6 +905,7 @@ def test_required_top_of_book_zero_rows_fails_without_per_candle_quote_loader(
     _write_manifest(manifest_path, calibration_required=True)
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw["deployment_tier"] = "paper_candidate"
+    raw["execution_timing"] = _safe_production_execution_timing()
     raw["dataset"]["top_of_book"] = {
         "source": "sqlite_orderbook_top_snapshots",
         "required": True,
@@ -1561,6 +1570,7 @@ def test_research_readiness_fail_closed_reports_separate_production_gate_reasons
     _write_manifest(manifest_path, calibration_required=True)
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw["deployment_tier"] = "paper_candidate"
+    raw["execution_timing"] = _safe_production_execution_timing()
     raw["dataset"]["top_of_book"] = {
         "source": "sqlite_orderbook_top_snapshots",
         "required": True,
@@ -1610,6 +1620,7 @@ def test_diagnostic_only_policy_is_report_metadata_not_gate_relaxation(
     _write_manifest(manifest_path)
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw["deployment_tier"] = "paper_candidate"
+    raw["execution_timing"] = _safe_production_execution_timing()
     raw["dataset_quality_policy"] = {
         "dense_candles_required": False,
         "missing_candle_policy": "diagnostic_only",

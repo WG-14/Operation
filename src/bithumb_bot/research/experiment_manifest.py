@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from bithumb_bot.execution_reality_contract import unsupported_capability_reasons
+from bithumb_bot.execution_reality_contract import (
+    evaluate_execution_reality_policy,
+    unsupported_capability_reasons,
+)
 from bithumb_bot.market_regime import RegimeAcceptanceGate
 
 from .deployment_policy import DEPLOYMENT_TIERS, is_production_bound_target, normalize_deployment_tier
@@ -478,7 +481,8 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
         raise ManifestValidationError("manifest requires cost_model or execution_model")
     cost_model = _parse_cost_model(payload.get("cost_model"))
     execution_model = _parse_execution_model(payload.get("execution_model"), cost_model)
-    execution_timing = _parse_execution_timing(payload.get("execution_timing"))
+    execution_timing_payload = payload.get("execution_timing")
+    execution_timing = _parse_execution_timing(execution_timing_payload)
     _parse_dataset_quality_policy(payload.get("dataset_quality_policy"))
     deployment_tier = _parse_deployment_tier(payload.get("deployment_tier") or payload.get("promotion_target"))
     acceptance_gate = _parse_acceptance_gate(_required_dict(payload, "acceptance_gate"))
@@ -496,6 +500,12 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
         deployment_tier=deployment_tier,
         dataset=dataset,
         execution_timing=execution_timing,
+        execution_timing_declared="execution_timing" in payload and execution_timing_payload is not None,
+        execution_timing_declared_fields=(
+            set(execution_timing_payload)
+            if isinstance(execution_timing_payload, dict)
+            else set()
+        ),
     )
 
     _validate_split_order(dataset.split)
@@ -654,8 +664,6 @@ def _parse_top_of_book_dataset(value: Any) -> TopOfBookDatasetSpec | None:
     if missing_policy not in {"warn", "fail"}:
         raise ManifestValidationError("dataset.top_of_book.missing_policy must be warn or fail")
     required = bool(value.get("required", False))
-    if required and missing_policy != "fail":
-        missing_policy = "fail"
     quote_source = value.get("quote_source")
     parsed_quote_source = None
     if quote_source is not None:
@@ -1111,39 +1119,20 @@ def _validate_execution_reality_manifest_policy(
     deployment_tier: str,
     dataset: DatasetSpec,
     execution_timing: ExecutionTimingPolicy,
+    execution_timing_declared: bool,
+    execution_timing_declared_fields: set[str],
 ) -> None:
-    if not is_production_bound_target(deployment_tier):
-        return
-    if execution_timing.source == "legacy_default":
-        return
-    reasons: list[str] = []
-    if execution_timing.fill_reference_policy == "candle_close_legacy":
-        reasons.append("production_execution_reference_price_candle_close_not_promotable")
-    min_level = execution_timing.min_execution_reality_level_for_promotion
-    if min_level is None:
-        reasons.append("production_min_execution_reality_level_required")
-    elif min_level == "candle_close_optimistic":
-        reasons.append("production_execution_reality_level_below_required")
-    if execution_timing.allow_same_candle_close_fill:
-        reasons.append("production_same_candle_close_fill_not_allowed")
-    if execution_timing.fill_reference_policy in {"first_orderbook_after_decision", "latency_adjusted_orderbook"}:
-        top = dataset.top_of_book
-        if top is None:
-            reasons.append("production_top_of_book_required")
-        else:
-            if not top.required:
-                reasons.append("production_top_of_book_required")
-            if top.missing_policy != "fail":
-                reasons.append("production_missing_quote_policy_must_fail")
-            if float(top.min_coverage_pct) < 100.0:
-                reasons.append("production_top_of_book_min_coverage_must_be_100")
-    if execution_timing.missing_quote_policy != "fail" and execution_timing.fill_reference_policy in {
-        "first_orderbook_after_decision",
-        "latency_adjusted_orderbook",
-    }:
-        reasons.append("production_missing_quote_policy_must_fail")
+    evaluation = evaluate_execution_reality_policy(
+        production_bound=is_production_bound_target(deployment_tier),
+        execution_timing=execution_timing,
+        execution_timing_declared=execution_timing_declared,
+        execution_timing_declared_fields=execution_timing_declared_fields,
+        dataset_top_of_book=dataset.top_of_book,
+        context="manifest",
+    )
+    reasons = [str(reason) for reason in evaluation.get("reasons") or []]
     if reasons:
-        raise ManifestValidationError(",".join(sorted(set(reasons))))
+        raise ManifestValidationError(",".join(reasons))
 
 
 def _optional_scenario_role(value: Any) -> str | None:

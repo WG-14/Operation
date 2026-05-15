@@ -113,6 +113,49 @@ def _statistical_validation() -> dict[str, object]:
     }
 
 
+def _production_bound_manifest_payload(**overrides: object) -> dict[str, object]:
+    payload = _manifest_payload()
+    payload.update(
+        {
+            "deployment_tier": "paper_candidate",
+            "statistical_validation": _statistical_validation(),
+            "execution_model": {
+                "type": "fixed_bps",
+                "scenario_role": "base",
+                "label": "operator_declared_base_cost",
+                "fee_rate": 0.0004,
+                "fee_source": "operator_declared_bithumb_app_fee",
+                "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+                "slippage_bps": 5.0,
+                "slippage_source": "execution_calibration_sample",
+                "promotable_as_base": True,
+                "calibration_required": True,
+                "calibration_strictness": "fail",
+            },
+        }
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _production_safe_execution_timing(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "fill_reference_policy": "next_candle_open",
+        "allow_same_candle_close_fill": False,
+        "min_execution_reality_level_for_promotion": "candle_next_open",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _assert_manifest_reasons(payload: dict[str, object], *expected: str) -> None:
+    with pytest.raises(ManifestValidationError) as exc:
+        parse_manifest(payload)
+    message = str(exc.value)
+    for reason in expected:
+        assert reason in message
+
+
 def test_research_only_sma_candle_only_manifest_remains_allowed_but_limited() -> None:
     manifest = parse_manifest(_manifest_payload())
 
@@ -121,10 +164,94 @@ def test_research_only_sma_candle_only_manifest_remains_allowed_but_limited() ->
     assert manifest.execution_timing.fill_reference_policy == "candle_close_legacy"
 
 
+def test_production_bound_manifest_without_execution_timing_fails_closed() -> None:
+    payload = _production_bound_manifest_payload()
+
+    _assert_manifest_reasons(
+        payload,
+        "production_execution_timing_required",
+        "production_legacy_execution_timing_not_promotable",
+        "production_execution_reference_price_candle_close_not_promotable",
+        "production_same_candle_close_fill_not_allowed",
+        "production_min_execution_reality_level_required",
+    )
+
+
+def test_production_bound_manifest_empty_execution_timing_fails_closed() -> None:
+    payload = _production_bound_manifest_payload(execution_timing={})
+
+    _assert_manifest_reasons(
+        payload,
+        "production_execution_timing_required",
+        "production_min_execution_reality_level_required",
+    )
+
+
+def test_production_bound_manifest_explicit_candle_close_legacy_fails_closed() -> None:
+    payload = _production_bound_manifest_payload(
+        execution_timing={
+            "fill_reference_policy": "candle_close_legacy",
+            "allow_same_candle_close_fill": True,
+            "min_execution_reality_level_for_promotion": "candle_close_optimistic",
+        }
+    )
+
+    _assert_manifest_reasons(
+        payload,
+        "production_execution_reference_price_candle_close_not_promotable",
+        "production_same_candle_close_fill_not_allowed",
+        "production_execution_reality_level_below_required",
+    )
+
+
+def test_production_bound_manifest_same_candle_close_fill_fails_closed() -> None:
+    payload = _production_bound_manifest_payload(
+        execution_timing=_production_safe_execution_timing(allow_same_candle_close_fill=True)
+    )
+
+    _assert_manifest_reasons(payload, "production_same_candle_close_fill_not_allowed")
+
+
+def test_production_bound_manifest_missing_min_execution_reality_level_fails_closed() -> None:
+    payload = _production_bound_manifest_payload(
+        execution_timing={
+            "fill_reference_policy": "next_candle_open",
+            "allow_same_candle_close_fill": False,
+        }
+    )
+
+    _assert_manifest_reasons(
+        payload,
+        "production_execution_timing_required",
+        "production_min_execution_reality_level_required",
+    )
+
+
+def test_research_only_manifest_without_execution_timing_keeps_legacy_compatibility() -> None:
+    manifest = parse_manifest(_manifest_payload())
+
+    assert manifest.deployment_tier == "research_only"
+    assert manifest.execution_timing.source == "legacy_default"
+    assert manifest.execution_timing.fill_reference_policy == "candle_close_legacy"
+    assert manifest.execution_timing.allow_same_candle_close_fill is True
+    assert manifest.execution_timing.min_execution_reality_level_for_promotion is None
+
+
+def test_production_bound_next_candle_open_execution_timing_passes_manifest_policy() -> None:
+    manifest = parse_manifest(
+        _production_bound_manifest_payload(
+            execution_timing=_production_safe_execution_timing()
+        )
+    )
+
+    assert manifest.deployment_tier == "paper_candidate"
+    assert manifest.execution_timing.fill_reference_policy == "next_candle_open"
+    assert manifest.execution_timing.allow_same_candle_close_fill is False
+    assert manifest.execution_timing.min_execution_reality_level_for_promotion == "candle_next_open"
+
+
 def test_production_bound_candle_close_manifest_fails_closed() -> None:
-    payload = _manifest_payload()
-    payload["deployment_tier"] = "paper_candidate"
-    payload["statistical_validation"] = _statistical_validation()
+    payload = _production_bound_manifest_payload()
     payload["execution_timing"] = {
         "fill_reference_policy": "candle_close_legacy",
         "allow_same_candle_close_fill": True,
@@ -138,9 +265,7 @@ def test_production_bound_candle_close_manifest_fails_closed() -> None:
 
 
 def test_production_bound_top_of_book_policy_requires_top_of_book_dataset() -> None:
-    payload = _manifest_payload()
-    payload["deployment_tier"] = "paper_candidate"
-    payload["statistical_validation"] = _statistical_validation()
+    payload = _production_bound_manifest_payload()
     payload["execution_timing"] = {
         "fill_reference_policy": "latency_adjusted_orderbook",
         "missing_quote_policy": "fail",
@@ -152,6 +277,91 @@ def test_production_bound_top_of_book_policy_requires_top_of_book_dataset() -> N
         parse_manifest(payload)
 
     assert "production_top_of_book_required" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "top_of_book,reason",
+    [
+        (None, "production_top_of_book_required"),
+        (
+            {
+                "source": "sqlite_orderbook_top_snapshots",
+                "required": False,
+                "missing_policy": "fail",
+                "min_coverage_pct": 100.0,
+            },
+            "production_top_of_book_required",
+        ),
+        (
+            {
+                "source": "sqlite_orderbook_top_snapshots",
+                "required": True,
+                "missing_policy": "warn",
+                "min_coverage_pct": 100.0,
+            },
+            "production_missing_quote_policy_must_fail",
+        ),
+        (
+            {
+                "source": "sqlite_orderbook_top_snapshots",
+                "required": True,
+                "missing_policy": "fail",
+                "min_coverage_pct": 99.9,
+            },
+            "production_top_of_book_min_coverage_must_be_100",
+        ),
+    ],
+)
+def test_production_bound_orderbook_timing_requires_production_safe_dataset(
+    top_of_book: dict[str, object] | None,
+    reason: str,
+) -> None:
+    payload = _production_bound_manifest_payload(
+        execution_timing={
+            "fill_reference_policy": "first_orderbook_after_decision",
+            "missing_quote_policy": "fail",
+            "allow_same_candle_close_fill": False,
+            "min_execution_reality_level_for_promotion": "top_of_book_after_decision",
+        }
+    )
+    if top_of_book is not None:
+        dataset = dict(payload["dataset"])  # type: ignore[arg-type]
+        dataset["top_of_book"] = top_of_book
+        payload["dataset"] = dataset
+
+    _assert_manifest_reasons(payload, reason)
+
+
+def test_production_bound_orderbook_timing_with_safe_top_of_book_dataset_passes() -> None:
+    payload = _production_bound_manifest_payload(
+        execution_timing={
+            "fill_reference_policy": "first_orderbook_after_decision",
+            "missing_quote_policy": "fail",
+            "allow_same_candle_close_fill": False,
+            "min_execution_reality_level_for_promotion": "top_of_book_after_decision",
+        }
+    )
+    dataset = dict(payload["dataset"])  # type: ignore[arg-type]
+    dataset["top_of_book"] = {
+        "source": "sqlite_orderbook_top_snapshots",
+        "required": True,
+        "missing_policy": "fail",
+        "min_coverage_pct": 100.0,
+    }
+    payload["dataset"] = dataset
+
+    manifest = parse_manifest(payload)
+
+    assert manifest.dataset.top_of_book is not None
+    assert manifest.dataset.top_of_book.required is True
+    assert manifest.dataset.top_of_book.missing_policy == "fail"
+    assert manifest.execution_timing.fill_reference_policy == "first_orderbook_after_decision"
+
+
+def test_invalid_production_bound_legacy_default_fails_before_report_generation() -> None:
+    payload = _production_bound_manifest_payload()
+
+    _assert_manifest_reasons(payload, "production_execution_timing_required")
 
 
 def test_unsupported_depth_requirement_fails_explicitly() -> None:

@@ -51,6 +51,11 @@ def _production_manifest() -> dict[str, object]:
             ],
             "calibration_required": True,
         },
+        "execution_timing": {
+            "fill_reference_policy": "next_candle_open",
+            "allow_same_candle_close_fill": False,
+            "min_execution_reality_level_for_promotion": "candle_next_open",
+        },
         "acceptance_gate": {
             "min_trade_count": 30,
             "max_mdd_pct": 15,
