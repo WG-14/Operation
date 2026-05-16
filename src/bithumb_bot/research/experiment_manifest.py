@@ -516,6 +516,48 @@ class StressSuiteContract:
 
 
 @dataclass(frozen=True)
+class FinalSelectionMetricRule:
+    metric: str
+    order: str
+    required: bool = True
+    null_policy: str = "fail_if_required_else_worst_rank"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "metric": self.metric,
+            "order": self.order,
+            "required": self.required,
+            "null_policy": self.null_policy,
+        }
+
+
+@dataclass(frozen=True)
+class FinalSelectionContract:
+    schema_version: int
+    required_for_promotion: bool
+    candidate_universe: str
+    must_pass: dict[str, object]
+    selection_exposure_policy: dict[str, object]
+    method: str
+    null_metric_policy: str
+    ranking: tuple[FinalSelectionMetricRule, ...]
+    unsupported_metric_policy: dict[str, str]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "required_for_promotion": self.required_for_promotion,
+            "candidate_universe": self.candidate_universe,
+            "must_pass": dict(self.must_pass),
+            "selection_exposure_policy": dict(self.selection_exposure_policy),
+            "method": self.method,
+            "null_metric_policy": self.null_metric_policy,
+            "ranking": [rule.as_dict() for rule in self.ranking],
+            "unsupported_metric_policy": dict(self.unsupported_metric_policy),
+        }
+
+
+@dataclass(frozen=True)
 class ExperimentManifest:
     experiment_id: str
     hypothesis: str
@@ -531,6 +573,7 @@ class ExperimentManifest:
     acceptance_gate: AcceptanceGate
     statistical_validation: StatisticalSelectionContract | None
     stress_suite: StressSuiteContract | None
+    final_selection: FinalSelectionContract | None
     walk_forward: WalkForwardConfig | None
     research_run: ResearchRunPolicy
     raw: dict[str, Any]
@@ -556,6 +599,11 @@ class ExperimentManifest:
                 else None
             ),
             "stress_suite": self.stress_suite.as_dict() if self.stress_suite is not None else None,
+            "final_selection": (
+                self.final_selection.as_dict()
+                if self.final_selection is not None
+                else None
+            ),
             "walk_forward": self.walk_forward.as_dict() if self.walk_forward is not None else None,
             "research_run": self.research_run.as_dict(),
         }
@@ -599,6 +647,7 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
         deployment_tier=deployment_tier,
     )
     stress_suite = _parse_stress_suite(payload.get("stress_suite"), deployment_tier=deployment_tier)
+    final_selection = _parse_final_selection(payload.get("final_selection"), deployment_tier=deployment_tier)
     walk_forward = _parse_walk_forward(payload.get("walk_forward"))
     research_run = _parse_research_run(payload.get("research_run"))
     if acceptance_gate.walk_forward_required and walk_forward is None:
@@ -638,6 +687,7 @@ def parse_manifest(payload: dict[str, Any]) -> ExperimentManifest:
         acceptance_gate=acceptance_gate,
         statistical_validation=statistical_validation,
         stress_suite=stress_suite,
+        final_selection=final_selection,
         walk_forward=walk_forward,
         research_run=research_run,
         raw=dict(payload),
@@ -1534,6 +1584,106 @@ def _parse_stress_suite(value: Any, *, deployment_tier: str) -> StressSuiteContr
         period_ablation=_parse_stress_period_ablation(value.get("period_ablation")),
         parameter_perturbation=_parse_stress_parameter_perturbation(value.get("parameter_perturbation")),
         risk_adjusted_score=_parse_stress_risk_adjusted_score(value.get("risk_adjusted_score")),
+    )
+
+
+def _parse_final_selection(value: Any, *, deployment_tier: str) -> FinalSelectionContract | None:
+    production_bound = is_production_bound_target(deployment_tier)
+    if value is None:
+        if production_bound:
+            raise ManifestValidationError("final_selection required for production-bound manifests")
+        return None
+    if not isinstance(value, dict):
+        raise ManifestValidationError("final_selection must be an object")
+    allowed_fields = {
+        "schema_version",
+        "required_for_promotion",
+        "candidate_universe",
+        "must_pass",
+        "selection_exposure_policy",
+        "method",
+        "null_metric_policy",
+        "ranking",
+        "unsupported_metric_policy",
+    }
+    unknown = sorted(set(value) - allowed_fields)
+    if unknown:
+        raise ManifestValidationError(f"final_selection unsupported fields: {','.join(unknown)}")
+    schema_version = _positive_int(value.get("schema_version"), "final_selection.schema_version")
+    if schema_version != 1:
+        raise ManifestValidationError("final_selection.schema_version must be 1")
+    required = bool(value.get("required_for_promotion", production_bound))
+    if production_bound and not required:
+        raise ManifestValidationError("final_selection.required_for_promotion must be true for production-bound manifests")
+    candidate_universe = str(value.get("candidate_universe") or "").strip()
+    if candidate_universe != "acceptance_gate_passed_required_scenarios":
+        raise ManifestValidationError(
+            "final_selection.candidate_universe must be acceptance_gate_passed_required_scenarios"
+        )
+    method = str(value.get("method") or "").strip()
+    if method != "lexicographic":
+        raise ManifestValidationError("final_selection.method must be lexicographic")
+    null_metric_policy = str(value.get("null_metric_policy") or "").strip()
+    if null_metric_policy != "fail_if_required_else_worst_rank":
+        raise ManifestValidationError(
+            "final_selection.null_metric_policy must be fail_if_required_else_worst_rank"
+        )
+    must_pass = value.get("must_pass")
+    if not isinstance(must_pass, dict):
+        raise ManifestValidationError("final_selection.must_pass must be an object")
+    exposure = value.get("selection_exposure_policy")
+    if not isinstance(exposure, dict):
+        raise ManifestValidationError("final_selection.selection_exposure_policy must be an object")
+    unsupported = value.get("unsupported_metric_policy")
+    if not isinstance(unsupported, dict):
+        raise ManifestValidationError("final_selection.unsupported_metric_policy must be an object")
+    ranking_value = value.get("ranking")
+    if not isinstance(ranking_value, list) or not ranking_value:
+        raise ManifestValidationError("final_selection.ranking must be a non-empty array")
+    rules = tuple(
+        _parse_final_selection_metric_rule(item, index=index)
+        for index, item in enumerate(ranking_value)
+    )
+    if rules[-1].metric != "parameter_candidate_id" or rules[-1].order != "asc":
+        raise ManifestValidationError(
+            "final_selection.ranking must end with parameter_candidate_id asc deterministic tie-breaker"
+        )
+    return FinalSelectionContract(
+        schema_version=schema_version,
+        required_for_promotion=required,
+        candidate_universe=candidate_universe,
+        must_pass=dict(must_pass),
+        selection_exposure_policy=dict(exposure),
+        method=method,
+        null_metric_policy=null_metric_policy,
+        ranking=rules,
+        unsupported_metric_policy={str(key): str(item) for key, item in unsupported.items()},
+    )
+
+
+def _parse_final_selection_metric_rule(value: Any, *, index: int) -> FinalSelectionMetricRule:
+    if not isinstance(value, dict):
+        raise ManifestValidationError(f"final_selection.ranking[{index}] must be an object")
+    allowed_fields = {"metric", "order", "required", "null_policy"}
+    unknown = sorted(set(value) - allowed_fields)
+    if unknown:
+        raise ManifestValidationError(f"final_selection.ranking[{index}] unsupported fields: {','.join(unknown)}")
+    metric = str(value.get("metric") or "").strip()
+    if not metric:
+        raise ManifestValidationError(f"final_selection.ranking[{index}].metric is required")
+    order = str(value.get("order") or "").strip()
+    if order not in {"asc", "desc"}:
+        raise ManifestValidationError(f"final_selection.ranking[{index}].order must be asc or desc")
+    null_policy = str(value.get("null_policy") or "fail_if_required_else_worst_rank").strip()
+    if null_policy != "fail_if_required_else_worst_rank":
+        raise ManifestValidationError(
+            f"final_selection.ranking[{index}].null_policy must be fail_if_required_else_worst_rank"
+        )
+    return FinalSelectionMetricRule(
+        metric=metric,
+        order=order,
+        required=bool(value.get("required", True)),
+        null_policy=null_policy,
     )
 
 

@@ -11,6 +11,7 @@ from bithumb_bot.execution_reality_contract import build_execution_reality_contr
 from bithumb_bot.execution_reality_contract import execution_capability_contract_hash, execution_contract_hash
 from bithumb_bot.research import cli as research_cli
 from bithumb_bot.research.hashing import content_hash_payload, report_content_hash_payload, sha256_prefixed
+from bithumb_bot.research.final_selection import apply_final_selection_contract
 from bithumb_bot.research.lineage import build_research_lineage, compute_lineage_hash, reproduce_promotion
 from bithumb_bot.research.experiment_registry import (
     EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE,
@@ -474,6 +475,13 @@ def _write_report_without_lineage(manager: PathManager, candidate: dict[str, obj
         "repository_version": "test",
         "candidates": [candidate],
     }
+    if str(candidate.get("deployment_tier") or "") in {
+        "paper_candidate",
+        "live_dry_run_candidate",
+        "small_live_candidate",
+    }:
+        payload["statistical_gate_result"] = candidate.get("statistical_gate_result") or "PASS"
+        _attach_final_selection(payload, candidate)
     payload["content_hash"] = sha256_prefixed(report_content_hash_payload(payload))
     write_json_atomic(path, payload)
 
@@ -547,8 +555,61 @@ def _write_report_with_lineage(
         "small_live_candidate",
     }:
         _attach_statistical_evidence(manager, payload, candidate, statistical_evidence_overrides or {})
+        if not report_overrides or "final_selection_required" not in report_overrides:
+            _attach_final_selection(payload, candidate)
     payload["content_hash"] = sha256_prefixed(report_content_hash_payload(payload))
     write_json_atomic(path, payload)
+
+
+def _final_selection_contract() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "required_for_promotion": True,
+        "candidate_universe": "acceptance_gate_passed_required_scenarios",
+        "must_pass": {
+            "dataset_quality_gate_status": "PASS",
+            "statistical_gate_result": "PASS",
+            "production_calibration_policy_result": "PASS",
+            "final_holdout_present": True,
+        },
+        "selection_exposure_policy": {
+            "final_holdout_usage": "confirmatory_metric_in_rank",
+            "counts_as_holdout_reuse": True,
+        },
+        "method": "lexicographic",
+        "null_metric_policy": "fail_if_required_else_worst_rank",
+        "ranking": [{"metric": "parameter_candidate_id", "order": "asc", "required": True}],
+        "unsupported_metric_policy": {
+            "sharpe_ratio": "fail_if_required",
+            "sortino_ratio": "fail_if_required",
+        },
+    }
+
+
+def _attach_final_selection(report: dict[str, object], candidate: dict[str, object]) -> None:
+    selection = apply_final_selection_contract(
+        contract=_final_selection_contract(),
+        candidates=[candidate],
+        report_context={
+            "dataset_quality_gate_status": report.get("dataset_quality_gate_status"),
+            "statistical_gate_result": report.get("statistical_gate_result"),
+        },
+        production_bound=True,
+    )
+    report.update(
+        {
+            "final_selection_required": True,
+            "final_selection_contract": selection["final_selection_contract"],
+            "final_selection_contract_hash": selection["final_selection_contract_hash"],
+            "final_selection_gate_result": selection["gate_result"],
+            "final_selection_fail_reasons": selection["fail_reasons"],
+            "selected_candidate_id": selection["selected_candidate_id"],
+            "selected_candidate_score_hash": selection["selected_candidate_score_hash"],
+            "candidate_final_scores_hash": selection["candidate_final_scores_hash"],
+            "candidate_final_scores": selection["candidate_final_scores"],
+            "best_candidate_id": selection["selected_candidate_id"],
+        }
+    )
 
 
 def _statistical_contract(**gate_overrides: object) -> dict[str, object]:

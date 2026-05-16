@@ -9,6 +9,7 @@ from typing import Any
 from .deployment_policy import is_production_bound_target
 from .hashing import content_hash_payload, report_content_hash_payload, sha256_prefixed
 from .statistical_selection import recompute_candidate_metric_values_hash_from_report
+from .final_selection import validate_final_selection_report
 from .return_panel import validate_return_panel_binding
 from .family_registry import validate_family_registry_binding
 from .experiment_registry import validate_experiment_registry_binding
@@ -331,6 +332,10 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
         "final_holdout_stress_suite_hash": None,
         "selection_universe_hash": None,
         "candidate_metric_values_hash": None,
+        "final_selection_contract_hash": None,
+        "selected_candidate_id": None,
+        "selected_candidate_score_hash": None,
+        "candidate_final_scores_hash": None,
         "mismatches": [],
         "missing_artifacts": [],
         "legacy_compatibility_used": False,
@@ -413,6 +418,10 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
     summary["final_holdout_stress_suite_hash"] = final_stress.get("stress_suite_hash")
     summary["selection_universe_hash"] = lineage.get("selection_universe_hash")
     summary["candidate_metric_values_hash"] = lineage.get("candidate_metric_values_hash")
+    summary["final_selection_contract_hash"] = promotion.get("final_selection_contract_hash")
+    summary["selected_candidate_id"] = promotion.get("selected_candidate_id")
+    summary["selected_candidate_score_hash"] = promotion.get("selected_candidate_score_hash")
+    summary["candidate_final_scores_hash"] = promotion.get("candidate_final_scores_hash")
 
     _compare(summary, "manifest_hash", promotion.get("manifest_hash"), lineage.get("manifest_hash"), "manifest_hash_mismatch")
     _compare(
@@ -439,6 +448,25 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
     )
 
     _verify_artifact_hash(summary, lineage, "backtest_report", required=True)
+    final_selection_required = bool(promotion.get("final_selection_required")) or is_production_bound_target(
+        promotion.get("deployment_tier")
+    )
+    if final_selection_required:
+        for field, reason in (
+            ("final_selection_contract_hash", "final_selection_contract_hash_missing"),
+            ("selected_candidate_score_hash", "final_selection_score_hash_missing"),
+            ("candidate_final_scores_hash", "final_selection_score_hash_missing"),
+        ):
+            if not str(promotion.get(field) or "").startswith("sha256:"):
+                summary["mismatches"].append(_mismatch(f"promotion.{field}", "sha256:<required>", promotion.get(field), reason))
+        if promotion.get("final_selection_gate_result") != "PASS":
+            summary["mismatches"].append(
+                _mismatch("promotion.final_selection_gate_result", "PASS", promotion.get("final_selection_gate_result"), "final_selection_gate_not_passed")
+            )
+        if promotion.get("candidate_id") != promotion.get("selected_candidate_id"):
+            summary["mismatches"].append(
+                _mismatch("promotion.selected_candidate_id", promotion.get("candidate_id"), promotion.get("selected_candidate_id"), "candidate_not_selected_by_final_selection_contract")
+            )
     statistical_required = bool(promotion.get("statistical_validation_required")) or is_production_bound_target(
         promotion.get("deployment_tier")
     )
@@ -492,6 +520,8 @@ def reproduce_promotion(promotion_path: str | Path) -> ReproducibilityResult:
     )
     if stress_required:
         _verify_stress_suite_bindings(summary, promotion, lineage)
+    if final_selection_required:
+        _verify_final_selection_bindings(summary, promotion, lineage)
     walk_required = bool(promotion.get("walk_forward_required"))
     _verify_artifact_hash(
         summary,
@@ -799,6 +829,40 @@ def _verify_stress_suite_bindings(
                     else "stress_suite_hash_mismatch"
                 ),
             )
+
+
+def _verify_final_selection_bindings(
+    summary: dict[str, Any],
+    promotion: dict[str, Any],
+    lineage: dict[str, Any],
+) -> None:
+    report = _load_optional_artifact(lineage.get("backtest_report_path"))
+    if not isinstance(report, dict):
+        summary["mismatches"].append(
+            _mismatch("backtest_report.final_selection", "present", None, "final_selection_contract_missing")
+        )
+        return
+    for reason in validate_final_selection_report(report):
+        summary["mismatches"].append(_mismatch("backtest_report.final_selection", "valid", reason, reason))
+    for field, reason in (
+        ("final_selection_contract_hash", "final_selection_contract_hash_mismatch"),
+        ("selected_candidate_score_hash", "final_selection_score_hash_mismatch"),
+        ("candidate_final_scores_hash", "final_selection_score_hash_mismatch"),
+        ("selected_candidate_id", "final_selection_selected_candidate_mismatch"),
+    ):
+        if promotion.get(field) != report.get(field):
+            summary["mismatches"].append(
+                _mismatch(f"backtest_report.{field}", promotion.get(field), report.get(field), reason)
+            )
+    if promotion.get("candidate_id") != report.get("selected_candidate_id"):
+        summary["mismatches"].append(
+            _mismatch(
+                "backtest_report.selected_candidate_id",
+                promotion.get("candidate_id"),
+                report.get("selected_candidate_id"),
+                "candidate_not_selected_by_final_selection_contract",
+            )
+        )
 
 
 def _verify_statistical_report_bindings(

@@ -38,6 +38,7 @@ from .execution_calibration import compare_calibration_to_scenario
 from .execution_model import FixedBpsExecutionModel, StressExecutionModel, model_params_hash
 from .execution_timing import execution_reality_gate, signal_quote_coverage_summary
 from .experiment_manifest import DateRange, ExecutionScenario, ExperimentManifest
+from .final_selection import apply_final_selection_contract
 from .hashing import content_hash_payload, sha256_prefixed
 from .family_registry import (
     append_family_trial_registry_row,
@@ -2130,6 +2131,8 @@ def _report_payload(
     )
     stress_contract = manifest.stress_suite.as_dict() if manifest.stress_suite is not None else None
     stress_contract_hash = sha256_prefixed(stress_contract) if stress_contract is not None else None
+    benchmark_metrics = _benchmark_metrics_for_splits(snapshots)
+    _attach_benchmark_metrics(candidates=candidates, benchmark_metrics=benchmark_metrics)
     required_scenario_ids = sorted(
         {
             str(scenario_id)
@@ -2307,7 +2310,25 @@ def _report_payload(
             evidence=statistical_evidence,
             evidence_path=statistical_evidence_path,
         )
-    best = next((candidate for candidate in candidates if candidate["acceptance_gate_result"] == "PASS"), None)
+    final_selection = apply_final_selection_contract(
+        contract=manifest.final_selection,
+        candidates=candidates,
+        report_context={
+            "dataset_quality_gate_status": dataset_quality_status,
+            "statistical_gate_result": statistical_evidence.get("statistical_gate_result") if statistical_evidence else None,
+        },
+        production_bound=manifest.deployment_tier != "research_only",
+    )
+    best = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.get("parameter_candidate_id") == final_selection.get("selected_candidate_id")
+        ),
+        None,
+    )
+    if best is None and final_selection.get("gate_result") == "WARN":
+        best = next((candidate for candidate in candidates if candidate["acceptance_gate_result"] == "PASS"), None)
     stress_summary_candidate = best
     if stress_summary_candidate is None and stress_suite_required(manifest) and candidates:
         stress_summary_candidate = candidates[0]
@@ -2397,6 +2418,17 @@ def _report_payload(
         "stress_suite_required": stress_suite_required(manifest),
         "stress_suite_contract": stress_contract,
         "stress_suite_contract_hash": stress_contract_hash,
+        "final_selection_required": bool(
+            manifest.final_selection.required_for_promotion if manifest.final_selection is not None else False
+        ),
+        "final_selection_contract": final_selection.get("final_selection_contract"),
+        "final_selection_contract_hash": final_selection.get("final_selection_contract_hash"),
+        "final_selection_gate_result": final_selection.get("gate_result"),
+        "final_selection_fail_reasons": final_selection.get("fail_reasons") or [],
+        "selected_candidate_id": final_selection.get("selected_candidate_id"),
+        "selected_candidate_score_hash": final_selection.get("selected_candidate_score_hash"),
+        "candidate_final_scores_hash": final_selection.get("candidate_final_scores_hash"),
+        "candidate_final_scores": final_selection.get("candidate_final_scores") or [],
         "statistical_validation_required": statistical_validation_required(manifest),
         "statistical_validation_contract": statistical_contract,
         "benchmark": statistical_evidence.get("benchmark") if statistical_evidence else None,
@@ -2418,6 +2450,7 @@ def _report_payload(
         "return_panel_split": return_panel.get("split") if return_panel else None,
         "return_unit": return_panel.get("return_unit") if return_panel else None,
         "return_panel_observation_count": return_panel.get("observation_count") if return_panel else None,
+        "benchmark_metrics": benchmark_metrics,
         "evidence_grade": statistical_evidence.get("evidence_grade") if statistical_evidence else None,
         "statistical_method": statistical_evidence.get("statistical_method") if statistical_evidence else None,
         "family_trial_registry_path": str(family_registry_path.resolve()) if family_registry_path else None,
@@ -2536,6 +2569,10 @@ def _promotion_blocking_reasons(
     reasons: list[str] = []
     if best is None:
         reasons.append("candidate_acceptance_gate_failed")
+    if isinstance(report, dict) and report.get("final_selection_required"):
+        if report.get("final_selection_gate_result") != "PASS":
+            reasons.extend(str(item) for item in report.get("final_selection_fail_reasons") or [])
+            reasons.append("final_selection_gate_not_passed")
     if statistical_required:
         if not isinstance(statistical_evidence, dict):
             reasons.append("statistical_evidence_missing")
@@ -3028,6 +3065,68 @@ def _execution_calibration_warning_reasons(candidate: dict[str, Any]) -> list[st
     if not isinstance(gate, dict) or gate.get("status") == "PASS":
         return []
     return [str(reason) for reason in gate.get("reasons") or ["execution_calibration_failed"]]
+
+
+def _benchmark_metrics_for_splits(snapshots: dict[str, DatasetSnapshot]) -> dict[str, dict[str, float | None]]:
+    return {
+        split_name: {
+            "cash_return_pct": 0.0,
+            "buy_and_hold_return_pct": _buy_and_hold_return_pct(snapshot),
+        }
+        for split_name, snapshot in sorted(snapshots.items())
+    }
+
+
+def _buy_and_hold_return_pct(snapshot: DatasetSnapshot) -> float | None:
+    if not snapshot.candles:
+        return None
+    start = float(snapshot.candles[0].open)
+    end = float(snapshot.candles[-1].close)
+    if start <= 0.0:
+        return None
+    return round(((end - start) / start) * 100.0, 12)
+
+
+def _attach_benchmark_metrics(
+    *,
+    candidates: list[dict[str, Any]],
+    benchmark_metrics: dict[str, dict[str, float | None]],
+) -> None:
+    for candidate in candidates:
+        candidate_benchmarks: dict[str, dict[str, float | None]] = {}
+        for split_name in ("validation", "final_holdout"):
+            split_metrics = benchmark_metrics.get(split_name)
+            if not isinstance(split_metrics, dict):
+                continue
+            candidate_metrics = candidate.get(f"{split_name}_metrics")
+            return_pct = None
+            if isinstance(candidate_metrics, dict):
+                return_pct = _finite_float_or_none(candidate_metrics.get("return_pct"))
+            buy_hold = _finite_float_or_none(split_metrics.get("buy_and_hold_return_pct"))
+            cash = _finite_float_or_none(split_metrics.get("cash_return_pct")) or 0.0
+            excess_buy_hold = None if return_pct is None or buy_hold is None else round(return_pct - buy_hold, 12)
+            excess_cash = None if return_pct is None else round(return_pct - cash, 12)
+            payload = {
+                "cash_return_pct": cash,
+                "buy_and_hold_return_pct": buy_hold,
+                "excess_return_vs_cash_pct": excess_cash,
+                "excess_return_vs_buy_and_hold_pct": excess_buy_hold,
+            }
+            candidate_benchmarks[split_name] = payload
+            if isinstance(candidate_metrics, dict):
+                candidate_metrics["benchmark_cash_return_pct"] = cash
+                candidate_metrics["benchmark_buy_and_hold_return_pct"] = buy_hold
+                candidate_metrics["excess_return_vs_cash_pct"] = excess_cash
+                candidate_metrics["excess_return_vs_buy_and_hold_pct"] = excess_buy_hold
+        candidate["benchmark_metrics"] = candidate_benchmarks
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric == numeric and numeric not in {float("inf"), float("-inf")} else None
 
 
 def _candidate_rank_key(candidate: dict[str, Any]) -> tuple[int, int, float, float, int, float, float, float, float, float]:

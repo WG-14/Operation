@@ -17,6 +17,7 @@ from bithumb_bot.execution_reality_contract import (
 from .hashing import content_hash_payload, report_content_hash_payload, sha256_prefixed
 from .lineage import build_promotion_lineage, validate_lineage_artifact, LineageValidationError
 from .experiment_registry import append_promotion_registry_event, validate_experiment_registry_binding
+from .final_selection import validate_final_selection_report
 from .deployment_policy import is_production_bound_target, validate_production_calibration_policy
 from .metrics_contract import METRICS_SCHEMA_VERSION
 from .metrics_gate_policy import metrics_gate_policy_hash
@@ -671,6 +672,17 @@ def promote_candidate(
         )
     if statistical_reasons:
         raise PromotionGateError(f"promotion refused: {','.join(statistical_reasons)}")
+    production_bound_report = is_production_bound_target(
+        backtest.candidate.get("deployment_tier") or report.get("deployment_tier")
+    )
+    final_selection_reasons = validate_final_selection_report(report)
+    if production_bound_report or report.get("final_selection_required"):
+        if final_selection_reasons:
+            raise PromotionGateError(f"promotion refused: {','.join(final_selection_reasons)}")
+        if report.get("final_selection_gate_result") != "PASS":
+            raise PromotionGateError("promotion refused: final_selection_gate_not_passed")
+        if candidate_id != report.get("selected_candidate_id"):
+            raise PromotionGateError("promotion refused: candidate_not_selected_by_final_selection_contract")
     base_lineage = report.get("lineage") if isinstance(report.get("lineage"), dict) else None
     lineage: dict[str, Any] | None = None
     if base_lineage is not None:
@@ -775,6 +787,14 @@ def promote_candidate(
         "final_holdout_stress_suite": candidate.get("final_holdout_stress_suite"),
         "stress_suite_gate_result": candidate.get("stress_suite_gate_result"),
         "stress_suite_fail_reasons": candidate.get("stress_suite_fail_reasons") or [],
+        "final_selection_required": bool(report.get("final_selection_required")),
+        "final_selection_contract": report.get("final_selection_contract"),
+        "final_selection_contract_hash": report.get("final_selection_contract_hash"),
+        "final_selection_gate_result": report.get("final_selection_gate_result"),
+        "final_selection_fail_reasons": report.get("final_selection_fail_reasons") or [],
+        "selected_candidate_id": report.get("selected_candidate_id"),
+        "selected_candidate_score_hash": report.get("selected_candidate_score_hash"),
+        "candidate_final_scores_hash": report.get("candidate_final_scores_hash"),
         "statistical_validation_required": bool(candidate.get("statistical_validation_required")),
         "statistical_validation_contract": candidate.get("statistical_validation_contract"),
         "evidence_grade": candidate.get("evidence_grade"),

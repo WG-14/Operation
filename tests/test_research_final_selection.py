@@ -1,0 +1,464 @@
+from __future__ import annotations
+
+import copy
+
+import pytest
+
+from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
+from bithumb_bot.research.final_selection import apply_final_selection_contract, validate_final_selection_report
+from bithumb_bot.research.hashing import sha256_prefixed
+from bithumb_bot.research.statistical_selection import candidate_metric_universe_payload
+
+
+def _final_selection(ranking: list[dict[str, object]] | None = None) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "required_for_promotion": True,
+        "candidate_universe": "acceptance_gate_passed_required_scenarios",
+        "must_pass": {
+            "dataset_quality_gate_status": "PASS",
+            "statistical_gate_result": "PASS",
+            "stress_suite_gate_result": "PASS",
+            "production_calibration_policy_result": "PASS",
+            "metrics_schema_version": 2,
+            "final_holdout_present": True,
+        },
+        "selection_exposure_policy": {
+            "final_holdout_usage": "confirmatory_metric_in_rank",
+            "counts_as_holdout_reuse": True,
+        },
+        "method": "lexicographic",
+        "null_metric_policy": "fail_if_required_else_worst_rank",
+        "ranking": ranking
+        or [
+            {
+                "metric": "final_holdout.metrics_v2.trade_quality.expectancy_per_trade_krw",
+                "order": "desc",
+                "required": True,
+            },
+            {
+                "metric": "final_holdout.metrics_v2.return_risk.max_drawdown_pct",
+                "order": "asc",
+                "required": True,
+            },
+            {
+                "metric": "validation.stress.risk_adjusted_score.calmar_ratio",
+                "order": "desc",
+                "required": True,
+            },
+            {
+                "metric": "final_holdout.benchmark.excess_return_vs_buy_and_hold_pct",
+                "order": "desc",
+                "required": True,
+            },
+            {"metric": "parameter_candidate_id", "order": "asc", "required": True},
+        ],
+        "unsupported_metric_policy": {
+            "sharpe_ratio": "fail_if_required",
+            "sortino_ratio": "fail_if_required",
+        },
+    }
+
+
+def _candidate(
+    candidate_id: str,
+    *,
+    validation_expectancy: float = 100.0,
+    final_expectancy: float = 100.0,
+    final_mdd: float = 5.0,
+    calmar: float = 1.0,
+    buy_hold_excess: float = 0.0,
+) -> dict[str, object]:
+    return {
+        "parameter_candidate_id": candidate_id,
+        "acceptance_gate_result": "PASS",
+        "metrics_schema_version": 2,
+        "final_holdout_present": True,
+        "statistical_gate_result": "PASS",
+        "stress_suite_gate_result": "PASS",
+        "production_calibration_policy_result": {"status": "PASS"},
+        "validation_metrics": {
+            "return_pct": validation_expectancy,
+            "benchmark_buy_and_hold_return_pct": 0.0,
+        },
+        "validation_metrics_v2": {
+            "trade_quality": {
+                "expectancy_per_trade_krw": validation_expectancy,
+                "single_trade_dependency_score": 0.1,
+            },
+            "return_risk": {"max_drawdown_pct": 10.0, "cagr_pct": validation_expectancy},
+            "cost_execution": {"fee_drag_ratio": 0.1, "slippage_drag_ratio": 0.1},
+        },
+        "final_holdout_metrics_v2": {
+            "trade_quality": {"expectancy_per_trade_krw": final_expectancy},
+            "return_risk": {"max_drawdown_pct": final_mdd},
+        },
+        "validation_stress_suite": {
+            "risk_adjusted_score": {"calmar_ratio": calmar},
+            "trade_order_monte_carlo": {"survival_probability": 1.0},
+        },
+        "benchmark_metrics": {
+            "final_holdout": {"excess_return_vs_buy_and_hold_pct": buy_hold_excess},
+            "validation": {"excess_return_vs_buy_and_hold_pct": validation_expectancy},
+        },
+    }
+
+
+def _context() -> dict[str, object]:
+    return {"dataset_quality_gate_status": "PASS", "statistical_gate_result": "PASS"}
+
+
+def _manifest_payload() -> dict[str, object]:
+    return {
+        "experiment_id": "selection_contract_v1",
+        "hypothesis": "selection contract is explicit",
+        "strategy_name": "sma_with_filter",
+        "market": "KRW-BTC",
+        "interval": "1m",
+        "deployment_tier": "paper_candidate",
+        "dataset": {
+            "source": "sqlite_candles",
+            "snapshot_id": "candles_v1",
+            "top_of_book": {
+                "source": "sqlite_orderbook_top_snapshots",
+                "required": False,
+                "join_tolerance_ms": 3000,
+                "missing_policy": "warn",
+            },
+            "train": {"start": "2024-01-01", "end": "2024-01-02"},
+            "validation": {"start": "2024-01-03", "end": "2024-01-04"},
+            "final_holdout": {"start": "2024-01-05", "end": "2024-01-06"},
+        },
+        "parameter_space": {"SMA_SHORT": [2], "SMA_LONG": [4], "SMA_FILTER_GAP_MIN_RATIO": [0.0]},
+        "cost_model": {"fee_rate": 0.001, "slippage_bps": [0]},
+        "execution_model": {
+            "scenario_policy": "single_scenario",
+            "scenarios": [
+                {
+                    "scenario_role": "base",
+                    "label": "base",
+                    "fee_rate": 0.001,
+                    "fee_source": "operator_declared_bithumb_app_fee",
+                    "fee_authority_policy": "runtime_fee_authority_must_match_or_fail",
+                    "slippage_bps": 1,
+                    "slippage_source": "execution_calibration",
+                    "promotable_as_base": True,
+                    "type": "fixed_bps",
+                }
+            ],
+            "calibration_required": True,
+            "calibration_strictness": "fail",
+        },
+        "execution_timing": {
+            "signal_basis": "closed_candle",
+            "decision_time": "candle_close",
+            "fill_reference_policy": "next_candle_open",
+            "quote_selection": "first_after_or_equal",
+            "missing_quote_policy": "warn",
+            "allow_same_candle_close_fill": False,
+            "min_execution_reality_level_for_promotion": "candle_next_open",
+        },
+        "acceptance_gate": {
+            "min_trade_count": 1,
+            "max_mdd_pct": 50,
+            "min_profit_factor": 1.0,
+            "oos_return_must_be_positive": True,
+            "parameter_stability_required": False,
+            "metrics_contract_required": True,
+        },
+        "statistical_validation": {
+            "required_for_promotion": True,
+            "benchmark": "cash",
+            "primary_metric": "net_excess_return",
+            "selection_universe": "all_parameter_candidates_all_required_scenarios",
+            "multiple_testing_scope": "experiment",
+            "bootstrap": {
+                "method": "metric_centered_max_bootstrap",
+                "n_bootstrap": 100,
+                "block_length_policy": "not_applicable_summary_metric",
+                "seed_policy": "derived_from_selection_universe_hash",
+            },
+            "gates": {
+                "max_reality_check_p_value": 0.05,
+                "max_spa_p_value": None,
+                "min_deflated_sharpe_probability": None,
+                "max_holdout_reuse_count": 0,
+                "max_attempt_index_without_new_hypothesis": 1,
+            },
+        },
+        "stress_suite": {
+            "required_for_promotion": True,
+            "trade_order_monte_carlo": {
+                "iterations": 100,
+                "seed_policy": "derived_from_manifest_candidate_scenario_split_hash",
+                "min_survival_probability": 0.95,
+                "ruin_max_drawdown_pct": 35,
+                "min_closed_trades": 1,
+            },
+            "risk_adjusted_score": {
+                "required_metrics": ["calmar"],
+                "ranking": ["max_calmar"],
+            },
+        },
+        "final_selection": _final_selection(),
+    }
+
+
+def test_final_selection_contract_parse_strict_unknown_fields() -> None:
+    payload = _manifest_payload()
+    payload["final_selection"] = {**_final_selection(), "extra": True}
+    with pytest.raises(ManifestValidationError, match="final_selection unsupported fields"):
+        parse_manifest(payload)
+
+
+def test_final_selection_contract_in_manifest_hash() -> None:
+    payload = _manifest_payload()
+    first = parse_manifest(payload).manifest_hash()
+    changed = copy.deepcopy(payload)
+    changed["final_selection"] = _final_selection(
+        [
+            {"metric": "validation.stress.risk_adjusted_score.calmar_ratio", "order": "desc", "required": True},
+            {"metric": "parameter_candidate_id", "order": "asc", "required": True},
+        ]
+    )
+    assert parse_manifest(changed).manifest_hash() != first
+
+
+def test_final_selection_required_for_production_bound_manifest() -> None:
+    payload = _manifest_payload()
+    payload.pop("final_selection")
+    with pytest.raises(ManifestValidationError, match="final_selection required"):
+        parse_manifest(payload)
+
+
+def test_research_only_missing_final_selection_gets_legacy_warning() -> None:
+    result = apply_final_selection_contract(
+        contract=None,
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=False,
+    )
+    assert result["gate_result"] == "WARN"
+    assert result["fail_reasons"] == ["legacy_implicit_final_rank_policy_v1"]
+
+
+def test_final_selection_lexicographic_rank_deterministic() -> None:
+    result = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_001", final_expectancy=10), _candidate("candidate_002", final_expectancy=20)],
+        report_context=_context(),
+        production_bound=True,
+    )
+    assert result["selected_candidate_id"] == "candidate_002"
+    assert result["gate_result"] == "PASS"
+
+
+def test_final_selection_tie_breaks_by_parameter_candidate_id() -> None:
+    result = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_002"), _candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=True,
+    )
+    assert result["selected_candidate_id"] == "candidate_001"
+
+
+def test_final_selection_hash_changes_when_ranking_changes() -> None:
+    candidates = [_candidate("candidate_001"), _candidate("candidate_002", final_expectancy=200)]
+    first = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=candidates,
+        report_context=_context(),
+        production_bound=True,
+    )
+    second = apply_final_selection_contract(
+        contract=_final_selection(
+            [
+                {"metric": "validation.stress.risk_adjusted_score.calmar_ratio", "order": "desc", "required": True},
+                {"metric": "parameter_candidate_id", "order": "asc", "required": True},
+            ]
+        ),
+        candidates=candidates,
+        report_context=_context(),
+        production_bound=True,
+    )
+    assert first["final_selection_contract_hash"] != second["final_selection_contract_hash"]
+    assert first["candidate_final_scores_hash"] != second["candidate_final_scores_hash"]
+
+
+def test_final_selection_rejects_required_metric_missing() -> None:
+    candidate = _candidate("candidate_001")
+    candidate["final_holdout_metrics_v2"] = {}
+    result = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[candidate],
+        report_context=_context(),
+        production_bound=True,
+    )
+    assert result["gate_result"] == "FAIL"
+    assert "final_selection_no_eligible_candidates" in result["fail_reasons"]
+
+
+def test_final_selection_sharpe_sortino_fail_without_period_return_panel() -> None:
+    contract = _final_selection(
+        [
+            {"metric": "validation.stress.risk_adjusted_score.sharpe_ratio", "order": "desc", "required": True},
+            {"metric": "validation.stress.risk_adjusted_score.sortino_ratio", "order": "desc", "required": True},
+            {"metric": "parameter_candidate_id", "order": "asc", "required": True},
+        ]
+    )
+    result = apply_final_selection_contract(
+        contract=contract,
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=True,
+    )
+    reasons = result["candidate_final_scores"][0]["eligibility_reasons"]
+    assert "final_selection_sharpe_unavailable_without_period_return_series" in reasons
+    assert "final_selection_sortino_unavailable_without_period_return_series" in reasons
+
+
+def test_final_selection_buy_and_hold_excess_differs_from_cash() -> None:
+    candidates = [
+        {
+            "parameter_candidate_id": "candidate_001",
+            "parameter_values": {},
+            "scenario_policy": "single_scenario",
+            "required_scenario_ids": ["base"],
+            "validation_metrics": {
+                "return_pct": 12.0,
+                "benchmark_buy_and_hold_return_pct": 5.0,
+            },
+            "acceptance_gate_result": "PASS",
+        }
+    ]
+    cash = candidate_metric_universe_payload(
+        candidates=candidates,
+        required_scenario_ids=["base"],
+        primary_metric="net_excess_return",
+        primary_metric_source="validation_metrics",
+        benchmark="cash",
+    )
+    buy_hold = candidate_metric_universe_payload(
+        candidates=candidates,
+        required_scenario_ids=["base"],
+        primary_metric="net_excess_return",
+        primary_metric_source="validation_metrics",
+        benchmark="buy_and_hold",
+    )
+    assert cash["candidates"][0]["validation_metric_value"] == 12.0
+    assert buy_hold["candidates"][0]["validation_metric_value"] == 7.0
+
+
+def test_final_selection_final_holdout_can_drive_rank_when_contract_says_so() -> None:
+    result = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[
+            _candidate("candidate_validation_winner", validation_expectancy=500, final_expectancy=10),
+            _candidate("candidate_holdout_winner", validation_expectancy=100, final_expectancy=50),
+        ],
+        report_context=_context(),
+        production_bound=True,
+    )
+    assert result["selected_candidate_id"] == "candidate_holdout_winner"
+
+
+def test_final_selection_report_best_candidate_matches_selected_candidate() -> None:
+    selection = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=True,
+    )
+    report = {
+        "final_selection_required": True,
+        "final_selection_contract": selection["final_selection_contract"],
+        "final_selection_contract_hash": selection["final_selection_contract_hash"],
+        "final_selection_gate_result": "PASS",
+        "selected_candidate_id": selection["selected_candidate_id"],
+        "selected_candidate_score_hash": selection["selected_candidate_score_hash"],
+        "candidate_final_scores_hash": selection["candidate_final_scores_hash"],
+        "best_candidate_id": selection["selected_candidate_id"],
+        "candidates": [_candidate("candidate_001")],
+        **_context(),
+    }
+    assert validate_final_selection_report(report) == []
+
+
+def test_promotion_rejects_candidate_not_selected_by_final_selection() -> None:
+    selection = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_001"), _candidate("candidate_002", final_expectancy=200)],
+        report_context=_context(),
+        production_bound=True,
+    )
+    report = {
+        "final_selection_required": True,
+        "final_selection_contract": selection["final_selection_contract"],
+        "final_selection_contract_hash": selection["final_selection_contract_hash"],
+        "final_selection_gate_result": "PASS",
+        "selected_candidate_id": "candidate_001",
+        "selected_candidate_score_hash": selection["selected_candidate_score_hash"],
+        "candidate_final_scores_hash": selection["candidate_final_scores_hash"],
+        "best_candidate_id": "candidate_001",
+        "candidates": [_candidate("candidate_001"), _candidate("candidate_002", final_expectancy=200)],
+        **_context(),
+    }
+    assert "final_selection_selected_candidate_mismatch" in validate_final_selection_report(report)
+
+
+def test_reproduce_rejects_final_selection_score_drift() -> None:
+    selection = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=True,
+    )
+    report = {
+        "final_selection_required": True,
+        "final_selection_contract": selection["final_selection_contract"],
+        "final_selection_contract_hash": selection["final_selection_contract_hash"],
+        "final_selection_gate_result": "PASS",
+        "selected_candidate_id": selection["selected_candidate_id"],
+        "selected_candidate_score_hash": "sha256:" + "0" * 64,
+        "candidate_final_scores_hash": selection["candidate_final_scores_hash"],
+        "best_candidate_id": selection["selected_candidate_id"],
+        "candidates": [_candidate("candidate_001")],
+        **_context(),
+    }
+    assert "final_selection_score_hash_mismatch" in validate_final_selection_report(report)
+
+
+def test_reproduce_rejects_final_selection_contract_drift() -> None:
+    selection = apply_final_selection_contract(
+        contract=_final_selection(),
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=True,
+    )
+    contract = copy.deepcopy(selection["final_selection_contract"])
+    contract["selection_exposure_policy"] = {"final_holdout_usage": "changed"}
+    report = {
+        "final_selection_required": True,
+        "final_selection_contract": contract,
+        "final_selection_contract_hash": selection["final_selection_contract_hash"],
+        "final_selection_gate_result": "PASS",
+        "selected_candidate_id": selection["selected_candidate_id"],
+        "selected_candidate_score_hash": selection["selected_candidate_score_hash"],
+        "candidate_final_scores_hash": selection["candidate_final_scores_hash"],
+        "best_candidate_id": selection["selected_candidate_id"],
+        "candidates": [_candidate("candidate_001")],
+        **_context(),
+    }
+    assert "final_selection_contract_hash_mismatch" in validate_final_selection_report(report)
+
+
+def test_legacy_candidate_rank_key_only_research_only_warning() -> None:
+    result = apply_final_selection_contract(
+        contract=None,
+        candidates=[_candidate("candidate_001")],
+        report_context=_context(),
+        production_bound=False,
+    )
+    assert result["gate_result"] == "WARN"
+    assert result["final_selection_contract_hash"] is None

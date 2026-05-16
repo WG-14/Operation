@@ -79,6 +79,45 @@ def _stress_suite() -> dict[str, object]:
     }
 
 
+def _final_selection() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "required_for_promotion": True,
+        "candidate_universe": "acceptance_gate_passed_required_scenarios",
+        "must_pass": {
+            "dataset_quality_gate_status": "PASS",
+            "statistical_gate_result": "PASS",
+            "stress_suite_gate_result": "PASS",
+            "production_calibration_policy_result": "PASS",
+            "metrics_schema_version": 2,
+            "final_holdout_present": True,
+        },
+        "selection_exposure_policy": {
+            "final_holdout_usage": "confirmatory_metric_in_rank",
+            "counts_as_holdout_reuse": True,
+        },
+        "method": "lexicographic",
+        "null_metric_policy": "fail_if_required_else_worst_rank",
+        "ranking": [
+            {
+                "metric": "final_holdout.metrics_v2.trade_quality.expectancy_per_trade_krw",
+                "order": "desc",
+                "required": True,
+            },
+            {
+                "metric": "final_holdout.metrics_v2.return_risk.max_drawdown_pct",
+                "order": "asc",
+                "required": True,
+            },
+            {"metric": "parameter_candidate_id", "order": "asc", "required": True},
+        ],
+        "unsupported_metric_policy": {
+            "sharpe_ratio": "fail_if_required",
+            "sortino_ratio": "fail_if_required",
+        },
+    }
+
+
 def _production_manifest() -> dict[str, object]:
     payload = _manifest()
     payload["deployment_tier"] = "paper_candidate"
@@ -101,6 +140,8 @@ def _production_manifest() -> dict[str, object]:
         "calibration_strictness": "fail",
     }
     payload["statistical_validation"] = _statistical_validation()
+    payload["stress_suite"] = _stress_suite()
+    payload["final_selection"] = _final_selection()
     return payload
 
 

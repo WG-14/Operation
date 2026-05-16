@@ -668,6 +668,14 @@ def _metric_value(metrics: dict[str, Any], primary_metric: str, benchmark: str) 
     if raw is None:
         return None
     benchmark_value = 0.0
+    if benchmark == "buy_and_hold":
+        benchmark_value = _as_float(metrics.get("benchmark_buy_and_hold_return_pct"))
+        if benchmark_value is None:
+            benchmark_value = 0.0
+    elif benchmark == "configured":
+        benchmark_value = _as_float(metrics.get("benchmark_configured_return_pct"))
+        if benchmark_value is None:
+            benchmark_value = 0.0
     if benchmark in {"cash", "buy_and_hold", "configured"}:
         return raw - benchmark_value
     return raw

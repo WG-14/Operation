@@ -379,6 +379,16 @@ def _print_report_summary(label: str, report: dict[str, object]) -> None:
     print(f"  dataset_content_hash={report.get('dataset_content_hash')}")
     print(f"  candidates_evaluated={report.get('candidate_count')}")
     print(f"  best_candidate_id={report.get('best_candidate_id') or 'none'}")
+    print(f"  final_selection_required={1 if report.get('final_selection_required') else 0}")
+    print(f"  final_selection_gate_result={report.get('final_selection_gate_result') or 'none'}")
+    print(
+        "  final_selection_fail_reasons="
+        f"{_format_items(tuple(str(item) for item in report.get('final_selection_fail_reasons') or []))}"
+    )
+    print(f"  selected_candidate_id={report.get('selected_candidate_id') or 'none'}")
+    print(f"  selected_candidate_score_hash={report.get('selected_candidate_score_hash') or 'none'}")
+    print(f"  final_selection_contract_hash={report.get('final_selection_contract_hash') or 'none'}")
+    _print_final_selection_components(report)
     print(f"  gate_result={report.get('gate_result')}")
     print(f"  promotion_eligibility_gate_result={report.get('promotion_eligibility_gate_result') or report.get('gate_result')}")
     print(
@@ -536,6 +546,32 @@ def _print_metrics_v2_summary(report: dict[str, object]) -> None:
         f"slippage_drag_ratio={cost_execution.get('slippage_drag_ratio')} "
         f"slippage_drag_ratio_basis={cost_execution.get('slippage_drag_ratio_basis')}"
     )
+
+
+def _print_final_selection_components(report: dict[str, object]) -> None:
+    selected = str(report.get("selected_candidate_id") or "")
+    scores = report.get("candidate_final_scores")
+    if not selected or not isinstance(scores, list):
+        return
+    row = next(
+        (
+            item for item in scores
+            if isinstance(item, dict) and str(item.get("candidate_id") or "") == selected
+        ),
+        None,
+    )
+    if not isinstance(row, dict):
+        return
+    components = row.get("rank_components")
+    if not isinstance(components, list):
+        return
+    for index, component in enumerate(components[:2], start=1):
+        if not isinstance(component, dict):
+            continue
+        print(
+            f"  top_final_selection_component_{index}="
+            f"{component.get('metric')}:{component.get('value')}:{component.get('order')}"
+        )
 
 
 def _print_execution_event_summary(summary: object) -> None:
