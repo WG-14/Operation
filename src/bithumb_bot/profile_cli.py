@@ -59,6 +59,36 @@ def _print_json(payload: dict[str, object]) -> None:
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
 
 
+def _profile_execution_capability_summary(profile: dict[str, object]) -> dict[str, object]:
+    capability = profile.get("execution_capability_contract")
+    if not isinstance(capability, dict):
+        return {
+            "execution_capability_contract_hash": None,
+            "evidence_tier": None,
+            "unavailable_required_capabilities": [],
+            "market_impact_required": None,
+            "market_impact_model_available": None,
+            "top_of_book_is_full_depth": None,
+        }
+    required = capability.get("strategy_required_capabilities")
+    if not isinstance(required, dict):
+        required = {}
+    available = capability.get("available_capabilities")
+    if not isinstance(available, dict):
+        available = {}
+    return {
+        "execution_capability_contract_hash": (
+            profile.get("execution_capability_contract_hash")
+            or capability.get("execution_capability_contract_hash")
+        ),
+        "evidence_tier": capability.get("evidence_tier"),
+        "unavailable_required_capabilities": list(capability.get("unavailable_required_capabilities") or []),
+        "market_impact_required": bool(required.get("market_impact_model")),
+        "market_impact_model_available": bool(available.get("market_impact_model")),
+        "top_of_book_is_full_depth": bool(available.get("top_of_book_is_full_depth")),
+    }
+
+
 def cmd_profile_generate(
     *,
     promotion_path: str,
@@ -104,6 +134,7 @@ def cmd_profile_generate(
             "candidate_profile_hash": profile.get("candidate_profile_hash"),
             "manifest_hash": profile.get("manifest_hash"),
             "dataset_content_hash": profile.get("dataset_content_hash"),
+            **_profile_execution_capability_summary(profile),
             "next_action": "operator_review_then_profile-verify_against_target_env",
         }
     )
@@ -212,6 +243,7 @@ def cmd_profile_promote(
             "profile_hash": child.get("profile_content_hash"),
             "profile_mode": child.get("profile_mode"),
             "parent_profile_hash": child.get("parent_profile_hash"),
+            **_profile_execution_capability_summary(child),
         }
     )
     return 0

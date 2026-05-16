@@ -11,6 +11,7 @@ from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.execution_reality_contract import (
     evaluate_execution_reality_policy,
     capability_contract_hash_matches,
+    validate_execution_capability_contract,
 )
 
 from .hashing import content_hash_payload, report_content_hash_payload, sha256_prefixed
@@ -435,6 +436,10 @@ def _extend_execution_contract_reasons(
     elif not capability_contract_hash_matches(capability, capability_hash):
         reasons.extend([f"{prefix}execution_capability_contract_hash_mismatch", "execution_capability_contract_hash_mismatch"])
     else:
+        capability_validation_reasons = validate_execution_capability_contract(capability)
+        if capability_validation_reasons:
+            reasons.extend([f"{prefix}{reason}" for reason in capability_validation_reasons])
+            reasons.extend(capability_validation_reasons)
         unavailable = [str(item) for item in capability.get("unavailable_required_capabilities") or []]
         if unavailable:
             reasons.extend([f"{prefix}execution_capability_required_unavailable", "execution_capability_required_unavailable"])

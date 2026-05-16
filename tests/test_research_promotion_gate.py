@@ -1302,6 +1302,63 @@ def test_promotion_refuses_unavailable_execution_capability_requirement() -> Non
     assert "execution_market_impact_required_but_unavailable" in reasons
 
 
+def test_promotion_refuses_top_level_reserved_evidence_tier_even_if_reality_contract_is_clean() -> None:
+    candidate = _candidate()
+    clean_reality_contract = candidate["execution_reality_contract"]
+    capability = dict(clean_reality_contract["execution_capability_contract"])
+    capability["evidence_tier"] = "impact_model_calibrated"
+    capability["execution_capability_contract_hash"] = execution_capability_contract_hash(capability)
+    candidate["execution_reality_contract"] = clean_reality_contract
+    candidate["execution_contract_hash"] = clean_reality_contract["execution_contract_hash"]
+    candidate["execution_capability_contract"] = capability
+    candidate["execution_capability_contract_hash"] = capability["execution_capability_contract_hash"]
+    candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
+
+    allowed, reasons = validate_backtest_candidate_for_promotion(candidate)
+
+    assert allowed is False
+    assert "execution_evidence_tier_reserved_not_implemented" in reasons
+
+
+def test_promotion_refuses_top_level_unknown_evidence_tier_even_if_reality_contract_is_clean() -> None:
+    candidate = _candidate()
+    clean_reality_contract = candidate["execution_reality_contract"]
+    capability = dict(clean_reality_contract["execution_capability_contract"])
+    capability["evidence_tier"] = "scalar_stress_not_real_impact"
+    capability["execution_capability_contract_hash"] = execution_capability_contract_hash(capability)
+    candidate["execution_reality_contract"] = clean_reality_contract
+    candidate["execution_contract_hash"] = clean_reality_contract["execution_contract_hash"]
+    candidate["execution_capability_contract"] = capability
+    candidate["execution_capability_contract_hash"] = capability["execution_capability_contract_hash"]
+    candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
+
+    allowed, reasons = validate_backtest_candidate_for_promotion(candidate)
+
+    assert allowed is False
+    assert "execution_evidence_tier_unsupported" in reasons
+
+
+def test_promotion_refuses_top_level_capability_unavailable_required_mismatch() -> None:
+    candidate = _candidate()
+    clean_reality_contract = candidate["execution_reality_contract"]
+    capability = dict(clean_reality_contract["execution_capability_contract"])
+    required = dict(capability["strategy_required_capabilities"])
+    required["market_impact_model"] = True
+    capability["strategy_required_capabilities"] = required
+    capability["unavailable_required_capabilities"] = []
+    capability["execution_capability_contract_hash"] = execution_capability_contract_hash(capability)
+    candidate["execution_reality_contract"] = clean_reality_contract
+    candidate["execution_contract_hash"] = clean_reality_contract["execution_contract_hash"]
+    candidate["execution_capability_contract"] = capability
+    candidate["execution_capability_contract_hash"] = capability["execution_capability_contract_hash"]
+    candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
+
+    allowed, reasons = validate_backtest_candidate_for_promotion(candidate)
+
+    assert allowed is False
+    assert "execution_capability_unavailable_required_capabilities_mismatch" in reasons
+
+
 def test_promotion_refuses_missing_final_holdout_stress_when_final_holdout_present(tmp_path, monkeypatch) -> None:
     manager = _manager(tmp_path, monkeypatch)
     candidate = _production_candidate()

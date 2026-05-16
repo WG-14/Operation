@@ -514,15 +514,17 @@ def execution_contract_mismatch_reasons(
 
 
 def _canonical_contract_payload(contract: dict[str, Any]) -> dict[str, Any]:
-    return _strip_runtime_only(
-        {
-            k: v
-            for k, v in contract.items()
-            if k != CONTRACT_HASH_FIELD
-            and k not in EXECUTION_CONDITION_LINEAGE_FIELDS
-            and k not in EXECUTION_OBSERVED_EVIDENCE_FIELDS
-        }
-    )
+    payload = {
+        k: v
+        for k, v in contract.items()
+        if k != CONTRACT_HASH_FIELD
+        and k not in EXECUTION_CONDITION_LINEAGE_FIELDS
+        and k not in EXECUTION_OBSERVED_EVIDENCE_FIELDS
+    }
+    capability = payload.get("execution_capability_contract")
+    if isinstance(capability, dict):
+        payload["execution_capability_contract"] = _canonical_capability_contract_payload(capability)
+    return _strip_runtime_only(payload)
 
 
 def _canonical_capability_contract_payload(contract: dict[str, Any]) -> dict[str, Any]:
@@ -538,6 +540,13 @@ def _canonical_capability_contract_payload(contract: dict[str, Any]) -> dict[str
             for key, value in available.items()
             if key not in CAPABILITY_OBSERVED_AVAILABILITY_FIELDS
         }
+    unavailable = payload.get("unavailable_required_capabilities")
+    if isinstance(unavailable, list):
+        payload["unavailable_required_capabilities"] = [
+            item
+            for item in unavailable
+            if str(item) not in CAPABILITY_OBSERVED_AVAILABILITY_FIELDS
+        ]
     return _strip_runtime_only(payload)
 
 

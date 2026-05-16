@@ -60,6 +60,84 @@ def test_execution_contract_hash_changes_for_semantic_execution_fields(field: st
     assert changed["execution_contract_hash"] != base["execution_contract_hash"]
 
 
+def test_execution_contract_hash_ignores_nested_top_of_book_observed_availability() -> None:
+    left = build_execution_reality_contract(
+        fill_reference_policy="first_orderbook_after_decision",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="top_of_book_after_decision",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=True,
+        top_of_book_available=True,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="test_fee",
+        slippage_source="test_slippage",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+        extra={"quote_evidence_available": True},
+    )
+    right = build_execution_reality_contract(
+        fill_reference_policy="first_orderbook_after_decision",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="top_of_book_after_decision",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=True,
+        top_of_book_available=False,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="test_fee",
+        slippage_source="test_slippage",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+        extra={"quote_evidence_available": False},
+    )
+
+    assert left["execution_capability_contract"]["available_capabilities"]["top_of_book"] is True
+    assert right["execution_capability_contract"]["available_capabilities"]["top_of_book"] is False
+    assert execution_contract_hash(left) == execution_contract_hash(right)
+    assert left["execution_contract_hash"] == right["execution_contract_hash"]
+
+
+def test_execution_contract_hash_still_changes_for_semantic_top_of_book_required_change() -> None:
+    base = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=False,
+        top_of_book_available=True,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="test_fee",
+        slippage_source="test_slippage",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+        extra={"quote_evidence_available": True},
+    )
+    changed = build_execution_reality_contract(
+        fill_reference_policy="next_candle_open",
+        missing_quote_policy="fail",
+        min_execution_reality_level_for_promotion="candle_next_open",
+        allow_same_candle_close_fill=False,
+        top_of_book_required=True,
+        top_of_book_available=True,
+        latency_model={"type": "fixed_bps", "latency_ms": 0},
+        partial_fill_model={"type": "fixed_bps", "partial_fill_rate": 0.0},
+        order_failure_model={"type": "fixed_bps", "order_failure_rate": 0.0},
+        fee_source="test_fee",
+        slippage_source="test_slippage",
+        calibration_required=True,
+        calibration_artifact_hash="sha256:calibration",
+        extra={"quote_evidence_available": True},
+    )
+
+    assert execution_contract_hash(base) != execution_contract_hash(changed)
+    assert base["execution_contract_hash"] != changed["execution_contract_hash"]
+
+
 def test_execution_capability_contract_hash_is_stable_and_ignores_generated_timestamps() -> None:
     first = build_execution_capability_contract(
         fill_reference_policy="next_candle_open",

@@ -553,6 +553,33 @@ def test_profile_generation_rejects_tampered_candidate_profile_hash(tmp_path: Pa
     assert not out.exists()
 
 
+def test_profile_generate_outputs_execution_capability_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+    out = tmp_path / "profiles" / "paper.json"
+
+    rc = cmd_profile_generate(
+        promotion_path=str(promotion_path),
+        mode="paper",
+        out_path=str(out),
+        market=None,
+        interval=None,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    profile = load_approved_profile(out)
+
+    assert rc == 0
+    assert payload["execution_capability_contract_hash"] == profile["execution_capability_contract_hash"]
+    assert payload["evidence_tier"] == profile["execution_capability_contract"]["evidence_tier"]
+    assert payload["unavailable_required_capabilities"] == []
+    assert payload["market_impact_required"] is False
+    assert payload["market_impact_model_available"] is False
+    assert payload["top_of_book_is_full_depth"] is False
+
+
 def test_profile_generation_fails_closed_when_required_lineage_missing(tmp_path: Path) -> None:
     promotion = _promotion(lineage_required=True, lineage_hash="sha256:missing")
     promotion.pop("content_hash", None)
@@ -1431,6 +1458,34 @@ def test_profile_promote_refuses_malformed_semantic_evidence(tmp_path: Path, cap
 
     assert payload["error"].startswith("paper_validation_evidence_schema_invalid")
     assert payload["recommended_next_action"] == "regenerate_typed_evidence_artifact"
+
+
+def test_profile_promote_outputs_execution_capability_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    profile_path = _write_profile_with_source(tmp_path)
+    profile = load_approved_profile(profile_path)
+    evidence_path = _write_evidence(tmp_path, "paper_validation.json", profile=profile)
+    out = tmp_path / "live_dry_run.json"
+
+    rc = cmd_profile_promote(
+        profile_path=str(profile_path),
+        mode="live_dry_run",
+        out_path=str(out),
+        paper_validation_evidence=str(evidence_path),
+        live_readiness_evidence=None,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    child = load_approved_profile(out)
+
+    assert rc == 0
+    assert payload["execution_capability_contract_hash"] == child["execution_capability_contract_hash"]
+    assert payload["evidence_tier"] == child["execution_capability_contract"]["evidence_tier"]
+    assert payload["unavailable_required_capabilities"] == []
+    assert payload["market_impact_required"] is False
+    assert payload["market_impact_model_available"] is False
+    assert payload["top_of_book_is_full_depth"] is False
 
 
 def test_profile_promote_failure_json_recommends_policy_threshold_recovery(
