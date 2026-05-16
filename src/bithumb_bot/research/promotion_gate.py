@@ -121,6 +121,9 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         "white_reality_check_method": candidate.get("white_reality_check_method"),
         "bootstrap_sampling_contract_hash": candidate.get("bootstrap_sampling_contract_hash"),
         "promotion_grade_limitations": candidate.get("promotion_grade_limitations"),
+        "official_promotion_grade_wrc_generation_available": candidate.get(
+            "official_promotion_grade_wrc_generation_available"
+        ),
         "effective_trial_count": candidate.get("effective_trial_count"),
     }
     if candidate.get("execution_model") is not None:

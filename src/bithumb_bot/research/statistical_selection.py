@@ -687,7 +687,7 @@ def _statistical_gate_fail_reasons(
     if attempt_index > contract.gates.max_attempt_index_without_new_hypothesis:
         reasons.append("attempt_budget_exceeded")
     if contract.gates.max_spa_p_value is not None:
-        reasons.append("spa_p_value_missing")
+        reasons.append("spa_method_unavailable")
     if contract.gates.min_deflated_sharpe_probability is not None:
         reasons.append("deflated_sharpe_missing")
     return sorted(set(reasons))
@@ -699,11 +699,9 @@ def _limitations(contract: StatisticalSelectionContract) -> list[str]:
         "summary_metric_centered_max_bootstrap_screening_only",
         "not_white_reality_check",
         PROMOTION_GRADE_GENERATION_UNAVAILABLE_WARNING,
+        "spa_not_implemented",
+        "deflated_sharpe_not_implemented",
     ]
-    if contract.gates.max_spa_p_value is None:
-        limitations.append("spa_not_implemented")
-    if contract.gates.min_deflated_sharpe_probability is None:
-        limitations.append("deflated_sharpe_not_implemented")
     return limitations
 
 
@@ -713,11 +711,9 @@ def _promotion_grade_limitations(contract: StatisticalSelectionContract) -> list
         "not_bar_return_bootstrap",
         "not_trade_return_bootstrap",
         PROMOTION_GRADE_GENERATION_UNAVAILABLE_WARNING,
+        "spa_not_implemented",
+        "deflated_sharpe_not_implemented",
     ]
-    if contract.gates.max_spa_p_value is None:
-        limitations.append("spa_not_implemented")
-    if contract.gates.min_deflated_sharpe_probability is None:
-        limitations.append("deflated_sharpe_not_implemented")
     return limitations
 
 

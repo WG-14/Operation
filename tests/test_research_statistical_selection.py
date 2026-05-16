@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from bithumb_bot.research.experiment_manifest import parse_manifest
@@ -312,6 +313,46 @@ def test_statistical_evidence_fails_closed_when_metric_universe_is_incomplete() 
     assert evidence["missing_metric_count"] == 1
     assert evidence["statistical_gate_result"] == "FAIL"
     assert "statistical_metric_values_missing" in evidence["gate_fail_reasons"]
+
+
+def test_configured_spa_and_deflated_sharpe_remain_unavailable_fail_closed() -> None:
+    base = _manifest()
+    assert base.statistical_validation is not None
+    manifest = replace(
+        base,
+        statistical_validation=replace(
+            base.statistical_validation,
+            gates=replace(
+                base.statistical_validation.gates,
+                max_spa_p_value=0.05,
+                min_deflated_sharpe_probability=0.8,
+            ),
+        ),
+    )
+
+    evidence = build_statistical_selection_evidence(
+        manifest=manifest,
+        candidates=_candidates(),
+        manifest_hash=manifest.manifest_hash(),
+        dataset_content_hash="sha256:dataset",
+        dataset_quality_hash="sha256:quality",
+        experiment_family_id="family",
+        hypothesis_id="hypothesis",
+        hypothesis_status="pre_registered",
+        selection_hash="sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        required_scenario_ids=["scenario_001"],
+        search_budget=2,
+        parameter_grid_size=2,
+        attempt_index=1,
+        holdout_reuse_count=0,
+        dataset_reuse_policy="single_final_holdout_for_experiment_family",
+    )
+
+    assert evidence["statistical_gate_result"] == "FAIL"
+    assert "spa_method_unavailable" in evidence["gate_fail_reasons"]
+    assert "deflated_sharpe_missing" in evidence["gate_fail_reasons"]
+    assert "spa_not_implemented" in evidence["promotion_grade_limitations"]
+    assert "deflated_sharpe_not_implemented" in evidence["promotion_grade_limitations"]
 
 
 def test_statistical_validation_detects_metadata_mismatch_and_underreported_trials() -> None:

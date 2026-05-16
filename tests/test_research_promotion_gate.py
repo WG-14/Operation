@@ -1120,6 +1120,19 @@ def test_candidate_profile_hash_binds_metrics_gate_policy() -> None:
     assert sha256_prefixed(build_candidate_profile(candidate)) != sha256_prefixed(build_candidate_profile(changed))
 
 
+def test_candidate_profile_hash_binds_official_promotion_grade_wrc_availability() -> None:
+    candidate = _candidate()
+    candidate["official_promotion_grade_wrc_generation_available"] = False
+    changed = dict(candidate)
+    changed["official_promotion_grade_wrc_generation_available"] = True
+    changed.pop("candidate_profile_hash", None)
+
+    profile = build_candidate_profile(candidate)
+
+    assert profile["official_promotion_grade_wrc_generation_available"] is False
+    assert sha256_prefixed(profile) != sha256_prefixed(build_candidate_profile(changed))
+
+
 def test_promotion_refuses_required_metrics_contract_when_validation_v2_removed(tmp_path, monkeypatch) -> None:
     manager = _manager(tmp_path, monkeypatch)
     candidate = _candidate_with_required_metrics_contract(validation_metrics_v2=None)
