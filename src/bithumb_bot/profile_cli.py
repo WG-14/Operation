@@ -287,6 +287,7 @@ def cmd_decision_equivalence(
                     "repo_owned_export_artifacts": False,
                     "export_artifact_validation_error": str(artifact_exc),
                     "reason_codes": reason_codes,
+                    "outcome": "FAIL_EXPORT_BINDING",
                     "recommended_next_action": "regenerate_decisions_with_repo_owned_export_commands",
                 }
             )

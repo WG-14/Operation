@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class PositionAuthoritySnapshot:
+    raw_total_asset_qty: float
+    open_lot_count: int
+    dust_tracking_lot_count: int
+    reserved_exit_lot_count: int
+    sellable_executable_lot_count: int
+    open_exposure_qty: float
+    dust_tracking_qty: float
+    reserved_exit_qty: float
+    sellable_executable_qty: float
+    terminal_state: str
+    entry_allowed: bool
+    exit_allowed: bool
+    recovery_blocked: bool
+    recovery_block_reason: str
+    order_rules_hash: str
+    fee_authority_hash: str
+    position_state_hash: str
+    state_class: str
+    unsupported_reason: str = ""
+    research_position_model: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def runtime_position_authority_snapshot(
+    *,
+    position_gate: dict[str, Any],
+    order_rules_hash: str,
+    fee_authority_hash: str,
+    position_state_hash: str,
+) -> PositionAuthoritySnapshot:
+    state_class = classify_runtime_position_state(position_gate)
+    unsupported_reason = (
+        ""
+        if state_class == "flat_no_dust_no_position"
+        else _runtime_unsupported_reason(position_gate)
+    )
+    return PositionAuthoritySnapshot(
+        raw_total_asset_qty=_float(position_gate.get("raw_total_asset_qty")),
+        open_lot_count=_int(position_gate.get("open_lot_count")),
+        dust_tracking_lot_count=_int(position_gate.get("dust_tracking_lot_count")),
+        reserved_exit_lot_count=_int(position_gate.get("reserved_exit_lot_count")),
+        sellable_executable_lot_count=_int(position_gate.get("sellable_executable_lot_count")),
+        open_exposure_qty=_float(position_gate.get("open_exposure_qty")),
+        dust_tracking_qty=_float(position_gate.get("dust_tracking_qty")),
+        reserved_exit_qty=_float(position_gate.get("reserved_exit_qty")),
+        sellable_executable_qty=_float(position_gate.get("sellable_executable_qty")),
+        terminal_state=str(
+            position_gate.get("terminal_state")
+            or ("flat" if state_class == "flat_no_dust_no_position" else "")
+        ),
+        entry_allowed=bool(position_gate.get("entry_allowed")),
+        exit_allowed=bool(position_gate.get("exit_allowed")),
+        recovery_blocked=bool(position_gate.get("recovery_blocked")),
+        recovery_block_reason=str(position_gate.get("recovery_block_reason") or "none"),
+        order_rules_hash=order_rules_hash,
+        fee_authority_hash=fee_authority_hash,
+        position_state_hash=position_state_hash,
+        state_class=state_class,
+        unsupported_reason=unsupported_reason,
+    )
+
+
+def research_position_authority_snapshot(
+    *,
+    qty: float,
+    sellable_qty: float,
+    order_rules_hash: str,
+    fee_authority_hash: str,
+    position_state_hash: str,
+) -> PositionAuthoritySnapshot:
+    flat_no_position = float(qty) <= 0.0 and float(sellable_qty) <= 0.0
+    if flat_no_position:
+        state_class = "flat_no_dust_no_position"
+        unsupported_reason = ""
+        terminal_state = "flat"
+    else:
+        state_class = "research_model_lacks_lot_native_authority"
+        unsupported_reason = "research_model_lacks_lot_native_authority"
+        terminal_state = "research_not_modeled"
+    return PositionAuthoritySnapshot(
+        raw_total_asset_qty=max(0.0, float(qty)),
+        open_lot_count=0,
+        dust_tracking_lot_count=0,
+        reserved_exit_lot_count=0,
+        sellable_executable_lot_count=0,
+        open_exposure_qty=max(0.0, float(qty)),
+        dust_tracking_qty=0.0,
+        reserved_exit_qty=max(0.0, float(qty) - float(sellable_qty)),
+        sellable_executable_qty=max(0.0, float(sellable_qty)),
+        terminal_state=terminal_state,
+        entry_allowed=flat_no_position,
+        exit_allowed=bool(float(sellable_qty) > 0.0),
+        recovery_blocked=False,
+        recovery_block_reason="none",
+        order_rules_hash=order_rules_hash,
+        fee_authority_hash=fee_authority_hash,
+        position_state_hash=position_state_hash,
+        state_class=state_class,
+        unsupported_reason=unsupported_reason,
+        research_position_model="cash_qty_simulation_v1",
+    )
+
+
+def classify_runtime_position_state(position_gate: dict[str, Any]) -> str:
+    terminal = str(position_gate.get("terminal_state") or "").strip()
+    if bool(position_gate.get("recovery_blocked")):
+        return "recovery_blocked"
+    if terminal in {"open_exposure", "reserved_exit_pending", "dust_only", "non_executable_position", "flat"}:
+        return (
+            "flat_no_dust_no_position"
+            if terminal == "flat" and _is_runtime_flat_no_dust(position_gate)
+            else terminal
+        )
+    if _is_runtime_flat_no_dust(position_gate):
+        return "flat_no_dust_no_position"
+    if _int(position_gate.get("reserved_exit_lot_count")) > 0:
+        return "reserved_exit_pending"
+    if _int(position_gate.get("sellable_executable_lot_count")) > 0 or bool(
+        position_gate.get("normalized_exposure_active")
+    ):
+        return "open_exposure"
+    if bool(position_gate.get("has_dust_only_remainder")) or str(
+        position_gate.get("dust_state") or ""
+    ) not in {"", "flat", "no_dust"}:
+        return "dust_only"
+    if bool(position_gate.get("has_any_position_residue")):
+        return "non_executable_position"
+    return "runtime_position_state_not_research_comparable"
+
+
+def classify_decision_position_state(decision: dict[str, Any], *, source: str) -> tuple[str, str]:
+    snapshot = decision.get("position_authority")
+    if isinstance(snapshot, dict):
+        state_class = str(snapshot.get("state_class") or "").strip()
+        reason = str(snapshot.get("unsupported_reason") or "").strip()
+        if state_class:
+            return state_class, reason
+    if _is_decision_flat_no_dust(decision):
+        return "flat_no_dust_no_position", ""
+    dust_state = str(decision.get("dust_state") or "").strip()
+    if dust_state == "research_not_modeled":
+        return "research_model_lacks_lot_native_authority", "research_model_lacks_lot_native_authority"
+    if dust_state in {"harmless_dust", "blocking_dust", "dust_only"}:
+        return "dust_only", "research_model_lacks_dust_state" if source == "research" else ""
+    if bool(decision.get("normalized_exposure_active")):
+        return (
+            "research_model_lacks_lot_native_authority"
+            if source == "research"
+            else "runtime_position_state_not_research_comparable"
+        ), "research_model_lacks_lot_native_authority" if source == "research" else ""
+    return (
+        "runtime_position_state_not_research_comparable"
+        if source == "runtime"
+        else "research_model_lacks_lot_native_authority",
+        "",
+    )
+
+
+def _runtime_unsupported_reason(position_gate: dict[str, Any]) -> str:
+    state_class = classify_runtime_position_state(position_gate)
+    if state_class == "dust_only":
+        return "research_model_lacks_dust_state"
+    if state_class in {"open_exposure", "reserved_exit_pending", "non_executable_position", "recovery_blocked"}:
+        return "research_model_lacks_lot_native_authority"
+    return "research_runtime_state_not_comparable"
+
+
+def _is_runtime_flat_no_dust(position_gate: dict[str, Any]) -> bool:
+    return (
+        bool(position_gate.get("entry_allowed")) is True
+        and bool(position_gate.get("exit_allowed")) is False
+        and str(position_gate.get("dust_state") or "") in {"flat", "no_dust"}
+        and bool(position_gate.get("effective_flat")) is True
+        and bool(position_gate.get("normalized_exposure_active")) is False
+        and _int(position_gate.get("open_lot_count")) == 0
+        and _int(position_gate.get("dust_tracking_lot_count")) == 0
+        and _int(position_gate.get("sellable_executable_lot_count")) == 0
+        and bool(position_gate.get("has_any_position_residue")) is False
+    )
+
+
+def _is_decision_flat_no_dust(decision: dict[str, Any]) -> bool:
+    return (
+        bool(decision.get("entry_allowed")) is True
+        and bool(decision.get("exit_allowed")) is False
+        and str(decision.get("dust_state") or "") in {"flat", "no_dust"}
+        and bool(decision.get("effective_flat")) is True
+        and bool(decision.get("normalized_exposure_active")) is False
+    )
+
+
+def _float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0

@@ -226,9 +226,122 @@ def test_decision_export_artifacts_can_produce_promotion_grade_report(tmp_path) 
     )
 
     assert result.ok is True
+    assert result.report["outcome"] == "PASS_POSITIVE_EQUIVALENCE"
+    assert "claims_scope" in result.report
+    assert "state_coverage_matrix" in result.report
+    assert result.report["claims_scope"]["positive_equivalence_state_classes"] == ["flat_no_dust_no_position"]
     assert result.report["promotion_grade_comparison"] is True
     assert result.report["research_export_content_hash"].startswith("sha256:")
     assert result.report["runtime_export_content_hash"].startswith("sha256:")
+
+
+def test_non_flat_runtime_state_is_fail_closed_not_positive_equivalence() -> None:
+    runtime = _decision(
+        final_signal="SELL",
+        side="SELL",
+        position_state_hash="sha256:runtime_open_position",
+        entry_allowed=False,
+        exit_allowed=True,
+        effective_flat=False,
+        normalized_exposure_active=True,
+        position_authority={
+            "state_class": "open_exposure",
+            "unsupported_reason": "research_model_lacks_lot_native_authority",
+            "open_lot_count": 1,
+            "sellable_executable_lot_count": 1,
+            "terminal_state": "open_exposure",
+        },
+    )
+
+    result = _compare(_decision(), runtime)
+
+    assert result.ok is False
+    assert result.report["outcome"] == "FAIL_CLOSED_UNMODELED_STATE"
+    assert result.report["claims_scope"]["full_lifecycle_equivalence_supported"] is False
+    assert "open_exposure" in result.report["claims_scope"]["unsupported_state_classes"]
+    assert result.report["state_coverage_matrix"]["open_exposure"]["fail_closed_expected"] is True
+    assert result.report["recommended_next_action"] == (
+        "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
+    )
+
+
+def test_matching_unsupported_non_flat_states_do_not_pass() -> None:
+    unsupported = _decision(
+        final_signal="HOLD",
+        side="HOLD",
+        position_state_hash="sha256:cash_qty_simulation",
+        entry_allowed=False,
+        exit_allowed=True,
+        dust_state="research_not_modeled",
+        effective_flat=False,
+        normalized_exposure_active=True,
+        position_authority={
+            "state_class": "research_model_lacks_lot_native_authority",
+            "unsupported_reason": "research_model_lacks_lot_native_authority",
+            "research_position_model": "cash_qty_simulation_v1",
+        },
+    )
+
+    result = _compare(unsupported, unsupported)
+
+    assert result.ok is False
+    assert result.report["mismatch_count"] == 0
+    assert result.report["outcome"] == "FAIL_CLOSED_UNMODELED_STATE"
+    assert result.report["claims_scope"]["fail_closed_unmodeled_state_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "state_class", "expected_outcome"),
+    [
+        ("flat_no_dust_no_position", "flat_no_dust_no_position", "PASS_POSITIVE_EQUIVALENCE"),
+        ("harmless_dust_effective_flat", "dust_only", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("blocking_dust", "dust_only", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("open_exposure_sellable", "open_exposure", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("reserved_exit_pending", "reserved_exit_pending", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("non_executable_position", "non_executable_position", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("partial_buy_pending", "open_exposure", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("partial_sell_reserved", "reserved_exit_pending", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("pending_sell_after_dataset_end", "reserved_exit_pending", "FAIL_CLOSED_UNMODELED_STATE"),
+        ("unresolved_order_recovery_blocked", "recovery_blocked", "FAIL_CLOSED_UNMODELED_STATE"),
+    ],
+)
+def test_state_coverage_matrix_fixtures_classify_expected_outcomes(
+    fixture_name: str,
+    state_class: str,
+    expected_outcome: str,
+) -> None:
+    decision = _decision()
+    if state_class != "flat_no_dust_no_position":
+        decision.update(
+            {
+                "position_state_hash": f"sha256:{state_class}",
+                "entry_allowed": False,
+                "exit_allowed": state_class == "open_exposure",
+                "dust_state": _fixture_dust_state(fixture_name=fixture_name, state_class=state_class),
+                "effective_flat": False,
+                "normalized_exposure_active": state_class in {"open_exposure", "reserved_exit_pending", "recovery_blocked"},
+                "position_authority": {
+                    "state_class": state_class,
+                    "unsupported_reason": "research_model_lacks_lot_native_authority",
+                },
+            }
+        )
+
+    result = _compare(decision, decision)
+
+    assert result.report["outcome"] == expected_outcome
+    assert result.ok is (expected_outcome == "PASS_POSITIVE_EQUIVALENCE")
+    assert state_class in result.report["state_coverage_matrix"]
+
+
+def _fixture_dust_state(*, fixture_name: str, state_class: str) -> str:
+    if fixture_name == "harmless_dust_effective_flat":
+        return "harmless_dust"
+    if fixture_name == "blocking_dust":
+        return "blocking_dust"
+    if state_class == "dust_only":
+        return "dust_only"
+    return "flat"
 
 
 def test_decision_export_loader_rejects_tampered_hash(tmp_path) -> None:

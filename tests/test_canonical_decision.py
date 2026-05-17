@@ -70,6 +70,7 @@ def test_runtime_strategy_decision_exports_canonical_operational_fields() -> Non
     assert event["blocked"] is True
     assert event["blocked_filters"] == ("cost_edge",)
     assert event["position_state_hash"].startswith("sha256:")
+    assert event["position_authority"]["state_class"] == "flat_no_dust_no_position"
     assert event["exit_evaluations_hash"].startswith("sha256:")
     assert event["execution_timing_policy_hash"] == "sha256:timing"
     assert event["order_rules_hash"].startswith("sha256:")
@@ -150,6 +151,7 @@ def test_runtime_flat_no_dust_position_uses_research_comparable_hash() -> None:
 
     assert event["dust_state"] == "flat"
     assert event["position_state_hash"] == canonical_flat_position_state_hash()
+    assert event["position_authority"]["state_class"] == "flat_no_dust_no_position"
 
 
 def test_research_decision_export_normalizes_to_canonical_schema() -> None:

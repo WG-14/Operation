@@ -6,6 +6,8 @@ from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
 
+from .position_authority import runtime_position_authority_snapshot
+
 
 def sha256_prefixed(payload: object) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -237,6 +239,9 @@ def runtime_decision_to_canonical_event(
         position_state=context.get("position_state") if isinstance(context.get("position_state"), dict) else {},
     )
     flat_comparison_state = comparison_position_state == CANONICAL_FLAT_POSITION_STATE
+    position_state_hash = canonical_payload_hash(comparison_position_state)
+    order_rules_hash = canonical_payload_hash(order_rules)
+    fee_authority_hash = canonical_payload_hash(stable_fee_model)
     payload = {
         "decision_contract_version": CANONICAL_DECISION_CONTRACT_VERSION,
         "strategy_contract_version": STRATEGY_CONTRACT_VERSION,
@@ -267,14 +272,14 @@ def runtime_decision_to_canonical_event(
         "range_ratio": _range_ratio_from_filters(filters),
         "expected_edge_ratio": cost_edge.get("value"),
         "required_edge_ratio": cost_edge.get("threshold"),
-        "fee_authority_hash": canonical_payload_hash(stable_fee_model),
-        "fee_model_hash": canonical_payload_hash(stable_fee_model),
+        "fee_authority_hash": fee_authority_hash,
+        "fee_model_hash": fee_authority_hash,
         "slippage_model_hash": canonical_payload_hash(context.get("position_lot_interpretation_costs") or {}),
-        "order_rules_hash": canonical_payload_hash(order_rules),
+        "order_rules_hash": order_rules_hash,
         "market_regime": market_regime.get("composite_regime") or context.get("current_regime") or "",
         "regime_decision": context.get("regime_decision") or "",
         "regime_block_reason": context.get("regime_block_reason") or "",
-        "position_state_hash": canonical_payload_hash(comparison_position_state),
+        "position_state_hash": position_state_hash,
         "entry_allowed": position_gate.get("entry_allowed"),
         "exit_allowed": position_gate.get("exit_allowed"),
         "dust_state": "flat"
@@ -290,7 +295,15 @@ def runtime_decision_to_canonical_event(
         "execution_timing_policy_hash": execution_timing_policy_hash,
         "replay_fingerprint_hash": canonical_payload_hash(context.get("replay_fingerprint") or {}),
     }
-    return CanonicalDecisionEvent(normalize_canonical_decision(payload))
+    payload["position_authority"] = runtime_position_authority_snapshot(
+        position_gate=position_gate,
+        order_rules_hash=order_rules_hash,
+        fee_authority_hash=fee_authority_hash,
+        position_state_hash=position_state_hash,
+    ).as_dict()
+    normalized = normalize_canonical_decision(payload)
+    normalized["position_authority"] = payload["position_authority"]
+    return CanonicalDecisionEvent(normalized)
 
 
 def research_decision_to_canonical_event(
@@ -308,7 +321,10 @@ def research_decision_to_canonical_event(
     payload["execution_timing_policy_hash"] = execution_timing_policy_hash or str(
         payload.get("execution_timing_policy_hash") or ""
     )
-    return CanonicalDecisionEvent(normalize_canonical_decision(payload))
+    normalized = normalize_canonical_decision(payload)
+    if isinstance(payload.get("position_authority"), dict):
+        normalized["position_authority"] = dict(payload["position_authority"])  # type: ignore[arg-type]
+    return CanonicalDecisionEvent(normalized)
 
 
 def canonical_flat_position_state_hash() -> str:

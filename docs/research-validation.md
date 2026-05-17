@@ -251,6 +251,20 @@ Current stable registry refusal and validation reasons include:
 
 The research engine is a pure replay/simulation path. It does not call the live broker, order lifecycle, run loop, recovery commands, or lot-native SELL authority code.
 
+## Decision-Equivalence Claim Scope
+
+Decision-equivalence evidence is scoped evidence, not a blanket lifecycle proof. The current positive baseline is the explicitly modeled `flat_no_dust_no_position` state class. The research backtest position model remains `cash_qty_simulation_v1` for non-flat states and does not yet provide lot-native authority over open lots, dust lots, reserved exits, sellable executable lots, or recovery blockers.
+
+Reports must therefore expose `claims_scope` and `state_coverage_matrix`. Non-flat or lifecycle-specific states such as `open_exposure`, `reserved_exit_pending`, `dust_only`, `non_executable_position`, `recovery_blocked`, `runtime_position_state_not_research_comparable`, and `research_model_lacks_lot_native_authority` are expected to fail closed unless a future `lot_native_simulation_v1` model explicitly implements and tests them. `FAIL_CLOSED_UNMODELED_STATE` is safe behavior, but it is not evidence of full lifecycle equivalence.
+
+Operators should read report outcomes as follows:
+
+- `PASS_POSITIVE_EQUIVALENCE`: positive equivalence only for explicitly modeled supported state classes.
+- `FAIL_CLOSED_UNMODELED_STATE`: no promotion-grade lifecycle equivalence claim; extend the research lot-native model before claiming support.
+- `FAIL_ACTUAL_DRIFT`: inspect semantic decision drift before promotion.
+- `FAIL_INCOMPLETE_CANONICAL_PAYLOAD`: regenerate canonical exports with required fields.
+- `FAIL_EXPORT_BINDING`: regenerate repo-owned, profile-bound decision exports.
+
 ## Commands
 
 Canonical commands:

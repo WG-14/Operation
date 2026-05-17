@@ -13,6 +13,7 @@ from bithumb_bot.market_regime import (
 )
 from bithumb_bot.market_regime.thresholds import MarketRegimeThresholds
 from bithumb_bot.canonical_decision import canonical_flat_position_state_hash, canonical_payload_hash
+from bithumb_bot.position_authority import research_position_authority_snapshot
 
 from .dataset_snapshot import DatasetSnapshot
 from .execution_model import ExecutionFill, ExecutionModel, ExecutionRequest, FixedBpsExecutionModel, model_params_hash
@@ -1082,7 +1083,14 @@ def _research_decision_payload(
         "slippage_bps": float(slippage_bps),
         "sizing": "cash_fraction_0.99_or_full_sellable_qty",
     }
-    return {
+    fee_authority_hash = canonical_payload_hash({"source": "research_manifest", "fee_rate": float(fee_rate)})
+    position_state_hash = (
+        canonical_flat_position_state_hash()
+        if flat_no_position
+        else canonical_payload_hash(position_state)
+    )
+    order_rules_hash = canonical_payload_hash(order_rules)
+    payload = {
         "strategy_name": "sma_with_filter",
         "market": dataset.market,
         "interval": dataset.interval,
@@ -1120,16 +1128,14 @@ def _research_decision_payload(
                 parameter_values.get("strategy_min_expected_edge_ratio", 0.0),
             )
         ),
-        "fee_authority_hash": canonical_payload_hash({"source": "research_manifest", "fee_rate": float(fee_rate)}),
+        "fee_authority_hash": fee_authority_hash,
         "fee_model_hash": canonical_payload_hash({"fee_rate": float(fee_rate)}),
         "slippage_model_hash": canonical_payload_hash({"slippage_bps": float(slippage_bps)}),
-        "order_rules_hash": canonical_payload_hash(order_rules),
+        "order_rules_hash": order_rules_hash,
         "market_regime": str(regime_snapshot.get("composite_regime") or ""),
         "regime_decision": "allowed",
         "regime_block_reason": "",
-        "position_state_hash": canonical_flat_position_state_hash()
-        if flat_no_position
-        else canonical_payload_hash(position_state),
+        "position_state_hash": position_state_hash,
         "entry_allowed": bool(qty <= 0.0),
         "exit_allowed": bool(sellable_qty > 0.0),
         "dust_state": "flat" if flat_no_position else "research_not_modeled",
@@ -1149,6 +1155,14 @@ def _research_decision_payload(
             }
         ),
     }
+    payload["position_authority"] = research_position_authority_snapshot(
+        qty=float(qty),
+        sellable_qty=float(sellable_qty),
+        order_rules_hash=order_rules_hash,
+        fee_authority_hash=fee_authority_hash,
+        position_state_hash=position_state_hash,
+    ).as_dict()
+    return payload
 
 
 def _model_latency_ms(model: ExecutionModel) -> int:

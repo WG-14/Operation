@@ -11,6 +11,7 @@ from .canonical_decision import (
     normalize_canonical_decision,
     validate_canonical_decision_payload,
 )
+from .position_authority import classify_decision_position_state
 from .research.hashing import content_hash_payload, sha256_prefixed
 
 
@@ -56,6 +57,23 @@ DIAGNOSTIC_DRIFT_FIELDS = (
     "fee_model_hash",
     "slippage_model_hash",
     "blocked",
+)
+DECISION_EQUIVALENCE_OUTCOMES = (
+    "PASS_POSITIVE_EQUIVALENCE",
+    "FAIL_CLOSED_UNMODELED_STATE",
+    "FAIL_ACTUAL_DRIFT",
+    "FAIL_INCOMPLETE_CANONICAL_PAYLOAD",
+    "FAIL_EXPORT_BINDING",
+)
+STATE_COVERAGE_CLASSES = (
+    "flat_no_dust_no_position",
+    "open_exposure",
+    "reserved_exit_pending",
+    "dust_only",
+    "non_executable_position",
+    "recovery_blocked",
+    "runtime_position_state_not_research_comparable",
+    "research_model_lacks_lot_native_authority",
 )
 
 
@@ -166,15 +184,40 @@ def compare_decision_equivalence(
     canonical_incomplete_decision_count = len(
         [item for item in canonical_validation_items if item.get("incomplete_canonical_decision")]
     )
-    promotion_grade_comparison = bool(canonical_comparison and canonical_incomplete_decision_count == 0 and not binding_items)
+    canonical_complete_and_bound = bool(
+        canonical_comparison
+        and canonical_incomplete_decision_count == 0
+        and not binding_items
+    )
+    reason_code_set = sorted(set(reason_codes))
+    state_coverage_matrix = _state_coverage_matrix(
+        research_decisions=research_decisions,
+        runtime_decisions=runtime_decisions,
+        mismatch_items=mismatch_items,
+        missing_research=missing_research,
+        missing_runtime=missing_runtime,
+        reason_codes=reason_code_set,
+    )
+    outcome = _equivalence_outcome(
+        reason_codes=reason_code_set,
+        canonical_incomplete_decision_count=canonical_incomplete_decision_count,
+        binding_items=binding_items,
+        exact_mismatch_count=exact_mismatch_count,
+        missing_research=missing_research,
+        missing_runtime=missing_runtime,
+        state_coverage_matrix=state_coverage_matrix,
+    )
     report: dict[str, Any] = {
         "schema_version": DECISION_EQUIVALENCE_SCHEMA_VERSION,
         "comparison_contract_version": comparison_contract_version,
         "canonical_schema": canonical_comparison,
         "legacy_schema": not canonical_comparison,
-        "promotion_grade_comparison": promotion_grade_comparison,
-        "ok": not reason_codes,
-        "reason_codes": sorted(set(reason_codes)),
+        "promotion_grade_comparison": (
+            canonical_complete_and_bound and outcome == "PASS_POSITIVE_EQUIVALENCE"
+        ),
+        "ok": outcome == "PASS_POSITIVE_EQUIVALENCE" and not reason_code_set,
+        "outcome": outcome,
+        "reason_codes": reason_code_set,
         "profile_content_hash": profile_hash,
         "market": market,
         "interval": interval,
@@ -193,9 +236,12 @@ def compare_decision_equivalence(
         "canonical_incomplete_decision_count": canonical_incomplete_decision_count,
         "canonical_validation": canonical_validation_items,
         "binding_validation": binding_items,
+        "claims_scope": _claims_scope(state_coverage_matrix=state_coverage_matrix),
+        "state_coverage_matrix": state_coverage_matrix,
         "recommended_next_action": _recommended_next_action(
-            reason_codes=sorted(set(reason_codes)),
+            reason_codes=reason_code_set,
             canonical_comparison=canonical_comparison,
+            state_coverage_matrix=state_coverage_matrix,
         ),
         "generated_at": generated_at,
     }
@@ -252,9 +298,28 @@ def compare_decision_export_artifacts(
     if artifact_binding:
         report["promotion_grade_comparison"] = False
         report["ok"] = False
+        report["outcome"] = "FAIL_EXPORT_BINDING"
         report["recommended_next_action"] = _recommended_next_action(
             reason_codes=reason_codes,
             canonical_comparison=bool(report.get("canonical_schema")),
+            state_coverage_matrix=report.get("state_coverage_matrix") if isinstance(report.get("state_coverage_matrix"), dict) else None,
+        )
+    else:
+        matrix = report.get("state_coverage_matrix") if isinstance(report.get("state_coverage_matrix"), dict) else {}
+        report["outcome"] = _equivalence_outcome(
+            reason_codes=reason_codes,
+            canonical_incomplete_decision_count=int(report.get("canonical_incomplete_decision_count") or 0),
+            binding_items=list(report.get("binding_validation") or ()),
+            exact_mismatch_count=int(report.get("mismatch_count") or 0),
+            missing_research=list(report.get("missing_research_decisions") or ()),
+            missing_runtime=list(report.get("missing_runtime_decisions") or ()),
+            state_coverage_matrix=matrix,
+        )
+        report["ok"] = report["outcome"] == "PASS_POSITIVE_EQUIVALENCE" and not reason_codes
+        report["recommended_next_action"] = _recommended_next_action(
+            reason_codes=reason_codes,
+            canonical_comparison=bool(report.get("canonical_schema")),
+            state_coverage_matrix=matrix,
         )
     report[DECISION_EQUIVALENCE_HASH_FIELD] = compute_decision_equivalence_hash(report)
     return DecisionEquivalenceResult(report=report)
@@ -671,7 +736,154 @@ def _reason_for_field(field: str) -> str:
     return f"decision_{field}_mismatch"
 
 
-def _recommended_next_action(*, reason_codes: list[str], canonical_comparison: bool) -> str:
+def _state_coverage_matrix(
+    *,
+    research_decisions: list[dict[str, Any]],
+    runtime_decisions: list[dict[str, Any]],
+    mismatch_items: list[dict[str, object]],
+    missing_research: list[str],
+    missing_runtime: list[str],
+    reason_codes: list[str],
+) -> dict[str, dict[str, object]]:
+    matrix: dict[str, dict[str, object]] = {
+        state: {
+            "research_decision_count": 0,
+            "runtime_decision_count": 0,
+            "positive_equivalence_supported": state == "flat_no_dust_no_position",
+            "fail_closed_expected": state != "flat_no_dust_no_position",
+            "mismatch_count": 0,
+            "representative_reason_codes": [],
+        }
+        for state in STATE_COVERAGE_CLASSES
+    }
+    key_classes: dict[str, set[str]] = {}
+    for source, decisions in (("research", research_decisions), ("runtime", runtime_decisions)):
+        for decision in decisions:
+            state_class, unsupported_reason = classify_decision_position_state(decision, source=source)
+            state_class = state_class if state_class in matrix else (
+                "runtime_position_state_not_research_comparable"
+                if source == "runtime"
+                else "research_model_lacks_lot_native_authority"
+            )
+            entry = matrix[state_class]
+            entry[f"{source}_decision_count"] = int(entry[f"{source}_decision_count"]) + 1
+            key = _decision_key(
+                _normalize_for_comparison(
+                    decision,
+                    canonical=is_canonical_decision(decision),
+                )
+            )
+            key_classes.setdefault(key, set()).add(state_class)
+            if unsupported_reason:
+                reasons = list(entry["representative_reason_codes"])
+                if unsupported_reason not in reasons:
+                    reasons.append(unsupported_reason)
+                entry["representative_reason_codes"] = sorted(reasons)
+    for item in mismatch_items:
+        key = str(item.get("decision_key") or "")
+        for state_class in key_classes.get(key, set()):
+            matrix[state_class]["mismatch_count"] = int(matrix[state_class]["mismatch_count"]) + 1
+            for reason in _field_reasons(item):
+                reasons = list(matrix[state_class]["representative_reason_codes"])
+                if reason not in reasons:
+                    reasons.append(reason)
+                matrix[state_class]["representative_reason_codes"] = sorted(reasons)
+    missing_research_set = set(missing_research)
+    missing_runtime_set = set(missing_runtime)
+    for key in missing_research_set | missing_runtime_set:
+        for state_class in key_classes.get(key, set()):
+            matrix[state_class]["mismatch_count"] = int(matrix[state_class]["mismatch_count"]) + 1
+            reason = "missing_research_decision" if key in missing_research_set else "missing_runtime_decision"
+            reasons = list(matrix[state_class]["representative_reason_codes"])
+            if reason not in reasons:
+                reasons.append(reason)
+            matrix[state_class]["representative_reason_codes"] = sorted(reasons)
+    for state_class, entry in matrix.items():
+        if state_class != "flat_no_dust_no_position" and (
+            int(entry["research_decision_count"]) > 0 or int(entry["runtime_decision_count"]) > 0
+        ):
+            reasons = list(entry["representative_reason_codes"])
+            if "fail_closed_unmodeled_state" not in reasons:
+                reasons.append("fail_closed_unmodeled_state")
+            entry["representative_reason_codes"] = sorted(reasons)
+    if reason_codes:
+        for entry in matrix.values():
+            if int(entry["research_decision_count"]) > 0 or int(entry["runtime_decision_count"]) > 0:
+                entry["representative_reason_codes"] = sorted(
+                    set(list(entry["representative_reason_codes"]) + list(reason_codes[:5]))
+                )
+    return matrix
+
+
+def _claims_scope(*, state_coverage_matrix: dict[str, dict[str, object]]) -> dict[str, object]:
+    positive_classes = [
+        state
+        for state, entry in state_coverage_matrix.items()
+        if bool(entry.get("positive_equivalence_supported"))
+        and (int(entry.get("research_decision_count") or 0) > 0 or int(entry.get("runtime_decision_count") or 0) > 0)
+    ]
+    unsupported_classes = [
+        state
+        for state, entry in state_coverage_matrix.items()
+        if bool(entry.get("fail_closed_expected"))
+        and (int(entry.get("research_decision_count") or 0) > 0 or int(entry.get("runtime_decision_count") or 0) > 0)
+    ]
+    fail_closed_count = sum(
+        int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0)
+        for state, entry in state_coverage_matrix.items()
+        if state != "flat_no_dust_no_position" and bool(entry.get("fail_closed_expected"))
+    )
+    return {
+        "positive_equivalence_state_classes": positive_classes,
+        "unsupported_state_classes": unsupported_classes,
+        "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
+        "full_lifecycle_equivalence_supported": False,
+        "signal_equivalence_supported": bool(positive_classes),
+        "position_lifecycle_equivalence_supported": False,
+        "fail_closed_unmodeled_state_count": fail_closed_count,
+        "limitations": [
+            "research_position_model_cash_qty_simulation_v1_is_not_lot_native_authority",
+            "non_flat_dust_reserved_exit_residue_and_recovery_states_fail_closed_until_explicitly_modeled",
+            "fail_closed_unmodeled_state_is_not_full_lifecycle_equivalence_evidence",
+        ],
+    }
+
+
+def _equivalence_outcome(
+    *,
+    reason_codes: list[str],
+    canonical_incomplete_decision_count: int,
+    binding_items: list[dict[str, object]],
+    exact_mismatch_count: int,
+    missing_research: list[str],
+    missing_runtime: list[str],
+    state_coverage_matrix: dict[str, dict[str, object]],
+) -> str:
+    if binding_items or any(
+        "export_" in code or code.endswith("_not_bound_to_report")
+        for code in reason_codes
+    ):
+        return "FAIL_EXPORT_BINDING"
+    if canonical_incomplete_decision_count > 0 or any(code.startswith("canonical_decision_") for code in reason_codes):
+        return "FAIL_INCOMPLETE_CANONICAL_PAYLOAD"
+    unsupported_count = sum(
+        int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0)
+        for state, entry in state_coverage_matrix.items()
+        if state != "flat_no_dust_no_position" and bool(entry.get("fail_closed_expected"))
+    )
+    if unsupported_count > 0:
+        return "FAIL_CLOSED_UNMODELED_STATE"
+    if exact_mismatch_count > 0 or missing_research or missing_runtime or reason_codes:
+        return "FAIL_ACTUAL_DRIFT"
+    return "PASS_POSITIVE_EQUIVALENCE"
+
+
+def _recommended_next_action(
+    *,
+    reason_codes: list[str],
+    canonical_comparison: bool,
+    state_coverage_matrix: dict[str, dict[str, object]] | None = None,
+) -> str:
     if not canonical_comparison:
         return "regenerate_decisions_with_repo_owned_export_commands"
     if "decision_export_artifact_unverified" in reason_codes:
@@ -682,6 +894,12 @@ def _recommended_next_action(*, reason_codes: list[str], canonical_comparison: b
         return "bind_decisions_to_requested_profile_market_interval_data_fingerprint"
     if "decision_order_rules_mismatch" in reason_codes:
         return "populate_runtime_order_rules_hash_before_replay"
+    if state_coverage_matrix and any(
+        state != "flat_no_dust_no_position"
+        and int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0) > 0
+        for state, entry in state_coverage_matrix.items()
+    ):
+        return "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
     if not reason_codes:
         return "none"
     if "decision_timestamp_candle_basis_mismatch" in reason_codes:
@@ -689,7 +907,7 @@ def _recommended_next_action(*, reason_codes: list[str], canonical_comparison: b
     if "decision_exit_rule_mismatch" in reason_codes:
         return "inspect_strategy_exit_rule_profile_and_runtime_configuration"
     if "decision_position_dust_mismatch" in reason_codes:
-        return "align_flat_position_canonical_state"
+        return "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
     if "runtime_position_state_not_research_comparable" in reason_codes:
         return "scope_runtime_only_state_as_fail_closed_or_extend_research_model"
     if "decision_fee_authority_mismatch" in reason_codes:
