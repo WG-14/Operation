@@ -520,6 +520,31 @@ def _attach_decision_equivalence_report(
         "runtime_export_content_hash": "sha256:runtime_export",
         "repo_owned_export_artifacts": True,
         "legacy_or_unverified_export": False,
+        "outcome": "PASS_POSITIVE_EQUIVALENCE",
+        "claims_scope": {
+            "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
+            "unsupported_state_classes": [],
+            "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
+            "full_lifecycle_equivalence_supported": False,
+            "signal_equivalence_supported": True,
+            "position_lifecycle_equivalence_supported": False,
+            "fail_closed_unmodeled_state_count": 0,
+            "limitations": [
+                "research_position_model_cash_qty_simulation_v1_is_not_lot_native_authority",
+                "non_flat_dust_reserved_exit_residue_and_recovery_states_fail_closed_until_explicitly_modeled",
+                "fail_closed_unmodeled_state_is_not_full_lifecycle_equivalence_evidence",
+            ],
+        },
+        "state_coverage_matrix": {
+            "flat_no_dust_no_position": {
+                "research_decision_count": 20,
+                "runtime_decision_count": 20,
+                "positive_equivalence_supported": True,
+                "fail_closed_expected": False,
+                "mismatch_count": 0,
+                "representative_reason_codes": [],
+            },
+        },
         "recommended_next_action": "none",
         "generated_at": "2026-05-03T00:00:00+00:00",
     }
@@ -1209,6 +1234,13 @@ def test_profile_transition_preserves_parent_hash_and_stores_evidence_hash(tmp_p
     assert child["paper_validation_evidence_path"] == str(evidence_path.resolve())
     assert child["paper_validation_evidence_content_hash"] == json.loads(evidence_path.read_text())["content_hash"]
     assert child["paper_validation_approved_profile_hash"] == parent["profile_content_hash"]
+    assert child["decision_equivalence_outcome"] == "PASS_POSITIVE_EQUIVALENCE"
+    assert child["decision_equivalence_positive_state_classes"] == ["flat_no_dust_no_position"]
+    assert child["decision_equivalence_unsupported_state_classes"] == []
+    assert child["decision_equivalence_full_lifecycle_supported"] is False
+    assert child["decision_equivalence_signal_equivalence_supported"] is True
+    assert child["decision_equivalence_position_lifecycle_supported"] is False
+    assert child["decision_equivalence_fail_closed_unmodeled_state_count"] == 0
 
 
 def test_profile_transition_evidence_fails_on_execution_contract_mismatch(tmp_path: Path) -> None:
@@ -1718,6 +1750,13 @@ def _decision(**overrides: object) -> dict[str, object]:
         "block_reason": "",
     }
     payload.update(overrides)
+    authority = dict(payload.get("position_authority") or {})
+    authority.setdefault("state_class", "flat_no_dust_no_position")
+    authority.setdefault("unsupported_reason", "")
+    authority.setdefault("position_state_hash", payload["position_state_hash"])
+    authority.setdefault("order_rules_hash", payload["order_rules_hash"])
+    authority.setdefault("fee_authority_hash", payload["fee_authority_hash"])
+    payload["position_authority"] = authority
     return payload
 
 
@@ -1998,6 +2037,74 @@ def test_profile_promote_fails_when_decision_equivalence_mismatch_count_nonzero(
             "paper_validation_evidence_decision_equivalence_not_promotion_grade",
         ),
         (
+            {"outcome": "FAIL_CLOSED_UNMODELED_STATE"},
+            "paper_validation_evidence_decision_equivalence_outcome_not_positive",
+        ),
+        (
+            {"claims_scope": None},
+            "paper_validation_evidence_decision_equivalence_claims_scope_missing",
+        ),
+        (
+            {"state_coverage_matrix": None},
+            "paper_validation_evidence_decision_equivalence_state_coverage_matrix_missing",
+        ),
+        (
+            {
+                "claims_scope": {
+                    "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
+                    "unsupported_state_classes": [],
+                    "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
+                    "full_lifecycle_equivalence_supported": False,
+                    "signal_equivalence_supported": True,
+                    "position_lifecycle_equivalence_supported": False,
+                    "fail_closed_unmodeled_state_count": 1,
+                }
+            },
+            "paper_validation_evidence_decision_equivalence_unmodeled_state_present",
+        ),
+        (
+            {
+                "claims_scope": {
+                    "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
+                    "unsupported_state_classes": ["open_exposure"],
+                    "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
+                    "full_lifecycle_equivalence_supported": False,
+                    "signal_equivalence_supported": True,
+                    "position_lifecycle_equivalence_supported": False,
+                    "fail_closed_unmodeled_state_count": 0,
+                }
+            },
+            "paper_validation_evidence_decision_equivalence_unsupported_state_present",
+        ),
+        (
+            {
+                "claims_scope": {
+                    "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
+                    "unsupported_state_classes": [],
+                    "promotion_claim": "full_lifecycle_equivalence",
+                    "full_lifecycle_equivalence_supported": False,
+                    "signal_equivalence_supported": True,
+                    "position_lifecycle_equivalence_supported": False,
+                    "fail_closed_unmodeled_state_count": 0,
+                }
+            },
+            "paper_validation_evidence_decision_equivalence_scope_claim_missing",
+        ),
+        (
+            {
+                "claims_scope": {
+                    "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
+                    "unsupported_state_classes": [],
+                    "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
+                    "full_lifecycle_equivalence_supported": False,
+                    "signal_equivalence_supported": True,
+                    "position_lifecycle_equivalence_supported": True,
+                    "fail_closed_unmodeled_state_count": 0,
+                }
+            },
+            "paper_validation_evidence_decision_equivalence_scope_contradiction",
+        ),
+        (
             {"canonical_incomplete_decision_count": 1},
             "paper_validation_evidence_decision_equivalence_incomplete_canonical",
         ),
@@ -2051,6 +2158,29 @@ def test_profile_promote_fails_when_decision_equivalence_semantics_invalid(
     evidence_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(ApprovedProfileError, match=reason):
+        promote_profile_mode(
+            parent_profile=profile,
+            target_mode="live_dry_run",
+            paper_validation_evidence=str(evidence_path),
+        )
+
+
+def test_profile_promote_fails_when_decision_equivalence_outcome_missing(tmp_path: Path) -> None:
+    profile_path = _write_profile_with_source(tmp_path)
+    profile = load_approved_profile(profile_path)
+    payload = _evidence_payload(profile)
+    payload["evidence_path"] = str((tmp_path / "decision_outcome_missing.json").resolve())
+    report_path = _attach_decision_equivalence_report(tmp_path, payload, profile)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.pop("outcome")
+    report["content_hash"] = compute_decision_equivalence_hash(report)
+    report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+    payload["decision_equivalence_content_hash"] = report["content_hash"]
+    payload["content_hash"] = compute_evidence_content_hash(payload)
+    evidence_path = tmp_path / "decision_outcome_missing.json"
+    evidence_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ApprovedProfileError, match="paper_validation_evidence_decision_equivalence_outcome_missing"):
         promote_profile_mode(
             parent_profile=profile,
             target_mode="live_dry_run",

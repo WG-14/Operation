@@ -151,11 +151,23 @@ def compare_decision_equivalence(
                     }
                 )
         if field_mismatches:
+            state_classes = sorted(
+                set(
+                    filter(
+                        None,
+                        (
+                            classify_decision_position_state(left, source="research")[0],
+                            classify_decision_position_state(right, source="runtime")[0],
+                        ),
+                    )
+                )
+            )
             mismatch_items.append(
                 {
                     "decision_key": key,
                     "reason_code": "decision_field_mismatch",
                     "fields": field_mismatches,
+                    "state_classes": state_classes,
                 }
             )
     mismatch_items.extend(
@@ -198,6 +210,11 @@ def compare_decision_equivalence(
         missing_runtime=missing_runtime,
         reason_codes=reason_code_set,
     )
+    drift_counts = _drift_counts(
+        mismatch_items=mismatch_items,
+        missing_research=missing_research,
+        missing_runtime=missing_runtime,
+    )
     outcome = _equivalence_outcome(
         reason_codes=reason_code_set,
         canonical_incomplete_decision_count=canonical_incomplete_decision_count,
@@ -205,6 +222,7 @@ def compare_decision_equivalence(
         exact_mismatch_count=exact_mismatch_count,
         missing_research=missing_research,
         missing_runtime=missing_runtime,
+        actual_semantic_drift_count=drift_counts["actual_semantic_drift_count"],
         state_coverage_matrix=state_coverage_matrix,
     )
     report: dict[str, Any] = {
@@ -236,6 +254,8 @@ def compare_decision_equivalence(
         "canonical_incomplete_decision_count": canonical_incomplete_decision_count,
         "canonical_validation": canonical_validation_items,
         "binding_validation": binding_items,
+        "actual_semantic_drift_count": drift_counts["actual_semantic_drift_count"],
+        "lifecycle_unmodeled_mismatch_count": drift_counts["lifecycle_unmodeled_mismatch_count"],
         "claims_scope": _claims_scope(state_coverage_matrix=state_coverage_matrix),
         "state_coverage_matrix": state_coverage_matrix,
         "recommended_next_action": _recommended_next_action(
@@ -313,6 +333,7 @@ def compare_decision_export_artifacts(
             exact_mismatch_count=int(report.get("mismatch_count") or 0),
             missing_research=list(report.get("missing_research_decisions") or ()),
             missing_runtime=list(report.get("missing_runtime_decisions") or ()),
+            actual_semantic_drift_count=int(report.get("actual_semantic_drift_count") or 0),
             state_coverage_matrix=matrix,
         )
         report["ok"] = report["outcome"] == "PASS_POSITIVE_EQUIVALENCE" and not reason_codes
@@ -779,6 +800,17 @@ def _state_coverage_matrix(
                 if unsupported_reason not in reasons:
                     reasons.append(unsupported_reason)
                 entry["representative_reason_codes"] = sorted(reasons)
+            dust_detail = _dust_detail_class(decision)
+            if dust_detail and state_class == "dust_only":
+                dust_details = list(entry.setdefault("dust_detail_classes", []))
+                if dust_detail not in dust_details:
+                    dust_details.append(dust_detail)
+                entry["dust_detail_classes"] = sorted(dust_details)
+                operability_states = list(entry.setdefault("dust_operability_states", []))
+                operability = _dust_operability_state(dust_detail)
+                if operability not in operability_states:
+                    operability_states.append(operability)
+                entry["dust_operability_states"] = sorted(operability_states)
     for item in mismatch_items:
         key = str(item.get("decision_key") or "")
         for state_class in key_classes.get(key, set()):
@@ -815,6 +847,25 @@ def _state_coverage_matrix(
     return matrix
 
 
+def _dust_detail_class(decision: dict[str, Any]) -> str:
+    dust_state = str(decision.get("dust_state") or "").strip()
+    if dust_state == "harmless_dust":
+        return "harmless_dust_effective_flat"
+    if dust_state == "blocking_dust":
+        return "blocking_dust"
+    if dust_state == "dust_only":
+        return "dust_only"
+    return ""
+
+
+def _dust_operability_state(dust_detail: str) -> str:
+    if dust_detail == "harmless_dust_effective_flat":
+        return "entry_gate_effective_flat_but_not_lifecycle_equivalent"
+    if dust_detail == "blocking_dust":
+        return "entry_blocking_dust"
+    return "dust_only_unmodeled"
+
+
 def _claims_scope(*, state_coverage_matrix: dict[str, dict[str, object]]) -> dict[str, object]:
     positive_classes = [
         state
@@ -849,6 +900,31 @@ def _claims_scope(*, state_coverage_matrix: dict[str, dict[str, object]]) -> dic
     }
 
 
+def _drift_counts(
+    *,
+    mismatch_items: list[dict[str, object]],
+    missing_research: list[str],
+    missing_runtime: list[str],
+) -> dict[str, int]:
+    actual = len(missing_research) + len(missing_runtime)
+    lifecycle = 0
+    for item in mismatch_items:
+        if item.get("diagnostic_only"):
+            continue
+        reasons = set(_field_reasons(item))
+        state_classes = set(str(value) for value in item.get("state_classes") or ())
+        if reasons == {"decision_position_dust_mismatch"} and any(
+            state != "flat_no_dust_no_position" for state in state_classes
+        ):
+            lifecycle += 1
+        else:
+            actual += 1
+    return {
+        "actual_semantic_drift_count": actual,
+        "lifecycle_unmodeled_mismatch_count": lifecycle,
+    }
+
+
 def _equivalence_outcome(
     *,
     reason_codes: list[str],
@@ -857,6 +933,7 @@ def _equivalence_outcome(
     exact_mismatch_count: int,
     missing_research: list[str],
     missing_runtime: list[str],
+    actual_semantic_drift_count: int,
     state_coverage_matrix: dict[str, dict[str, object]],
 ) -> str:
     if binding_items or any(
@@ -866,6 +943,8 @@ def _equivalence_outcome(
         return "FAIL_EXPORT_BINDING"
     if canonical_incomplete_decision_count > 0 or any(code.startswith("canonical_decision_") for code in reason_codes):
         return "FAIL_INCOMPLETE_CANONICAL_PAYLOAD"
+    if actual_semantic_drift_count > 0:
+        return "FAIL_ACTUAL_DRIFT"
     unsupported_count = sum(
         int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0)
         for state, entry in state_coverage_matrix.items()
@@ -894,12 +973,6 @@ def _recommended_next_action(
         return "bind_decisions_to_requested_profile_market_interval_data_fingerprint"
     if "decision_order_rules_mismatch" in reason_codes:
         return "populate_runtime_order_rules_hash_before_replay"
-    if state_coverage_matrix and any(
-        state != "flat_no_dust_no_position"
-        and int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0) > 0
-        for state, entry in state_coverage_matrix.items()
-    ):
-        return "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
     if not reason_codes:
         return "none"
     if "decision_timestamp_candle_basis_mismatch" in reason_codes:
@@ -914,4 +987,10 @@ def _recommended_next_action(
         return "inspect_fee_authority_order_rules_and_cost_model_inputs"
     if "decision_regime_mismatch" in reason_codes:
         return "replay_runtime_with_approved_regime_policy"
+    if state_coverage_matrix and any(
+        state != "flat_no_dust_no_position"
+        and int(entry.get("research_decision_count") or 0) + int(entry.get("runtime_decision_count") or 0) > 0
+        for state, entry in state_coverage_matrix.items()
+    ):
+        return "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
     return "inspect_research_runtime_decision_drift_before_promotion"

@@ -666,6 +666,11 @@ def _promotion_grade_research_export_decisions(
         decision["slippage_model_hash"] = canonical_payload_hash(slippage_model)
         decision["order_rules_hash"] = order_rules_hash
         decision["exit_evaluations_hash"] = canonical_payload_hash(())
+        authority = dict(decision.get("position_authority") if isinstance(decision.get("position_authority"), dict) else {})
+        authority["position_state_hash"] = str(decision.get("position_state_hash") or "")
+        authority["order_rules_hash"] = str(decision.get("order_rules_hash") or "")
+        authority["fee_authority_hash"] = str(decision.get("fee_authority_hash") or "")
+        decision["position_authority"] = authority
         aligned_decisions.append(decision)
     return aligned_decisions
 

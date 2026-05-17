@@ -525,10 +525,15 @@ def test_repo_owned_export_replay_artifacts_can_pass_positive_equivalence(
     assert runtime_artifact.content_hash.startswith("sha256:")
     assert {decision["profile_content_hash"] for decision in research_artifact.decisions} == {profile_hash}
     assert {decision["profile_content_hash"] for decision in runtime_artifact.decisions} == {profile_hash}
+    assert all("position_authority" in decision for decision in research_artifact.decisions)
+    assert all("position_authority" in decision for decision in runtime_artifact.decisions)
     assert result.ok is True, result.report
+    assert result.report["outcome"] == "PASS_POSITIVE_EQUIVALENCE"
     assert result.report["promotion_grade_comparison"] is True
     assert result.report["repo_owned_export_artifacts"] is True
     assert result.report["legacy_or_unverified_export"] is False
+    assert result.report["claims_scope"]["positive_equivalence_state_classes"] == ["flat_no_dust_no_position"]
+    assert result.report["claims_scope"]["fail_closed_unmodeled_state_count"] == 0
     assert result.report["mismatch_count"] == 0
     assert result.report["missing_research_decisions"] == []
     assert result.report["missing_runtime_decisions"] == []

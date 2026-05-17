@@ -1574,6 +1574,34 @@ def _copy_decision_equivalence_fields(child: dict[str, Any], evidence: dict[str,
     child["decision_equivalence_content_hash"] = evidence.get("decision_equivalence_content_hash")
     child["decision_equivalence_matched_decision_count"] = evidence.get("matched_decision_count")
     child["decision_equivalence_mismatch_count"] = evidence.get("mismatch_count")
+    report_path = str(evidence.get("decision_equivalence_report_path") or "").strip()
+    if not report_path:
+        return
+    try:
+        report = _load_json(report_path)
+    except ApprovedProfileError:
+        return
+    claims_scope = report.get("claims_scope") if isinstance(report.get("claims_scope"), dict) else {}
+    child["decision_equivalence_outcome"] = report.get("outcome")
+    child["decision_equivalence_claims_scope"] = dict(claims_scope)
+    child["decision_equivalence_positive_state_classes"] = list(
+        claims_scope.get("positive_equivalence_state_classes") or []
+    )
+    child["decision_equivalence_unsupported_state_classes"] = list(
+        claims_scope.get("unsupported_state_classes") or []
+    )
+    child["decision_equivalence_full_lifecycle_supported"] = bool(
+        claims_scope.get("full_lifecycle_equivalence_supported")
+    )
+    child["decision_equivalence_signal_equivalence_supported"] = bool(
+        claims_scope.get("signal_equivalence_supported")
+    )
+    child["decision_equivalence_position_lifecycle_supported"] = bool(
+        claims_scope.get("position_lifecycle_equivalence_supported")
+    )
+    child["decision_equivalence_fail_closed_unmodeled_state_count"] = int(
+        claims_scope.get("fail_closed_unmodeled_state_count") or 0
+    )
 
 
 def _validate_decision_equivalence_evidence(
@@ -1642,6 +1670,41 @@ def _validate_decision_equivalence_evidence(
         raise ApprovedProfileError(f"{label}_decision_equivalence_legacy_schema")
     if report.get("legacy_schema") is True:
         raise ApprovedProfileError(f"{label}_decision_equivalence_legacy_schema")
+    if "outcome" not in report:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_outcome_missing")
+    if report.get("outcome") != "PASS_POSITIVE_EQUIVALENCE":
+        raise ApprovedProfileError(f"{label}_decision_equivalence_outcome_not_positive")
+    claims_scope = report.get("claims_scope")
+    if not isinstance(claims_scope, dict):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_claims_scope_missing")
+    state_coverage_matrix = report.get("state_coverage_matrix")
+    if not isinstance(state_coverage_matrix, dict):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_state_coverage_matrix_missing")
+    positive_classes = claims_scope.get("positive_equivalence_state_classes")
+    if not isinstance(positive_classes, list) or not positive_classes:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_positive_state_classes_missing")
+    unsupported_classes = claims_scope.get("unsupported_state_classes")
+    if not isinstance(unsupported_classes, list):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_unsupported_state_classes_invalid")
+    if unsupported_classes:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_unsupported_state_present")
+    if int(claims_scope.get("fail_closed_unmodeled_state_count") or 0) > 0:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_unmodeled_state_present")
+    for state_class in list(positive_classes) + list(unsupported_classes):
+        entry = state_coverage_matrix.get(str(state_class))
+        if not isinstance(entry, dict):
+            raise ApprovedProfileError(f"{label}_decision_equivalence_state_coverage_matrix_incomplete")
+    if claims_scope.get("full_lifecycle_equivalence_supported") is not True:
+        if claims_scope.get("promotion_claim") != (
+            "positive_decision_equivalence_for_explicitly_modeled_state_classes_only"
+        ):
+            raise ApprovedProfileError(f"{label}_decision_equivalence_scope_claim_missing")
+    if claims_scope.get("signal_equivalence_supported") is not True:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_signal_scope_not_supported")
+    if claims_scope.get("position_lifecycle_equivalence_supported") is True and (
+        claims_scope.get("full_lifecycle_equivalence_supported") is not True
+    ):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_scope_contradiction")
     if report.get("promotion_grade_comparison") is not True:
         raise ApprovedProfileError(f"{label}_decision_equivalence_not_promotion_grade")
     if report.get("legacy_or_unverified_export") is True:

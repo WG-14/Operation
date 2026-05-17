@@ -179,6 +179,34 @@ def validate_canonical_decision_payload(
                 "canonical_decision_incomplete",
             ]
         )
+    if promotion_grade:
+        authority = payload.get("position_authority")
+        if not isinstance(authority, dict):
+            missing.append("position_authority")
+            reason_codes.extend(
+                [
+                    "canonical_decision_position_authority_missing",
+                    "canonical_decision_incomplete",
+                ]
+            )
+        else:
+            state_class = str(authority.get("state_class") or "").strip()
+            if not state_class:
+                missing.append("position_authority.state_class")
+                reason_codes.extend(
+                    [
+                        "canonical_decision_position_authority_state_class_missing",
+                        "canonical_decision_incomplete",
+                    ]
+                )
+            for field, reason in (
+                ("position_state_hash", "canonical_decision_position_authority_position_hash_mismatch"),
+                ("order_rules_hash", "canonical_decision_position_authority_order_rules_hash_mismatch"),
+                ("fee_authority_hash", "canonical_decision_position_authority_fee_authority_hash_mismatch"),
+            ):
+                if str(authority.get(field) or "").strip() != str(normalized.get(field) or "").strip():
+                    missing.append(f"position_authority.{field}")
+                    reason_codes.extend([reason, "canonical_decision_incomplete"])
     complete = not missing
     is_promotion_grade = bool(complete)
     if promotion_grade and not is_promotion_grade:

@@ -64,6 +64,13 @@ def _decision(**overrides: object) -> dict[str, object]:
         "replay_fingerprint_hash": "sha256:replay",
     }
     payload.update(overrides)
+    authority = dict(payload.get("position_authority") or {})
+    authority.setdefault("state_class", "flat_no_dust_no_position")
+    authority.setdefault("unsupported_reason", "")
+    authority.setdefault("position_state_hash", payload["position_state_hash"])
+    authority.setdefault("order_rules_hash", payload["order_rules_hash"])
+    authority.setdefault("fee_authority_hash", payload["fee_authority_hash"])
+    payload["position_authority"] = authority
     return payload
 
 
@@ -235,10 +242,44 @@ def test_decision_export_artifacts_can_produce_promotion_grade_report(tmp_path) 
     assert result.report["runtime_export_content_hash"].startswith("sha256:")
 
 
+def test_promotion_grade_decision_without_position_authority_fails_incomplete() -> None:
+    payload = _decision()
+    payload.pop("position_authority")
+
+    result = _compare(payload, payload)
+
+    assert result.ok is False
+    assert result.report["outcome"] == "FAIL_INCOMPLETE_CANONICAL_PAYLOAD"
+    assert result.report["promotion_grade_comparison"] is False
+    assert "canonical_decision_position_authority_missing" in result.report["reason_codes"]
+
+
+@pytest.mark.parametrize(
+    ("authority_field", "reason"),
+    [
+        ("position_state_hash", "canonical_decision_position_authority_position_hash_mismatch"),
+        ("order_rules_hash", "canonical_decision_position_authority_order_rules_hash_mismatch"),
+        ("fee_authority_hash", "canonical_decision_position_authority_fee_authority_hash_mismatch"),
+    ],
+)
+def test_promotion_grade_position_authority_hash_mismatches_fail_incomplete(
+    authority_field: str,
+    reason: str,
+) -> None:
+    authority = dict(_decision()["position_authority"])  # type: ignore[arg-type]
+    authority[authority_field] = "sha256:other"
+    payload = _decision(position_authority=authority)
+
+    result = _compare(payload, payload)
+
+    assert result.ok is False
+    assert result.report["outcome"] == "FAIL_INCOMPLETE_CANONICAL_PAYLOAD"
+    assert result.report["promotion_grade_comparison"] is False
+    assert reason in result.report["reason_codes"]
+
+
 def test_non_flat_runtime_state_is_fail_closed_not_positive_equivalence() -> None:
     runtime = _decision(
-        final_signal="SELL",
-        side="SELL",
         position_state_hash="sha256:runtime_open_position",
         entry_allowed=False,
         exit_allowed=True,
@@ -263,6 +304,60 @@ def test_non_flat_runtime_state_is_fail_closed_not_positive_equivalence() -> Non
     assert result.report["recommended_next_action"] == (
         "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
     )
+
+
+def test_unmodeled_lifecycle_plus_actual_signal_drift_returns_actual_drift() -> None:
+    research = _decision(
+        position_state_hash="sha256:research_open_position",
+        entry_allowed=False,
+        exit_allowed=True,
+        effective_flat=False,
+        normalized_exposure_active=True,
+        position_authority={
+            "state_class": "research_model_lacks_lot_native_authority",
+            "unsupported_reason": "research_model_lacks_lot_native_authority",
+            "position_state_hash": "sha256:research_open_position",
+            "order_rules_hash": "sha256:order_rules",
+            "fee_authority_hash": "sha256:fee_authority",
+        },
+    )
+    runtime = _decision(
+        raw_signal="SELL",
+        final_signal="SELL",
+        side="SELL",
+        position_state_hash="sha256:runtime_open_position",
+        entry_allowed=False,
+        exit_allowed=True,
+        effective_flat=False,
+        normalized_exposure_active=True,
+        position_authority={
+            "state_class": "open_exposure",
+            "unsupported_reason": "research_model_lacks_lot_native_authority",
+            "position_state_hash": "sha256:runtime_open_position",
+            "order_rules_hash": "sha256:order_rules",
+            "fee_authority_hash": "sha256:fee_authority",
+        },
+    )
+
+    result = _compare(research, runtime)
+
+    assert result.report["outcome"] == "FAIL_ACTUAL_DRIFT"
+    assert result.report["actual_semantic_drift_count"] == 1
+    assert result.report["lifecycle_unmodeled_mismatch_count"] == 0
+
+
+def test_missing_runtime_decision_is_actual_drift() -> None:
+    result = compare_decision_equivalence(
+        research_decisions=[_decision()],
+        runtime_decisions=[],
+        profile_hash="sha256:profile",
+        market="KRW-BTC",
+        interval="1m",
+        data_fingerprint="sha256:data",
+    )
+
+    assert result.report["outcome"] == "FAIL_ACTUAL_DRIFT"
+    assert result.report["actual_semantic_drift_count"] == 1
 
 
 def test_matching_unsupported_non_flat_states_do_not_pass() -> None:
@@ -323,6 +418,9 @@ def test_state_coverage_matrix_fixtures_classify_expected_outcomes(
                 "position_authority": {
                     "state_class": state_class,
                     "unsupported_reason": "research_model_lacks_lot_native_authority",
+                    "position_state_hash": f"sha256:{state_class}",
+                    "order_rules_hash": decision["order_rules_hash"],
+                    "fee_authority_hash": decision["fee_authority_hash"],
                 },
             }
         )
