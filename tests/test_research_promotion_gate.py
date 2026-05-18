@@ -1208,12 +1208,35 @@ def _write_validation_run_if_ready(manager: PathManager, candidate: dict[str, ob
         walk_hash = str(walk.get("content_hash") or "")
         if not walk_hash.startswith("sha256:"):
             return
+    final_holdout_required = bool(candidate.get("final_holdout_required_for_promotion") is not False)
+    stress_required = bool(candidate.get("stress_suite_required") or candidate.get("stress_suite_contract"))
+    statistical_required = bool(candidate.get("statistical_validation_required"))
+    final_selection_required = False
     stages = [
         {"name": "readiness", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
+        {"name": "dataset_quality", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
         {"name": "backtest", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {"backtest_report_path": str(backtest_path.resolve())}, "artifact_hashes": {"backtest_report_hash": backtest["content_hash"]}, "reasons": []},
+        {"name": "final_holdout", "required": final_holdout_required, "status": "PASS" if final_holdout_required else "SKIPPED_NOT_REQUIRED", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
+        {"name": "stress_suite", "required": stress_required, "status": "PASS" if stress_required else "SKIPPED_NOT_REQUIRED", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
+        {"name": "statistical_validation", "required": statistical_required, "status": "PASS" if statistical_required else "SKIPPED_NOT_REQUIRED", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
+        {"name": "final_selection", "required": final_selection_required, "status": "PASS" if final_selection_required else "SKIPPED_NOT_REQUIRED", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
         {"name": "walk_forward", "required": walk_required, "status": "PASS" if walk_required else "SKIPPED_NOT_REQUIRED", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {"walk_forward_report_path": str(walk_path.resolve())} if walk_required else {}, "artifact_hashes": {"walk_forward_report_hash": walk_hash} if walk_required else {}, "reasons": []},
+        {"name": "promotion_eligibility", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
         {"name": "promotion", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
         {"name": "reproduce", "required": True, "status": "PASS", "started_at": None, "completed_at": None, "input_hashes": {}, "output_hashes": {}, "artifact_paths": {}, "artifact_hashes": {}, "reasons": []},
+    ]
+    required_stage_names = [
+        "readiness",
+        "dataset_quality",
+        "backtest",
+        *(["final_holdout"] if final_holdout_required else []),
+        *(["stress_suite"] if stress_required else []),
+        *(["statistical_validation"] if statistical_required else []),
+        *(["final_selection"] if final_selection_required else []),
+        *(["walk_forward"] if walk_required else []),
+        "promotion_eligibility",
+        "promotion",
+        "reproduce",
     ]
     payload = {
         "validation_run_schema_version": 1,
@@ -1225,7 +1248,14 @@ def _write_validation_run_if_ready(manager: PathManager, candidate: dict[str, ob
         "deployment_tier": candidate.get("deployment_tier"),
         "mode": "strict",
         "command_args_hash": "sha256:args",
-        "required_stage_names": ["readiness", "backtest", *(["walk_forward"] if walk_required else []), "promotion", "reproduce"],
+        "validation_policy_source": "repo_research_validation_policy_v1",
+        "validation_policy_required_stage_names": required_stage_names,
+        "effective_walk_forward_required": walk_required,
+        "effective_final_holdout_required": final_holdout_required,
+        "effective_stress_suite_required": stress_required,
+        "effective_statistical_validation_required": statistical_required,
+        "effective_final_selection_required": final_selection_required,
+        "required_stage_names": required_stage_names,
         "stages": stages,
         "selected_candidate_id": candidate.get("parameter_candidate_id"),
         "backtest_report_path": str(backtest_path.resolve()),
@@ -2007,6 +2037,126 @@ def test_production_promotion_refuses_validation_run_walk_forward_hash_mismatch(
 
     with pytest.raises(PromotionGateError, match="validation_run_walk_forward_report_hash_mismatch"):
         promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
+
+
+def test_direct_promotion_with_policy_required_walk_forward_rejects_validation_run_walk_hash_mismatch_when_manifest_flag_false(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    backtest_candidate = _production_candidate(walk_forward_required=False, walk_forward_gate_result=None)
+    _write_report(manager, backtest_candidate)
+    _write_walk_forward_report(manager, _walk_forward_candidate(backtest_candidate))
+    path = manager.data_dir() / "reports" / "research" / "promo_exp" / "validation_run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_policy_source"] = "repo_research_validation_policy_v1"
+    payload["validation_policy_required_stage_names"] = [
+        "readiness",
+        "dataset_quality",
+        "backtest",
+        "walk_forward",
+        "promotion_eligibility",
+        "promotion",
+        "reproduce",
+    ]
+    payload["effective_walk_forward_required"] = True
+    payload["required_stage_names"] = list(payload["validation_policy_required_stage_names"])
+    walk_path = manager.data_dir() / "reports" / "research" / "promo_exp" / "walk_forward_report.json"
+    payload["walk_forward_report_path"] = str(walk_path.resolve())
+    payload["walk_forward_report_hash"] = "sha256:mismatch"
+    for stage in payload["stages"]:
+        if stage["name"] == "walk_forward":
+            stage["required"] = True
+            stage["status"] = "PASS"
+            stage["artifact_paths"] = {"walk_forward_report_path": str(walk_path.resolve())}
+            stage["artifact_hashes"] = {"walk_forward_report_hash": "sha256:mismatch"}
+    payload["validation_run_binding_hash"] = validation_run_binding_hash(payload)
+    payload["content_hash"] = validation_run_content_hash(payload)
+    write_json_atomic(path, payload)
+
+    with pytest.raises(PromotionGateError, match="validation_run_walk_forward_report_hash_mismatch"):
+        promote_candidate(
+            experiment_id="promo_exp",
+            candidate_id="candidate_001",
+            manager=manager,
+            validation_run_path=path,
+            allow_pending_validation_run=False,
+        )
+
+
+def test_direct_promotion_with_policy_required_walk_forward_accepts_matching_validation_run_walk_hash_when_manifest_flag_false(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    backtest_candidate = _production_candidate(walk_forward_required=False, walk_forward_gate_result=None)
+    _write_report(manager, backtest_candidate)
+    _write_walk_forward_report(manager, _walk_forward_candidate(backtest_candidate))
+    path = manager.data_dir() / "reports" / "research" / "promo_exp" / "validation_run.json"
+    walk_path = manager.data_dir() / "reports" / "research" / "promo_exp" / "walk_forward_report.json"
+    walk_payload = json.loads(walk_path.read_text(encoding="utf-8"))
+    walk_hash = _canonical_report_hash(walk_payload)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["validation_policy_source"] = "repo_research_validation_policy_v1"
+    payload["validation_policy_required_stage_names"] = [
+        "readiness",
+        "dataset_quality",
+        "backtest",
+        "walk_forward",
+        "promotion_eligibility",
+        "promotion",
+        "reproduce",
+    ]
+    payload["effective_walk_forward_required"] = True
+    payload["required_stage_names"] = list(payload["validation_policy_required_stage_names"])
+    payload["walk_forward_report_path"] = str(walk_path.resolve())
+    payload["walk_forward_report_hash"] = walk_hash
+    for stage in payload["stages"]:
+        if stage["name"] == "walk_forward":
+            stage["required"] = True
+            stage["status"] = "PASS"
+            stage["artifact_paths"] = {"walk_forward_report_path": str(walk_path.resolve())}
+            stage["artifact_hashes"] = {"walk_forward_report_hash": walk_hash}
+    payload["validation_run_binding_hash"] = validation_run_binding_hash(payload)
+    payload["content_hash"] = validation_run_content_hash(payload)
+    write_json_atomic(path, payload)
+
+    result = promote_candidate(
+        experiment_id="promo_exp",
+        candidate_id="candidate_001",
+        manager=manager,
+        validation_run_path=path,
+        allow_pending_validation_run=False,
+    )
+
+    assert result.artifact["effective_walk_forward_required"] is True
+    assert result.artifact["walk_forward_required"] is True
+    assert result.artifact["manifest_walk_forward_required"] is False
+    assert result.artifact["walk_forward_report_hash"] == walk_hash
+    assert "walk_forward" in result.artifact["validation_policy_required_stage_names"]
+
+
+def test_direct_production_promotion_rejects_validation_run_missing_policy_fields_when_manifest_flags_are_weaker(
+    tmp_path, monkeypatch
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    backtest_candidate = _production_candidate(walk_forward_required=False, walk_forward_gate_result=None)
+    _write_report(manager, backtest_candidate)
+    path = manager.data_dir() / "reports" / "research" / "promo_exp" / "validation_run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("validation_policy_source", None)
+    payload.pop("validation_policy_required_stage_names", None)
+    payload.pop("effective_walk_forward_required", None)
+    payload["validation_run_binding_hash"] = validation_run_binding_hash(payload)
+    payload["content_hash"] = validation_run_content_hash(payload)
+    write_json_atomic(path, payload)
+
+    with pytest.raises(PromotionGateError, match="validation_run_policy_fields_missing"):
+        promote_candidate(
+            experiment_id="promo_exp",
+            candidate_id="candidate_001",
+            manager=manager,
+            validation_run_path=path,
+            allow_pending_validation_run=False,
+        )
 
 
 def test_promotion_refuses_backtest_body_tamper_with_stale_embedded_hash(tmp_path, monkeypatch) -> None:

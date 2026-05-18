@@ -378,6 +378,7 @@ def cmd_research_promote_candidate(
         "  effective_statistical_validation_required="
         f"{1 if result.artifact.get('effective_statistical_validation_required') else 0}"
     )
+    print(f"  effective_final_selection_required={1 if result.artifact.get('effective_final_selection_required') else 0}")
     print(f"  selection_universe_hash={result.artifact.get('selection_universe_hash') or 'none'}")
     print(f"  statistical_evidence_hash={result.artifact.get('statistical_evidence_hash') or 'none'}")
     print(f"  evidence_grade={result.artifact.get('evidence_grade') or 'none'}")

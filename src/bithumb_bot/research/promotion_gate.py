@@ -334,6 +334,35 @@ def _with_effective_requirement_fields(candidate: dict[str, Any], policy: dict[s
     return effective
 
 
+def _validation_run_policy_field_reasons(
+    *,
+    validation_run_payload: dict[str, Any],
+    production_bound: bool,
+    allow_legacy_lineage: bool,
+) -> list[str]:
+    if not production_bound or allow_legacy_lineage:
+        return []
+    source = str(validation_run_payload.get("validation_policy_source") or "").strip()
+    required_names = validation_run_payload.get("validation_policy_required_stage_names")
+    if not source or not isinstance(required_names, list) or not [str(item) for item in required_names if str(item)]:
+        return ["validation_run_policy_fields_missing"]
+    return []
+
+
+def _validation_run_walk_forward_report_hash_reasons(
+    *,
+    validation_run_payload: dict[str, Any],
+    walk_forward: ValidatedCandidate | None,
+) -> list[str]:
+    recorded_hash = str(validation_run_payload.get("walk_forward_report_hash") or "").strip()
+    if not recorded_hash.startswith("sha256:"):
+        return ["validation_run_walk_forward_report_hash_missing"]
+    canonical_hash = str((walk_forward.source_report_hash if walk_forward else "") or "").strip()
+    if recorded_hash != canonical_hash:
+        return ["validation_run_walk_forward_report_hash_mismatch"]
+    return []
+
+
 def _extend_portfolio_policy_reasons(
     candidate: dict[str, Any],
     reasons: list[str],
@@ -931,6 +960,13 @@ def promote_candidate(
                 raise PromotionGateError(f"promotion refused: validation_run_missing:{exc}") from exc
             if validation_run_reasons:
                 raise PromotionGateError(f"promotion refused: {','.join(validation_run_reasons)}")
+            validation_run_policy_reasons = _validation_run_policy_field_reasons(
+                validation_run_payload=validation_run_payload,
+                production_bound=production_bound_candidate,
+                allow_legacy_lineage=allow_legacy_lineage,
+            )
+            if validation_run_policy_reasons:
+                raise PromotionGateError(f"promotion refused: {','.join(validation_run_policy_reasons)}")
             validation_run_hash = str(validation_run_payload.get("content_hash") or "")
             binding_reasons = verify_validation_run_binding(
                 validation_run_payload,
@@ -969,6 +1005,13 @@ def promote_candidate(
                 candidate_id=candidate_id,
                 backtest_candidate=backtest.candidate,
             )
+        if policy["effective_walk_forward_required"]:
+            walk_forward_binding_reasons = _validation_run_walk_forward_report_hash_reasons(
+                validation_run_payload=validation_run_payload,
+                walk_forward=walk_forward,
+            )
+            if walk_forward_binding_reasons:
+                raise PromotionGateError(f"promotion refused: {','.join(walk_forward_binding_reasons)}")
         walk_forward_required = bool(policy["effective_walk_forward_required"])
     artifact = {
         "promotion_schema_version": 1,

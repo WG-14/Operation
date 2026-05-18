@@ -999,6 +999,13 @@ def test_promote_candidate_summary_renders_execution_capability_diagnostics(caps
     artifact = {
         "gate_result": "PASS",
         "statistical_validation_required": False,
+        "validation_policy_source": "repo_research_validation_policy_v1",
+        "validation_policy_required_stage_names": ["readiness", "backtest", "promotion"],
+        "effective_walk_forward_required": False,
+        "effective_final_holdout_required": False,
+        "effective_stress_suite_required": False,
+        "effective_statistical_validation_required": False,
+        "effective_final_selection_required": True,
         "promotion_grade_limitations": [],
         "promotion_blocking_reasons": [],
         "execution_capability_contract_hash": "sha256:capability",
@@ -1029,6 +1036,13 @@ def test_promote_candidate_summary_renders_execution_capability_diagnostics(caps
     assert "market_impact_required=False" in output
     assert "market_impact_model_available=False" in output
     assert "top_of_book_is_full_depth=False" in output
+    assert "validation_policy_source=repo_research_validation_policy_v1" in output
+    assert "validation_policy_required_stage_names=readiness,backtest,promotion" in output
+    assert "effective_walk_forward_required=0" in output
+    assert "effective_final_holdout_required=0" in output
+    assert "effective_stress_suite_required=0" in output
+    assert "effective_statistical_validation_required=0" in output
+    assert "effective_final_selection_required=1" in output
 
 
 def test_print_report_summary_renders_stress_suite_diagnostics(capsys) -> None:
