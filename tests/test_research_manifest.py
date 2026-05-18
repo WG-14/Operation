@@ -36,6 +36,11 @@ def _manifest() -> dict[str, object]:
 
 
 def _portfolio_policy(*, starting_cash: float = 1_000_000.0, buy_fraction: float = 0.99) -> dict[str, object]:
+    cash_buffer_policy = (
+        "retain_1_percent_before_fees"
+        if buy_fraction == 0.99
+        else "derived_from_buy_fraction_before_fees"
+    )
     return {
         "schema_version": 1,
         "starting_cash_krw": starting_cash,
@@ -46,7 +51,7 @@ def _portfolio_policy(*, starting_cash: float = 1_000_000.0, buy_fraction: float
             "type": "fractional_cash",
             "buy_fraction": buy_fraction,
             "sell_policy": "sell_all_available_position",
-            "cash_buffer_policy": "retain_1_percent_before_fees",
+            "cash_buffer_policy": cash_buffer_policy,
             "min_order_krw": None,
             "max_order_krw": None,
             "rounding_policy": "engine_float_no_exchange_lot_rounding",
@@ -224,7 +229,19 @@ def test_production_bound_manifest_requires_portfolio_policy() -> None:
         ),
         (
             lambda policy: policy["position_sizing"].update({"cash_buffer_policy": "none"}),
-            "cash_buffer_policy must be retain_1_percent_before_fees",
+            "cash_buffer_policy must be derived_from_buy_fraction_before_fees",
+        ),
+        (
+            lambda policy: policy.update({"initial_position_qty": 0.1}),
+            "portfolio_policy.initial_position_qty non-zero is not supported yet",
+        ),
+        (
+            lambda policy: policy["position_sizing"].update({"min_order_krw": 5000.0}),
+            "portfolio_policy.position_sizing.min_order_krw is not supported yet",
+        ),
+        (
+            lambda policy: policy["position_sizing"].update({"max_order_krw": 50000.0}),
+            "portfolio_policy.position_sizing.max_order_krw is not supported yet",
         ),
         (
             lambda policy: policy["position_sizing"].update({"rounding_policy": "exchange_lot"}),
@@ -240,6 +257,25 @@ def test_portfolio_policy_invalid_values_fail_clearly(mutator, message) -> None:
 
     with pytest.raises(ManifestValidationError, match=message):
         parse_manifest(payload)
+
+
+def test_cash_buffer_policy_retain_one_percent_requires_matching_buy_fraction() -> None:
+    payload = _manifest()
+    policy = _portfolio_policy(buy_fraction=0.5)
+    policy["position_sizing"]["cash_buffer_policy"] = "retain_1_percent_before_fees"
+    payload["portfolio_policy"] = policy
+
+    with pytest.raises(ManifestValidationError, match="retain_1_percent_before_fees requires buy_fraction == 0.99"):
+        parse_manifest(payload)
+
+
+def test_cash_buffer_policy_can_be_derived_from_buy_fraction() -> None:
+    payload = _manifest()
+    payload["portfolio_policy"] = _portfolio_policy(buy_fraction=0.5)
+
+    manifest = parse_manifest(payload)
+
+    assert manifest.portfolio_policy.position_sizing.cash_buffer_policy == "derived_from_buy_fraction_before_fees"
 
 
 def test_manifest_parses_statistical_validation_and_binds_hash() -> None:

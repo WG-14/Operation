@@ -277,6 +277,32 @@ def _extend_portfolio_policy_reasons(
         reasons.extend([f"{prefix}simulation_policy_hash_missing", "simulation_policy_hash_missing"])
 
 
+def _policy_hash_binding_reasons(
+    *,
+    report: dict[str, Any],
+    candidate: dict[str, Any],
+    lineage: dict[str, Any] | None,
+) -> list[str]:
+    reasons: list[str] = []
+    for field in ("portfolio_policy_hash", "simulation_policy_hash"):
+        candidate_value = candidate.get(field)
+        report_value = report.get(field)
+        lineage_value = lineage.get(field) if isinstance(lineage, dict) else None
+        if not str(candidate_value or "").startswith("sha256:"):
+            reasons.append(f"{field}_missing")
+        if not str(report_value or "").startswith("sha256:"):
+            reasons.append(f"backtest_report_{field}_missing")
+        if isinstance(lineage, dict) and not str(lineage_value or "").startswith("sha256:"):
+            reasons.append(f"lineage_{field}_missing")
+        if candidate_value and report_value and candidate_value != report_value:
+            reasons.append(f"backtest_report_{field}_mismatch")
+        if candidate_value and lineage_value and candidate_value != lineage_value:
+            reasons.append(f"lineage_{field}_mismatch")
+        if report_value and lineage_value and report_value != lineage_value:
+            reasons.append(f"{field}_mismatch")
+    return reasons
+
+
 def _extend_probe_grade_reasons(
     candidate: dict[str, Any],
     reasons: list[str],
@@ -728,6 +754,14 @@ def promote_candidate(
         raise PromotionGateError("promotion refused: lineage_missing")
 
     candidate = backtest.candidate
+    if production_bound_report:
+        policy_binding_reasons = _policy_hash_binding_reasons(
+            report=report,
+            candidate=candidate,
+            lineage=base_lineage,
+        )
+        if policy_binding_reasons:
+            raise PromotionGateError(f"promotion refused: {','.join(sorted(set(policy_binding_reasons)))}")
     profile = backtest.profile
     verified_profile_hash = backtest.profile_hash
     walk_forward_required = bool(candidate.get("walk_forward_required"))

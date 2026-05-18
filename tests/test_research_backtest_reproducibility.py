@@ -109,6 +109,11 @@ def _manifest() -> dict[str, object]:
 
 
 def _portfolio_policy(*, starting_cash: float = 1_000_000.0, buy_fraction: float = 0.99) -> dict[str, object]:
+    cash_buffer_policy = (
+        "retain_1_percent_before_fees"
+        if buy_fraction == 0.99
+        else "derived_from_buy_fraction_before_fees"
+    )
     return {
         "schema_version": 1,
         "starting_cash_krw": starting_cash,
@@ -119,7 +124,7 @@ def _portfolio_policy(*, starting_cash: float = 1_000_000.0, buy_fraction: float
             "type": "fractional_cash",
             "buy_fraction": buy_fraction,
             "sell_policy": "sell_all_available_position",
-            "cash_buffer_policy": "retain_1_percent_before_fees",
+            "cash_buffer_policy": cash_buffer_policy,
             "min_order_krw": None,
             "max_order_krw": None,
             "rounding_policy": "engine_float_no_exchange_lot_rounding",
@@ -445,6 +450,26 @@ def test_sma_backtest_uses_manifest_portfolio_policy_for_cash_and_buy_fraction()
 
     assert result.equity_curve[0].cash == pytest.approx(2_000_000.0)
     assert buy["execution"]["requested_notional"] == pytest.approx(1_000_000.0)
+
+
+def test_decision_hash_changes_when_portfolio_policy_changes() -> None:
+    dataset = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
+    common = {
+        "dataset": dataset,
+        "parameter_values": {"SMA_SHORT": 2, "SMA_LONG": 4, "SMA_FILTER_GAP_MIN_RATIO": 0.0},
+        "fee_rate": 0.0,
+        "slippage_bps": 0.0,
+        "context": BacktestRunContext(report_detail="full"),
+    }
+    baseline_manifest = parse_manifest({**_manifest(), "portfolio_policy": _portfolio_policy(buy_fraction=0.99)})
+    changed_manifest = parse_manifest({**_manifest(), "portfolio_policy": _portfolio_policy(buy_fraction=0.5)})
+
+    baseline = run_sma_backtest(**common, portfolio_policy=baseline_manifest.portfolio_policy)
+    changed = run_sma_backtest(**common, portfolio_policy=changed_manifest.portfolio_policy)
+
+    assert baseline.retained_detail_summary["decision_hash"] != changed.retained_detail_summary["decision_hash"]
+    assert baseline.decisions[0]["portfolio_policy_hash"] == baseline_manifest.portfolio_policy_hash()
+    assert baseline.decisions[0]["decision_contract_hash"] == baseline.decisions[0]["replay_fingerprint_hash"]
 
 
 def test_research_engine_has_no_hidden_portfolio_policy_constants() -> None:

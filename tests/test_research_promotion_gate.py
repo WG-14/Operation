@@ -598,6 +598,15 @@ def _write_report_with_lineage(
     _write_validation_run_if_ready(manager, candidate)
 
 
+def _refresh_promotion_hashes(payload: dict[str, object]) -> None:
+    lineage = payload.get("lineage")
+    if isinstance(lineage, dict):
+        lineage.pop("lineage_hash", None)
+        lineage["lineage_hash"] = compute_lineage_hash(lineage)
+        payload["lineage_hash"] = lineage["lineage_hash"]
+    payload["content_hash"] = sha256_prefixed(content_hash_payload({k: v for k, v in payload.items() if k != "content_hash"}))
+
+
 def _final_selection_contract() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -3905,6 +3914,98 @@ def test_reproduce_rejects_portfolio_policy_hash_mismatch(tmp_path, monkeypatch)
 
     assert summary["ok"] is False
     assert summary["reason"] == "portfolio_policy_hash_mismatch"
+
+
+def test_reproduce_rejects_simulation_policy_hash_mismatch(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate()
+    _write_report_with_lineage(manager, candidate)
+    result = promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
+    payload = dict(result.artifact)
+    payload["lineage"] = dict(payload["lineage"])
+    payload["lineage"]["simulation_policy_hash"] = "sha256:" + "0" * 64
+    _refresh_promotion_hashes(payload)
+    path = result.artifact_path
+    write_json_atomic(path, payload)
+
+    summary = reproduce_promotion(path).summary
+
+    assert summary["ok"] is False
+    assert summary["reason"] == "simulation_policy_hash_mismatch"
+
+
+def test_reproduce_rejects_backtest_report_portfolio_policy_hash_mismatch(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate()
+    _write_report_with_lineage(manager, candidate)
+    result = promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
+    report_path = Path(result.artifact["backtest_report_path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["portfolio_policy_hash"] = "sha256:" + "1" * 64
+    report["content_hash"] = sha256_prefixed(report_content_hash_payload(report))
+    write_json_atomic(report_path, report)
+    payload = dict(result.artifact)
+    payload["lineage"] = dict(payload["lineage"])
+    payload["lineage"]["backtest_report_hash"] = report["content_hash"]
+    payload["backtest_report_hash"] = report["content_hash"]
+    _refresh_promotion_hashes(payload)
+    write_json_atomic(result.artifact_path, payload)
+
+    summary = reproduce_promotion(result.artifact_path).summary
+
+    assert summary["ok"] is False
+    assert summary["reason"] == "portfolio_policy_hash_mismatch"
+
+
+def test_reproduce_rejects_backtest_candidate_simulation_policy_hash_mismatch(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate()
+    _write_report_with_lineage(manager, candidate)
+    result = promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
+    report_path = Path(result.artifact["backtest_report_path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["candidates"][0]["simulation_policy_hash"] = "sha256:" + "2" * 64
+    report["content_hash"] = sha256_prefixed(report_content_hash_payload(report))
+    write_json_atomic(report_path, report)
+    payload = dict(result.artifact)
+    payload["lineage"] = dict(payload["lineage"])
+    payload["lineage"]["backtest_report_hash"] = report["content_hash"]
+    payload["backtest_report_hash"] = report["content_hash"]
+    _refresh_promotion_hashes(payload)
+    write_json_atomic(result.artifact_path, payload)
+
+    summary = reproduce_promotion(result.artifact_path).summary
+
+    assert summary["ok"] is False
+    assert summary["reason"] == "simulation_policy_hash_mismatch"
+
+
+def test_promote_candidate_rejects_production_policy_hash_drift_between_report_and_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate()
+    _write_report_with_lineage(
+        manager,
+        candidate,
+        report_overrides={"portfolio_policy_hash": "sha256:" + "3" * 64},
+    )
+
+    with pytest.raises(PromotionGateError, match="backtest_report_portfolio_policy_hash_mismatch"):
+        promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
+
+
+def test_promote_candidate_rejects_production_simulation_policy_hash_drift_between_candidate_and_lineage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate(simulation_policy_hash="sha256:" + "4" * 64)
+    _write_report_with_lineage(manager, candidate)
+
+    with pytest.raises(PromotionGateError, match="lineage_simulation_policy_hash_mismatch"):
+        promote_candidate(experiment_id="promo_exp", candidate_id="candidate_001", manager=manager)
 
 
 def test_production_bound_promotion_binds_calibration_hash_when_base_lineage_lacks_it(tmp_path, monkeypatch) -> None:

@@ -173,6 +173,9 @@ def backtest(short_n: int, long_n: int, entry: str):
     ret = (final_equity / START_CASH_KRW - 1.0) * 100.0
 
     return {
+        "diagnostic_only": True,
+        "non_promotable": True,
+        "evidence_scope": "smoke_only_not_manifest_backed",
         "count_candles": len(candles),
         "start_ts": ts_list[0],
         "end_ts": ts_list[-1],
@@ -200,6 +203,7 @@ def main():
     r = backtest(args.short, args.long, args.entry)
 
     print(f"[BACKTEST] PAIR={PAIR} INTERVAL={INTERVAL} entry={args.entry} short={args.short} long={args.long}")
+    print("  diagnostic_only=true  non_promotable=true  evidence_scope=smoke_only_not_manifest_backed")
     print(f"  candles={r['count_candles']}  range={kst_str(r['start_ts'])} ~ {kst_str(r['end_ts'])}")
     print(f"  trades={r['trade_count']}  total_fee={r['total_fee']:,.0f} KRW")
     print(f"  final_equity={r['final_equity']:,.0f} KRW  return={r['return_pct']:.3f}%  maxDD={r['max_dd_pct']:.3f}%")

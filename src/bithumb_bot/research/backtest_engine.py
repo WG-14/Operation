@@ -1244,6 +1244,21 @@ def _research_decision_payload(
     }
     fee_authority_hash = canonical_payload_hash({"source": "research_manifest", "fee_rate": float(fee_rate)})
     order_rules_hash = canonical_payload_hash(order_rules)
+    fee_model_hash = canonical_payload_hash({"fee_rate": float(fee_rate)})
+    slippage_model_hash = canonical_payload_hash({"slippage_bps": float(slippage_bps)})
+    execution_timing_policy_hash = canonical_payload_hash(timing_policy.as_dict())
+    portfolio_policy_hash = portfolio_policy.policy_hash()
+    decision_contract_hash = canonical_payload_hash(
+        {
+            "dataset_content_hash": dataset_content_hash,
+            "parameter_values": parameter_values,
+            "candle_ts": int(candle_ts),
+            "portfolio_policy_hash": portfolio_policy_hash,
+            "execution_timing_policy_hash": execution_timing_policy_hash,
+            "fee_model_hash": fee_model_hash,
+            "slippage_model_hash": slippage_model_hash,
+        }
+    )
     lot_native_authority = lot_native_model_from_quantities(
         qty=float(qty),
         sellable_qty=float(sellable_qty),
@@ -1310,8 +1325,8 @@ def _research_decision_payload(
             )
         ),
         "fee_authority_hash": fee_authority_hash,
-        "fee_model_hash": canonical_payload_hash({"fee_rate": float(fee_rate)}),
-        "slippage_model_hash": canonical_payload_hash({"slippage_bps": float(slippage_bps)}),
+        "fee_model_hash": fee_model_hash,
+        "slippage_model_hash": slippage_model_hash,
         "order_rules_hash": order_rules_hash,
         "market_regime": str(regime_snapshot.get("composite_regime") or ""),
         "regime_decision": "allowed",
@@ -1329,14 +1344,10 @@ def _research_decision_payload(
         "exit_evaluations_hash": canonical_payload_hash(
             {"raw_signal": raw_signal, "final_signal": final_signal, "position_qty": float(qty)}
         ),
-        "execution_timing_policy_hash": canonical_payload_hash(timing_policy.as_dict()),
-        "replay_fingerprint_hash": canonical_payload_hash(
-            {
-                "dataset_content_hash": dataset_content_hash,
-                "parameter_values": parameter_values,
-                "candle_ts": int(candle_ts),
-            }
-        ),
+        "portfolio_policy_hash": portfolio_policy_hash,
+        "execution_timing_policy_hash": execution_timing_policy_hash,
+        "decision_contract_hash": decision_contract_hash,
+        "replay_fingerprint_hash": decision_contract_hash,
     }
     payload["position_authority"] = (
         legacy_authority.as_dict() if legacy_authority is not None else lot_native_authority.as_dict()

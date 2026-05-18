@@ -1001,6 +1001,8 @@ def _parse_portfolio_policy(value: Any, *, deployment_tier: str) -> PortfolioPol
         value.get("initial_position_qty", 0.0),
         "portfolio_policy.initial_position_qty",
     )
+    if initial_position_qty != 0.0:
+        raise ManifestValidationError("portfolio_policy.initial_position_qty non-zero is not supported yet")
     cash_interest_policy = str(value.get("cash_interest_policy") or "zero").strip().lower()
     if cash_interest_policy != "zero":
         raise ManifestValidationError("portfolio_policy.cash_interest_policy must be zero")
@@ -1049,9 +1051,13 @@ def _parse_position_sizing_policy(value: dict[str, Any]) -> PositionSizingPolicy
             "portfolio_policy.position_sizing.sell_policy must be sell_all_available_position"
         )
     cash_buffer_policy = str(value.get("cash_buffer_policy") or "").strip().lower()
-    if cash_buffer_policy != "retain_1_percent_before_fees":
+    if cash_buffer_policy not in {"derived_from_buy_fraction_before_fees", "retain_1_percent_before_fees"}:
         raise ManifestValidationError(
-            "portfolio_policy.position_sizing.cash_buffer_policy must be retain_1_percent_before_fees"
+            "portfolio_policy.position_sizing.cash_buffer_policy must be derived_from_buy_fraction_before_fees"
+        )
+    if cash_buffer_policy == "retain_1_percent_before_fees" and buy_fraction != 0.99:
+        raise ManifestValidationError(
+            "portfolio_policy.position_sizing.cash_buffer_policy retain_1_percent_before_fees requires buy_fraction == 0.99"
         )
     rounding_policy = str(value.get("rounding_policy") or "engine_float_no_exchange_lot_rounding").strip().lower()
     if rounding_policy != "engine_float_no_exchange_lot_rounding":
@@ -1068,6 +1074,10 @@ def _parse_position_sizing_policy(value: dict[str, Any]) -> PositionSizingPolicy
     )
     if min_order is not None and max_order is not None and min_order > max_order:
         raise ManifestValidationError("portfolio_policy.position_sizing.min_order_krw must be <= max_order_krw")
+    if min_order is not None:
+        raise ManifestValidationError("portfolio_policy.position_sizing.min_order_krw is not supported yet")
+    if max_order is not None:
+        raise ManifestValidationError("portfolio_policy.position_sizing.max_order_krw is not supported yet")
     return PositionSizingPolicy(
         type=sizing_type,
         buy_fraction=buy_fraction,
