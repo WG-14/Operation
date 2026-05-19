@@ -543,8 +543,8 @@ Do not:
 - log secrets
 - make broad formatting-only changes during safety patches
 - trade safety for convenience
-- stop after partial debugging progress if a clean full-suite pass is still safely achievable
-- use repeated full-suite reruns as a substitute for targeted diagnosis
+- in Full Pytest Repair Mode, do not stop after partial debugging progress if a clean full-suite pass is still safely achievable
+- in any mode, do not use repeated full-suite reruns as a substitute for targeted diagnosis
 
 ## In Case of Ambiguity
 
