@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Local operator pipeline:
 # 1. read scripts/codex_request.txt
-# 2. run Codex against this repository
+# 2. run Codex against this repository in Default Patch Mode
 # 3. commit and push Codex changes
-# 4. run EC2 verification with live.verify.env
+# 4. run smoke EC2 verification with live.verify.env
 # 5. notify the final EC2 verification result through ntfy
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -18,11 +18,10 @@ CODEX_BIN="${CODEX_BIN:-codex}"
 SSH_KEY="${BITHUMB_EC2_SSH_KEY:-${HOME}/.ssh/bithumb-bot-paper.pem}"
 EC2_TARGET="${BITHUMB_EC2_TARGET:-ec2-user@3.39.93.137}"
 
-# REMOTE_VERIFY_MODE controls the EC2 verification depth for this automation.
-# Default smoke mode runs the remote pull/sync/status-style checks and summary,
-# while full mode also opts into the remote `uv run pytest -q` stage.
-# Unsupported values fail fast before Codex or Git side effects.
+# This script is Default Patch Mode only. Full pytest validation belongs to
+# scripts/run_codex_pytest_pipeline.sh.
 REMOTE_VERIFY_MODE="${REMOTE_VERIFY_MODE:-smoke}"
+CODEX_PYTEST_GUARD_DIR=""
 
 stage="preflight"
 
@@ -55,6 +54,13 @@ on_error() {
 }
 trap on_error ERR
 
+cleanup_codex_pytest_guard() {
+  if [[ -n "${CODEX_PYTEST_GUARD_DIR}" && -d "${CODEX_PYTEST_GUARD_DIR}" ]]; then
+    rm -rf "${CODEX_PYTEST_GUARD_DIR}"
+  fi
+}
+trap cleanup_codex_pytest_guard EXIT
+
 run_stage() {
   stage="$1"
   shift
@@ -86,13 +92,63 @@ dirty_paths_excluding_request_file() {
   dirty_paths_except_request "${request_rel}"
 }
 
+run_codex_default_patch_mode() {
+  local uv_bin
+  uv_bin="$(command -v uv || true)"
+  if [[ -z "${uv_bin}" ]]; then
+    fail "uv binary not found; cannot install Default Patch Mode pytest guard"
+  fi
+
+  CODEX_PYTEST_GUARD_DIR="$(mktemp -d)"
+  cat > "${CODEX_PYTEST_GUARD_DIR}/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ge 2 && "$1" == "run" && "$2" == "pytest" ]]; then
+  original_args=("$@")
+  shift 2
+  focused_selector_seen=0
+  for arg in "$@"; do
+    case "${arg}" in
+      -k|-m|--keyword|--keyword=*|--markexpr|--markexpr=*)
+        focused_selector_seen=1
+        ;;
+      tests|tests/*|*/*.py|*.py|*::*)
+        focused_selector_seen=1
+        ;;
+      *)
+        ;;
+    esac
+  done
+
+  if [[ "${focused_selector_seen}" -eq 0 ]]; then
+    echo "[CODEX-PYTEST-GUARD] Default Patch Mode blocks selector-less full pytest." >&2
+    echo "[CODEX-PYTEST-GUARD] Use scripts/run_codex_pytest_pipeline.sh for uv run pytest -q." >&2
+    exit 126
+  fi
+
+  exec "${CODEX_PYTEST_GUARD_REAL_UV}" "${original_args[@]}"
+fi
+
+exec "${CODEX_PYTEST_GUARD_REAL_UV}" "$@"
+EOF
+  chmod +x "${CODEX_PYTEST_GUARD_DIR}/uv"
+
+  PATH="${CODEX_PYTEST_GUARD_DIR}:${PATH}" \
+    CODEX_PYTEST_GUARD_REAL_UV="${uv_bin}" \
+    "${CODEX_BIN}" exec --full-auto --cd "${PROJECT_ROOT}" - < "${REQUEST_FILE}"
+}
+
 cd "${PROJECT_ROOT}"
 
 case "${REMOTE_VERIFY_MODE}" in
-  smoke|full)
+  smoke)
+    ;;
+  full)
+    fail "REMOTE_VERIFY_MODE=full is not allowed in Default Patch Mode; use ./scripts/run_codex_pytest_pipeline.sh"
     ;;
   *)
-    fail "invalid REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE}; expected smoke or full"
+    fail "invalid REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE}; expected smoke"
     ;;
 esac
 
@@ -133,7 +189,10 @@ if [[ -n "${pre_existing_non_request}" ]]; then
   fail "refusing to run with pre-existing non-request changes"
 fi
 
-run_stage "run Codex request from ${request_rel}" "${CODEX_BIN}" exec --full-auto --cd "${PROJECT_ROOT}" - < "${REQUEST_FILE}"
+stage="run Codex request from ${request_rel}"
+echo
+echo "[PIPELINE] ${stage}"
+run_codex_default_patch_mode
 
 post_codex_non_request="$(dirty_paths_excluding_request_file "${request_rel}")"
 if [[ -z "${post_codex_non_request}" ]]; then
