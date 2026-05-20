@@ -40,7 +40,12 @@ from bithumb_bot.research import validation_pipeline as pipeline
 from bithumb_bot.research.validation_pipeline import validation_run_binding_hash, validation_run_content_hash
 from bithumb_bot.approved_profile import build_approved_profile, verify_promotion_artifact
 from bithumb_bot.decision_equivalence import compute_decision_equivalence_hash
-from bithumb_bot.evidence_chain import build_candidate_regime_policy_equivalence_evidence
+from bithumb_bot.evidence_chain import (
+    EvidenceValidationError,
+    build_candidate_regime_policy_equivalence_evidence,
+    compute_evidence_content_hash,
+    validate_candidate_regime_policy_equivalence_evidence,
+)
 from bithumb_bot.storage_io import write_json_atomic
 
 
@@ -651,6 +656,113 @@ def test_candidate_regime_policy_equivalence_evidence_binds_effective_strategy_p
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
 
     assert evidence["effective_strategy_parameters_hash"] == candidate["effective_strategy_parameters_hash"]
+
+
+def test_candidate_regime_policy_equivalence_evidence_recomputes_live_regime_policy_hash(
+    tmp_path: Path,
+) -> None:
+    candidate = _production_candidate(
+        candidate_regime_policy_required_for_live=True,
+        candidate_regime_policy_equivalence_required=True,
+        candidate_regime_policy_applied_in_research=False,
+    )
+    evidence_path = _bind_candidate_regime_policy_evidence(candidate, tmp_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["live_regime_policy_hash"] = "sha256:" + "1" * 64
+    evidence["content_hash"] = compute_evidence_content_hash(evidence)
+
+    with pytest.raises(
+        EvidenceValidationError,
+        match="candidate_regime_policy_equivalence_evidence_regime_policy_hash_mismatch",
+    ):
+        validate_candidate_regime_policy_equivalence_evidence(
+            evidence,
+            candidate_or_profile=candidate,
+            expected_hash=evidence["content_hash"],
+        )
+
+
+def test_candidate_regime_policy_equivalence_evidence_regime_policy_hash_mismatch_fails(
+    tmp_path: Path,
+) -> None:
+    candidate = _production_candidate(
+        candidate_regime_policy_required_for_live=True,
+        candidate_regime_policy_equivalence_required=True,
+        candidate_regime_policy_applied_in_research=False,
+    )
+    evidence_path = _bind_candidate_regime_policy_evidence(candidate, tmp_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["regime_policy_hash"] = "sha256:" + "2" * 64
+    evidence["content_hash"] = compute_evidence_content_hash(evidence)
+
+    with pytest.raises(
+        EvidenceValidationError,
+        match="candidate_regime_policy_equivalence_evidence_regime_policy_hash_mismatch",
+    ):
+        validate_candidate_regime_policy_equivalence_evidence(
+            evidence,
+            candidate_or_profile=candidate,
+            expected_hash=evidence["content_hash"],
+        )
+
+
+def test_candidate_regime_policy_equivalence_evidence_regime_policy_hash_binds_profile_regime_policy(
+    tmp_path: Path,
+) -> None:
+    candidate = _production_candidate(
+        candidate_regime_policy_required_for_live=True,
+        candidate_regime_policy_equivalence_required=True,
+        candidate_regime_policy_applied_in_research=False,
+    )
+    evidence_path = _bind_candidate_regime_policy_evidence(candidate, tmp_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    profile = {
+        key: candidate[key]
+        for key in (
+            "strategy_name",
+            "manifest_hash",
+            "dataset_content_hash",
+            "strategy_spec_hash",
+            "effective_strategy_parameters_hash",
+            "exit_policy_hash",
+            "candidate_profile_evidence_contract_hash",
+        )
+        if key in candidate
+    }
+    profile.update(
+        {
+            "candidate_id": candidate["parameter_candidate_id"],
+            "regime_policy": {
+                "regime_classifier_version": candidate["regime_classifier_version"],
+                "allowed_regimes": list(candidate["allowed_live_regimes"]),
+                "blocked_regimes": list(candidate["blocked_live_regimes"]),
+            },
+        }
+    )
+
+    validate_candidate_regime_policy_equivalence_evidence(
+        evidence,
+        candidate_or_profile=profile,
+        expected_hash=evidence["content_hash"],
+    )
+
+
+def test_candidate_regime_policy_equivalence_evidence_regime_policy_hash_binds_candidate_regime_policy(
+    tmp_path: Path,
+) -> None:
+    candidate = _production_candidate(
+        candidate_regime_policy_required_for_live=True,
+        candidate_regime_policy_equivalence_required=True,
+        candidate_regime_policy_applied_in_research=False,
+    )
+    evidence_path = _bind_candidate_regime_policy_evidence(candidate, tmp_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+    validate_candidate_regime_policy_equivalence_evidence(
+        evidence,
+        candidate_or_profile=candidate,
+        expected_hash=evidence["content_hash"],
+    )
 
 
 def _lineage(*, execution_calibration_artifact_hash: str | None = None) -> dict[str, object]:

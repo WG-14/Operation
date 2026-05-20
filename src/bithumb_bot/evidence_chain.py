@@ -154,6 +154,42 @@ def build_candidate_regime_policy_equivalence_evidence(
     return payload
 
 
+def _candidate_or_profile_regime_policy_payload(candidate_or_profile: dict[str, Any]) -> dict[str, Any]:
+    candidate_classifier = candidate_or_profile.get("regime_classifier_version")
+    candidate_allowed = candidate_or_profile.get("allowed_live_regimes")
+    candidate_blocked = candidate_or_profile.get("blocked_live_regimes")
+    if (
+        str(candidate_classifier or "").strip()
+        and isinstance(candidate_allowed, list)
+        and isinstance(candidate_blocked, list)
+    ):
+        return {
+            "regime_classifier_version": candidate_classifier,
+            "allowed_regimes": list(candidate_allowed),
+            "blocked_regimes": list(candidate_blocked),
+        }
+
+    profile_policy = candidate_or_profile.get("regime_policy")
+    if isinstance(profile_policy, dict):
+        profile_classifier = profile_policy.get("regime_classifier_version")
+        profile_allowed = profile_policy.get("allowed_regimes")
+        profile_blocked = profile_policy.get("blocked_regimes")
+        if (
+            str(profile_classifier or "").strip()
+            and isinstance(profile_allowed, list)
+            and isinstance(profile_blocked, list)
+        ):
+            return {
+                "regime_classifier_version": profile_classifier,
+                "allowed_regimes": list(profile_allowed),
+                "blocked_regimes": list(profile_blocked),
+            }
+
+    raise EvidenceValidationError(
+        "candidate_regime_policy_equivalence_evidence_regime_policy_fields_missing"
+    )
+
+
 def validate_candidate_regime_policy_equivalence_evidence(
     payload: dict[str, Any],
     *,
@@ -203,8 +239,17 @@ def validate_candidate_regime_policy_equivalence_evidence(
     ).strip()
     if expected_profile_hash and str(payload.get("candidate_profile_hash") or "").strip() != expected_profile_hash:
         raise EvidenceValidationError(f"{prefix}_candidate_profile_hash_mismatch")
-    if not str(payload.get("live_regime_policy_hash") or payload.get("regime_policy_hash") or "").startswith("sha256:"):
+    expected_regime_policy_hash = sha256_prefixed(
+        _candidate_or_profile_regime_policy_payload(candidate_or_profile)
+    )
+    live_regime_policy_hash = str(payload.get("live_regime_policy_hash") or "").strip()
+    if not live_regime_policy_hash.startswith("sha256:"):
         raise EvidenceValidationError(f"{prefix}_regime_policy_hash_missing")
+    if live_regime_policy_hash != expected_regime_policy_hash:
+        raise EvidenceValidationError(f"{prefix}_regime_policy_hash_mismatch")
+    regime_policy_hash = str(payload.get("regime_policy_hash") or "").strip()
+    if regime_policy_hash and regime_policy_hash != expected_regime_policy_hash:
+        raise EvidenceValidationError(f"{prefix}_regime_policy_hash_mismatch")
     if not str(payload.get("research_decision_export_hash") or "").startswith("sha256:"):
         raise EvidenceValidationError(f"{prefix}_research_decision_export_hash_missing")
     if not str(payload.get("runtime_decision_export_hash") or "").startswith("sha256:"):
