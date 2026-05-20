@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
+from bithumb_bot.research.strategy_spec import strategy_spec_for_name
 
 
 def _manifest() -> dict[str, object]:
@@ -33,6 +34,32 @@ def _manifest() -> dict[str, object]:
             "parameter_stability_required": False,
         },
     }
+
+
+def _all_runtime_behavior_parameter_space() -> dict[str, list[object]]:
+    spec = strategy_spec_for_name("sma_with_filter")
+    values = {
+        "SMA_SHORT": [2],
+        "SMA_LONG": [4],
+        "SMA_FILTER_GAP_MIN_RATIO": [0.0],
+        "SMA_FILTER_VOL_WINDOW": [10],
+        "SMA_FILTER_VOL_MIN_RANGE_RATIO": [0.0],
+        "SMA_FILTER_OVEREXT_LOOKBACK": [3],
+        "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": [0.02],
+        "SMA_MARKET_REGIME_ENABLED": [True],
+        "SMA_COST_EDGE_ENABLED": [True],
+        "SMA_COST_EDGE_MIN_RATIO": [0.0],
+        "ENTRY_EDGE_BUFFER_RATIO": [0.0005],
+        "STRATEGY_MIN_EXPECTED_EDGE_RATIO": [0.0],
+        "STRATEGY_ENTRY_SLIPPAGE_BPS": [0.0],
+        "LIVE_FEE_RATE_ESTIMATE": [0.001],
+        "STRATEGY_EXIT_RULES": ["opposite_cross,max_holding_time"],
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": [0],
+        "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": [0.0],
+        "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": [0.0],
+    }
+    required = set(spec.behavior_affecting_parameter_names) - set(spec.research_only_parameter_names)
+    return {key: values[key] for key in sorted(required)}
 
 
 def test_research_rejects_unknown_strategy_params() -> None:
@@ -71,12 +98,29 @@ def test_research_rejects_unused_behavior_params_for_production_bound() -> None:
     payload["statistical_validation"] = _statistical_validation()
     payload["stress_suite"] = _stress_suite()
     payload["final_selection"] = _final_selection()
-    payload["parameter_space"] = {
-        **payload["parameter_space"],  # type: ignore[arg-type]
-        "UNUSED_NOOP_PARAM": [1],
-    }
+    payload["parameter_space"] = {**_all_runtime_behavior_parameter_space(), "UNUSED_NOOP_PARAM": [1]}
 
     with pytest.raises(ManifestValidationError, match="unknown strategy parameter"):
+        parse_manifest(payload)
+
+
+def test_production_bound_manifest_requires_all_behavior_affecting_strategy_parameters() -> None:
+    payload = _production_manifest()
+    payload["parameter_space"] = {
+        "SMA_SHORT": [2],
+        "SMA_LONG": [4],
+    }
+
+    with pytest.raises(ManifestValidationError, match="behavior-affecting strategy parameter"):
+        parse_manifest(payload)
+
+
+def test_missing_behavior_parameter_fails_closed_for_production_bound() -> None:
+    payload = _production_manifest()
+    payload["parameter_space"] = _all_runtime_behavior_parameter_space()
+    payload["parameter_space"].pop("SMA_MARKET_REGIME_ENABLED")
+
+    with pytest.raises(ManifestValidationError, match="SMA_MARKET_REGIME_ENABLED"):
         parse_manifest(payload)
 
 
@@ -191,6 +235,7 @@ def _final_selection() -> dict[str, object]:
 def _production_manifest() -> dict[str, object]:
     payload = _manifest()
     payload["deployment_tier"] = "paper_candidate"
+    payload["parameter_space"] = _all_runtime_behavior_parameter_space()
     payload["portfolio_policy"] = _portfolio_policy()
     payload["execution_model"] = {
         "scenario_policy": "single_scenario",

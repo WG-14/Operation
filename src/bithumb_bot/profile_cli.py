@@ -39,8 +39,8 @@ from .research.experiment_manifest import load_manifest
 from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.parameter_space import candidate_id, iter_parameter_candidates
 from .research.promotion_gate import PromotionGateError
-from .research.promotion_gate import build_candidate_profile
 from .research.strategy_registry import resolve_research_strategy
+from .research.strategy_spec import materialize_strategy_parameters
 from .strategy.market_regime import classify_sma_market_regime
 from .storage_io import write_json_atomic
 from .broker.order_rules import get_effective_order_rules
@@ -524,20 +524,39 @@ def _validate_research_export_profile_binding(
     source_promotion = _load_json(str(Path(source_promotion_path).expanduser()))
     if str(source_promotion.get("candidate_id") or "").strip() != str(candidate_id_value or "").strip():
         raise ValueError("research_export_profile_candidate_id_mismatch")
-    profile_params = profile.get("strategy_parameters") if isinstance(profile.get("strategy_parameters"), dict) else {}
+    if not str(profile.get("candidate_profile_hash") or "").startswith("sha256:"):
+        raise ValueError("research_export_profile_candidate_profile_hash_missing")
+    profile_candidate = source_promotion.get("candidate_profile")
+    if not isinstance(profile_candidate, dict):
+        raise ValueError("research_export_profile_candidate_profile_missing")
+    if str(profile.get("candidate_profile_hash") or "").strip() != str(
+        source_promotion.get("candidate_profile_hash") or ""
+    ).strip():
+        raise ValueError("research_export_profile_candidate_profile_hash_mismatch")
+    cost = profile.get("cost_model")
+    if not isinstance(cost, dict):
+        raise ValueError("research_export_profile_cost_model_missing")
+    effective_params = materialize_strategy_parameters(
+        str(manifest.strategy_name),  # type: ignore[attr-defined]
+        params,
+        fee_rate=cost.get("fee_rate"),
+        slippage_bps=cost.get("slippage_bps"),
+    )
+    profile_params = (
+        profile.get("strategy_parameters")
+        if isinstance(profile.get("strategy_parameters"), dict)
+        else {}
+    )
     for key, expected in profile_params.items():
-        if key not in params:
+        if key not in effective_params:
             raise ValueError(f"research_export_profile_strategy_parameter_missing:{key}")
-        if str(params[key]).strip() != str(expected).strip():
+        if str(effective_params[key]).strip() != str(expected).strip():
             try:
-                if abs(float(params[key]) - float(expected)) <= 1e-12:
+                if abs(float(effective_params[key]) - float(expected)) <= 1e-12:
                     continue
             except (TypeError, ValueError):
                 pass
             raise ValueError(f"research_export_profile_strategy_parameter_mismatch:{key}")
-    cost = profile.get("cost_model")
-    if not isinstance(cost, dict):
-        raise ValueError("research_export_profile_cost_model_missing")
     scenario = manifest.execution_model.scenarios[0]  # type: ignore[attr-defined]
     for key, actual in {
         "fee_rate": scenario.fee_rate,
@@ -551,53 +570,6 @@ def _validate_research_export_profile_binding(
         except (TypeError, ValueError):
             pass
         raise ValueError(f"research_export_profile_cost_model_mismatch:{key}")
-    if not str(profile.get("candidate_profile_hash") or "").startswith("sha256:"):
-        raise ValueError("research_export_profile_candidate_profile_hash_missing")
-    profile_candidate = source_promotion.get("candidate_profile")
-    if not isinstance(profile_candidate, dict):
-        raise ValueError("research_export_profile_candidate_profile_missing")
-    selected_candidate_payload = {
-        "strategy_name": manifest.strategy_name,  # type: ignore[attr-defined]
-        "parameter_candidate_id": candidate_id_value,
-        "parameter_values": params,
-        "cost_model": cost,
-        "base_cost_assumption": profile_candidate.get("base_cost_assumption"),
-        "cost_assumption_contract": profile_candidate.get("cost_assumption_contract"),
-        "execution_model": profile_candidate.get("execution_model"),
-        "execution_calibration_required": profile_candidate.get("execution_calibration_required"),
-        "execution_calibration_strictness": profile_candidate.get("execution_calibration_strictness"),
-        "execution_calibration_gate": profile_candidate.get("execution_calibration_gate"),
-        "execution_calibration_artifact_hash": profile_candidate.get("execution_calibration_artifact_hash"),
-        "execution_calibration_artifact_hashes": profile_candidate.get("execution_calibration_artifact_hashes"),
-        "execution_calibration_policy_source": profile_candidate.get("execution_calibration_policy_source"),
-        "production_calibration_policy_result": profile_candidate.get("production_calibration_policy_result"),
-        "production_calibration_policy_reasons": profile_candidate.get("production_calibration_policy_reasons"),
-        "execution_reality_contract": profile_candidate.get("execution_reality_contract"),
-        "execution_contract_hash": profile_candidate.get("execution_contract_hash"),
-        "deployment_tier": profile_candidate.get("deployment_tier"),
-        "experiment_id": source_promotion.get("strategy_profile_source_experiment"),
-        "manifest_hash": manifest.manifest_hash(),  # type: ignore[attr-defined]
-        "dataset_snapshot_id": source_promotion.get("dataset_snapshot_id"),
-        "dataset_content_hash": snapshot.content_hash(),  # type: ignore[attr-defined]
-        "regime_classifier_version": (
-            source_promotion.get("live_regime_policy", {}).get("regime_classifier_version")
-            if isinstance(source_promotion.get("live_regime_policy"), dict)
-            else None
-        ),
-        "allowed_live_regimes": (
-            source_promotion.get("live_regime_policy", {}).get("allowed_regimes")
-            if isinstance(source_promotion.get("live_regime_policy"), dict)
-            else None
-        ),
-        "blocked_live_regimes": (
-            source_promotion.get("live_regime_policy", {}).get("blocked_regimes")
-            if isinstance(source_promotion.get("live_regime_policy"), dict)
-            else None
-        ),
-    }
-    rebuilt_hash = sha256_prefixed(build_candidate_profile(selected_candidate_payload))
-    if str(profile.get("candidate_profile_hash") or "").strip() != rebuilt_hash:
-        raise ValueError("research_export_profile_candidate_profile_hash_mismatch")
 
 
 def _decision_export_execution_timing_policy_hash() -> str:
@@ -627,15 +599,20 @@ def _promotion_grade_research_export_decisions(
         "degraded": False,
         "degraded_reason": "none",
     }
+    effective_params = (
+        dict(profile.get("strategy_parameters"))
+        if isinstance(profile.get("strategy_parameters"), dict)
+        else dict(params)
+    )
     slippage_model = {
         "exit_slippage_bps": float(cost.get("slippage_bps", 0.0) or 0.0),
-        "exit_buffer_ratio": float(params.get("ENTRY_EDGE_BUFFER_RATIO", 0.0) or 0.0),
+        "exit_buffer_ratio": float(effective_params.get("ENTRY_EDGE_BUFFER_RATIO", 0.0) or 0.0),
     }
     candles = list(getattr(snapshot, "candles", ()) or ())
     min_rows = max(
-        int(params.get("SMA_LONG", 0) or 0) + 2,
-        int(params.get("SMA_FILTER_VOL_WINDOW", 1) or 1),
-        int(params.get("SMA_FILTER_OVEREXT_LOOKBACK", 1) or 1) + 1,
+        int(effective_params.get("SMA_LONG", 0) or 0) + 2,
+        int(effective_params.get("SMA_FILTER_VOL_WINDOW", 1) or 1),
+        int(effective_params.get("SMA_FILTER_OVEREXT_LOOKBACK", 1) or 1) + 1,
     )
     aligned_decisions: list[dict[str, object]] = []
     for decision in decisions:
@@ -648,11 +625,13 @@ def _promotion_grade_research_export_decisions(
                 closes=[float(candle.close) for candle in through],
                 short_sma=float(decision.get("curr_s") or 0.0),
                 long_sma=float(decision.get("curr_l") or 0.0),
-                volatility_window=max(1, int(params.get("SMA_FILTER_VOL_WINDOW", 10) or 10)),
-                min_volatility_ratio=float(params.get("SMA_FILTER_VOL_MIN_RANGE_RATIO", 0.0) or 0.0),
-                overextended_lookback=max(1, int(params.get("SMA_FILTER_OVEREXT_LOOKBACK", 3) or 3)),
-                overextended_max_return_ratio=float(params.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0) or 0.0),
-                min_trend_strength_ratio=float(params.get("SMA_FILTER_GAP_MIN_RATIO", 0.0) or 0.0),
+                volatility_window=max(1, int(effective_params.get("SMA_FILTER_VOL_WINDOW", 10) or 10)),
+                min_volatility_ratio=float(effective_params.get("SMA_FILTER_VOL_MIN_RANGE_RATIO", 0.0) or 0.0),
+                overextended_lookback=max(1, int(effective_params.get("SMA_FILTER_OVEREXT_LOOKBACK", 3) or 3)),
+                overextended_max_return_ratio=float(
+                    effective_params.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0) or 0.0
+                ),
+                min_trend_strength_ratio=float(effective_params.get("SMA_FILTER_GAP_MIN_RATIO", 0.0) or 0.0),
             )
             decision["market_regime"] = regime.composite_regime
             decision["regime_decision"] = "ON"

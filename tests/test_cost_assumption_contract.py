@@ -6,6 +6,29 @@ from bithumb_bot.research.deployment_policy import validate_production_calibrati
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
 
 
+def _runtime_bound_parameter_space() -> dict[str, list[object]]:
+    return {
+        "SMA_SHORT": [7],
+        "SMA_LONG": [30],
+        "SMA_FILTER_GAP_MIN_RATIO": [0.0012],
+        "SMA_FILTER_VOL_WINDOW": [10],
+        "SMA_FILTER_VOL_MIN_RANGE_RATIO": [0.003],
+        "SMA_FILTER_OVEREXT_LOOKBACK": [3],
+        "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": [0.02],
+        "SMA_MARKET_REGIME_ENABLED": [True],
+        "SMA_COST_EDGE_ENABLED": [True],
+        "SMA_COST_EDGE_MIN_RATIO": [0.0],
+        "ENTRY_EDGE_BUFFER_RATIO": [0.0005],
+        "STRATEGY_MIN_EXPECTED_EDGE_RATIO": [0.0],
+        "STRATEGY_ENTRY_SLIPPAGE_BPS": [10],
+        "LIVE_FEE_RATE_ESTIMATE": [0.0004],
+        "STRATEGY_EXIT_RULES": ["opposite_cross,max_holding_time"],
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": [0],
+        "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": [0.0],
+        "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": [0.0],
+    }
+
+
 def _portfolio_policy() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -41,11 +64,7 @@ def _manifest(*, deployment_tier: str = "paper_candidate") -> dict[str, object]:
             "validation": {"start": "2023-01-02", "end": "2023-01-02"},
             "final_holdout": {"start": "2023-01-03", "end": "2023-01-03"},
         },
-        "parameter_space": {
-            "SMA_SHORT": [7],
-            "SMA_LONG": [30],
-            "SMA_FILTER_GAP_MIN_RATIO": [0.0012],
-        },
+        "parameter_space": _runtime_bound_parameter_space(),
         "cost_model": {"fee_rate": 0.0004, "slippage_bps": [10]},
         "acceptance_gate": {
             "min_trade_count": 30,

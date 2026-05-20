@@ -378,12 +378,6 @@ def run_sma_backtest(
         fee_rate=fee_rate,
         slippage_bps=slippage_bps,
     )
-    if "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO" not in parameter_values:
-        effective_parameters["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"] = 0.0
-    if "SMA_COST_EDGE_ENABLED" not in parameter_values:
-        effective_parameters["SMA_COST_EDGE_ENABLED"] = False
-    if "SMA_MARKET_REGIME_ENABLED" not in parameter_values:
-        effective_parameters["SMA_MARKET_REGIME_ENABLED"] = False
     active_exit_policy = exit_policy_from_parameters("sma_with_filter", effective_parameters)
     active_exit_policy_hash = exit_policy_hash(active_exit_policy)
     short_n = int(effective_parameters.get("SMA_SHORT", effective_parameters.get("short_n", 0)))
@@ -1189,19 +1183,33 @@ def _trade_hash_payload(trade: dict[str, object]) -> dict[str, object]:
     return {
         "ts": trade.get("ts"),
         "side": trade.get("side"),
+        "signal_ts": trade.get("signal_ts"),
+        "decision_ts": trade.get("decision_ts"),
+        "submit_ts_assumption": trade.get("submit_ts_assumption"),
+        "fill_reference_ts": trade.get("fill_reference_ts"),
+        "portfolio_effective_ts": trade.get("portfolio_effective_ts"),
         "price": trade.get("price"),
+        "reference_price": execution.get("reference_price"),
+        "avg_fill_price": execution.get("avg_fill_price"),
         "qty": trade.get("qty"),
-        "notional": trade.get("notional"),
+        "filled_qty": execution.get("filled_qty"),
+        "filled_notional": execution.get("filled_notional"),
+        "remaining_qty": execution.get("remaining_qty"),
+        "fill_status": execution.get("fill_status"),
         "fee": trade.get("fee"),
-        "slippage": trade.get("slippage"),
+        "slippage_bps": execution.get("slippage_bps"),
+        "cash": trade.get("cash"),
+        "asset_qty": trade.get("asset_qty"),
         "pnl": trade.get("pnl"),
         "net_pnl": trade.get("net_pnl"),
+        "closed_trade_pnl": trade.get("closed_trade_pnl"),
         "exit_rule": trade.get("exit_rule"),
         "exit_reason": trade.get("exit_reason"),
+        "entry_decision_hash": trade.get("entry_decision_hash"),
+        "exit_decision_hash": trade.get("exit_decision_hash"),
         "model_name": execution.get("model_name"),
-        "fill_price": execution.get("fill_price"),
-        "filled_qty": execution.get("filled_qty"),
-        "status": execution.get("status"),
+        "model_version": execution.get("model_version"),
+        "model_params_hash": execution.get("model_params_hash"),
     }
 
 

@@ -78,6 +78,11 @@ from .statistical_selection import (
 )
 from .return_panel import build_candidate_return_panel, write_candidate_return_panel
 from .stress_suite import StressSuiteContext, analyze_stress_suite, stress_suite_required
+from .strategy_spec import (
+    materialize_strategy_parameters,
+    materialized_strategy_parameters_hash,
+    strategy_parameter_source_map,
+)
 from .strategy_registry import research_strategy_data_requirements, resolve_research_strategy
 from .strategy_spec import exit_policy_from_parameters, exit_policy_hash, materialize_strategy_parameters, strategy_spec_for_name
 
@@ -804,6 +809,13 @@ def _evaluate_candidates(
                 fee_rate=scenario.fee_rate,
                 slippage_bps=float(scenario.slippage_bps),
             )
+            effective_params_hash = materialized_strategy_parameters_hash(effective_params)
+            parameter_source_map = strategy_parameter_source_map(
+                manifest.strategy_name,
+                params,
+                fee_rate=scenario.fee_rate,
+                slippage_bps=float(scenario.slippage_bps),
+            )
             active_exit_policy = exit_policy_from_parameters(manifest.strategy_name, effective_params)
             active_exit_policy_hash = exit_policy_hash(active_exit_policy)
             stability_payload = stability[index]
@@ -1002,6 +1014,17 @@ def _evaluate_candidates(
                 "strategy_spec_hash": strategy_spec.spec_hash(),
                 "exit_policy": active_exit_policy,
                 "exit_policy_hash": active_exit_policy_hash,
+                "parameter_values_raw": params,
+                "effective_strategy_parameters": effective_params,
+                "effective_strategy_parameters_hash": effective_params_hash,
+                "strategy_parameter_source_map": parameter_source_map,
+                "candidate_regime_policy_applied_in_research": False,
+                "candidate_regime_policy_required_for_live": True,
+                "candidate_regime_policy_equivalence_required": True,
+                "candidate_regime_policy_equivalence_evidence_hash": None,
+                "candidate_regime_policy_limitation_reasons": [
+                    "research_backtest_candidate_regime_policy_not_applied"
+                ],
                 "train_metrics": train_metrics,
                 "validation_metrics": validation_metrics,
                 "final_holdout_metrics": final_holdout_metrics,
@@ -1086,6 +1109,17 @@ def _evaluate_candidates(
                     "exit_policy_hash": active_exit_policy_hash,
                     "parameter_candidate_id": base["candidate_id"],
                     "parameter_values": params,
+                    "parameter_values_raw": params,
+                    "effective_strategy_parameters": effective_params,
+                    "effective_strategy_parameters_hash": effective_params_hash,
+                    "strategy_parameter_source_map": parameter_source_map,
+                    "candidate_regime_policy_applied_in_research": False,
+                    "candidate_regime_policy_required_for_live": True,
+                    "candidate_regime_policy_equivalence_required": True,
+                    "candidate_regime_policy_equivalence_evidence_hash": None,
+                    "candidate_regime_policy_limitation_reasons": [
+                        "research_backtest_candidate_regime_policy_not_applied"
+                    ],
                     "scenario_policy": manifest.execution_model.scenario_policy,
                     "scenario_results": [],
                     "execution_model_source": manifest.execution_model.source,
@@ -1191,6 +1225,34 @@ def _evaluate_candidates(
                 "strategy_spec_hash": primary.get("strategy_spec_hash") or strategy_spec.spec_hash(),
                 "exit_policy": primary.get("exit_policy"),
                 "exit_policy_hash": primary.get("exit_policy_hash"),
+                "parameter_values_raw": primary.get("parameter_values_raw") or candidate_payload.get("parameter_values_raw"),
+                "effective_strategy_parameters": (
+                    primary.get("effective_strategy_parameters")
+                    or candidate_payload.get("effective_strategy_parameters")
+                ),
+                "effective_strategy_parameters_hash": (
+                    primary.get("effective_strategy_parameters_hash")
+                    or candidate_payload.get("effective_strategy_parameters_hash")
+                ),
+                "strategy_parameter_source_map": (
+                    primary.get("strategy_parameter_source_map")
+                    or candidate_payload.get("strategy_parameter_source_map")
+                ),
+                "candidate_regime_policy_applied_in_research": bool(
+                    primary.get("candidate_regime_policy_applied_in_research")
+                ),
+                "candidate_regime_policy_required_for_live": bool(
+                    primary.get("candidate_regime_policy_required_for_live")
+                ),
+                "candidate_regime_policy_equivalence_required": bool(
+                    primary.get("candidate_regime_policy_equivalence_required")
+                ),
+                "candidate_regime_policy_equivalence_evidence_hash": primary.get(
+                    "candidate_regime_policy_equivalence_evidence_hash"
+                ),
+                "candidate_regime_policy_limitation_reasons": (
+                    primary.get("candidate_regime_policy_limitation_reasons") or []
+                ),
                 "train_execution_event_summary": primary.get("train_execution_event_summary"),
                 "validation_execution_event_summary": primary.get("validation_execution_event_summary"),
                 "final_holdout_execution_event_summary": primary.get("final_holdout_execution_event_summary"),

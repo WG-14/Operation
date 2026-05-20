@@ -31,6 +31,11 @@ from bithumb_bot.research.promotion_gate import (
     promote_candidate,
     validate_backtest_candidate_for_promotion,
 )
+from bithumb_bot.research.strategy_spec import (
+    materialize_strategy_parameters,
+    materialized_strategy_parameters_hash,
+    strategy_parameter_source_map,
+)
 from bithumb_bot.research import validation_pipeline as pipeline
 from bithumb_bot.research.validation_pipeline import validation_run_binding_hash, validation_run_content_hash
 from bithumb_bot.approved_profile import build_approved_profile, verify_promotion_artifact
@@ -440,12 +445,54 @@ def _production_candidate(*, attach_stress_suite: bool = True, **overrides):
         payload["execution_reality_contract"] = execution_contract
         payload["execution_contract_hash"] = execution_contract["execution_contract_hash"]
     payload.update(overrides)
+    _attach_effective_parameter_contract(payload)
     if attach_stress_suite:
         _attach_stress_suite(payload)
     explicit_hash = overrides.get("candidate_profile_hash")
     payload.pop("candidate_profile_hash", None)
     payload["candidate_profile_hash"] = explicit_hash or sha256_prefixed(build_candidate_profile(payload))
     return payload
+
+
+def _attach_effective_parameter_contract(payload: dict[str, object]) -> None:
+    params = payload.get("parameter_values") if isinstance(payload.get("parameter_values"), dict) else {}
+    cost = payload.get("cost_model") if isinstance(payload.get("cost_model"), dict) else {}
+    effective = materialize_strategy_parameters(
+        str(payload.get("strategy_name") or "sma_with_filter"),
+        dict(params),
+        fee_rate=cost.get("fee_rate"),
+        slippage_bps=cost.get("slippage_bps"),
+    )
+    payload["parameter_values_raw"] = dict(params)
+    payload["effective_strategy_parameters"] = effective
+    payload["effective_strategy_parameters_hash"] = materialized_strategy_parameters_hash(effective)
+    payload["strategy_parameter_source_map"] = strategy_parameter_source_map(
+        str(payload.get("strategy_name") or "sma_with_filter"),
+        dict(params),
+        fee_rate=cost.get("fee_rate"),
+        slippage_bps=cost.get("slippage_bps"),
+    )
+    payload.setdefault("candidate_regime_policy_applied_in_research", False)
+    payload.setdefault("candidate_regime_policy_required_for_live", False)
+    payload.setdefault("candidate_regime_policy_equivalence_required", False)
+    payload.setdefault("candidate_regime_policy_limitation_reasons", [])
+
+
+def test_promotion_requires_candidate_regime_policy_equivalence_when_policy_affects_entries() -> None:
+    candidate = _production_candidate(
+        candidate_regime_policy_required_for_live=True,
+        candidate_regime_policy_equivalence_required=True,
+        candidate_regime_policy_applied_in_research=False,
+        candidate_regime_policy_equivalence_evidence_hash=None,
+        candidate_regime_policy_limitation_reasons=[
+            "research_backtest_candidate_regime_policy_not_applied"
+        ],
+    )
+
+    allowed, reasons = validate_backtest_candidate_for_promotion(candidate)
+
+    assert not allowed
+    assert "candidate_regime_policy_equivalence_evidence_missing" in reasons
 
 
 def _lineage(*, execution_calibration_artifact_hash: str | None = None) -> dict[str, object]:

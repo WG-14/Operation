@@ -24,7 +24,12 @@ from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.lineage import validate_lineage_artifact, LineageValidationError
 from .research.promotion_gate import build_candidate_profile
 from .research.deployment_policy import deployment_tier_for_profile_mode, validate_production_calibration_policy
-from .research.strategy_spec import exit_policy_from_parameters
+from .research.strategy_spec import (
+    exit_policy_from_parameters,
+    materialized_strategy_parameters_hash,
+    strategy_parameter_source_map,
+    strategy_spec_for_name,
+)
 from .storage_io import write_json_atomic
 
 
@@ -44,10 +49,13 @@ STRATEGY_PARAMETER_ENV_KEYS = (
     "SMA_FILTER_VOL_MIN_RANGE_RATIO",
     "SMA_FILTER_OVEREXT_LOOKBACK",
     "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO",
+    "SMA_MARKET_REGIME_ENABLED",
     "SMA_COST_EDGE_ENABLED",
     "SMA_COST_EDGE_MIN_RATIO",
     "ENTRY_EDGE_BUFFER_RATIO",
     "STRATEGY_MIN_EXPECTED_EDGE_RATIO",
+    "STRATEGY_ENTRY_SLIPPAGE_BPS",
+    "LIVE_FEE_RATE_ESTIMATE",
     "STRATEGY_EXIT_RULES",
     "STRATEGY_EXIT_MAX_HOLDING_MIN",
     "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO",
@@ -395,10 +403,19 @@ def _candidate_like_from_promotion(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _strategy_parameters_from_promotion(payload: dict[str, Any]) -> dict[str, object]:
     profile = payload.get("candidate_profile") if isinstance(payload.get("candidate_profile"), dict) else {}
-    parameters = profile.get("parameter_values")
+    parameters = profile.get("effective_strategy_parameters")
+    if parameters is None:
+        parameters = profile.get("parameter_values")
     if not isinstance(parameters, dict):
         raise ApprovedProfileError("promotion_parameter_values_missing")
-    return dict(parameters)
+    strategy_name = str(payload.get("strategy_name") or profile.get("strategy_name") or "sma_with_filter")
+    return _runtime_bound_strategy_parameters(strategy_name, dict(parameters))
+
+
+def _runtime_bound_strategy_parameters(strategy_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    spec = strategy_spec_for_name(strategy_name)
+    research_only = set(spec.research_only_parameter_names)
+    return {key: value for key, value in parameters.items() if key not in research_only}
 
 
 def _cost_model_from_promotion(payload: dict[str, Any]) -> dict[str, object]:
@@ -540,6 +557,47 @@ def build_approved_profile(
         "market": str(market),
         "interval": str(interval),
         "strategy_parameters": _strategy_parameters_from_promotion(verified_promotion),
+        "parameter_values_raw": (
+            dict(promotion_source.get("parameter_values_raw"))
+            if isinstance(promotion_source.get("parameter_values_raw"), dict)
+            else dict(promotion_source.get("parameter_values") or {})
+        ),
+        "effective_strategy_parameters": _strategy_parameters_from_promotion(verified_promotion),
+        "effective_strategy_parameters_hash": materialized_strategy_parameters_hash(
+            _strategy_parameters_from_promotion(verified_promotion)
+        ),
+        "strategy_parameter_source_map": _runtime_bound_strategy_parameters(
+            str(verified_promotion.get("strategy_name") or "sma_with_filter"),
+            (
+                dict(promotion_source.get("strategy_parameter_source_map"))
+                if isinstance(promotion_source.get("strategy_parameter_source_map"), dict)
+                else strategy_parameter_source_map(
+                    str(verified_promotion.get("strategy_name") or "sma_with_filter"),
+                    dict(
+                        promotion_source.get("parameter_values_raw")
+                        or promotion_source.get("parameter_values")
+                        or {}
+                    ),
+                    fee_rate=(_cost_model_from_promotion(verified_promotion)).get("fee_rate"),
+                    slippage_bps=(_cost_model_from_promotion(verified_promotion)).get("slippage_bps"),
+                )
+            ),
+        ),
+        "candidate_regime_policy_applied_in_research": bool(
+            promotion_source.get("candidate_regime_policy_applied_in_research")
+        ),
+        "candidate_regime_policy_required_for_live": bool(
+            promotion_source.get("candidate_regime_policy_required_for_live")
+        ),
+        "candidate_regime_policy_equivalence_required": bool(
+            promotion_source.get("candidate_regime_policy_equivalence_required")
+        ),
+        "candidate_regime_policy_equivalence_evidence_hash": promotion_source.get(
+            "candidate_regime_policy_equivalence_evidence_hash"
+        ),
+        "candidate_regime_policy_limitation_reasons": list(
+            promotion_source.get("candidate_regime_policy_limitation_reasons") or []
+        ),
         "cost_model": _cost_model_from_promotion(verified_promotion),
         "base_cost_assumption": promotion_source.get("base_cost_assumption"),
         "cost_assumption_contract": promotion_source.get("cost_assumption_contract"),
@@ -596,6 +654,26 @@ def validate_approved_profile(profile: dict[str, Any]) -> dict[str, Any]:
             raise ApprovedProfileError(f"{key}_missing")
     if not isinstance(profile.get("strategy_parameters"), dict):
         raise ApprovedProfileError("strategy_parameters_missing")
+    if not isinstance(profile.get("effective_strategy_parameters"), dict):
+        raise ApprovedProfileError("effective_strategy_parameters_missing")
+    expected = profile.get(PROFILE_HASH_FIELD)
+    if (
+        isinstance(expected, str)
+        and expected.startswith("sha256:")
+        and profile.get("strategy_parameters") != profile.get("effective_strategy_parameters")
+        and compute_approved_profile_hash(profile) != expected
+    ):
+        raise ApprovedProfileError("profile_content_hash_mismatch")
+    if profile.get("strategy_parameters") != profile.get("effective_strategy_parameters"):
+        raise ApprovedProfileError("strategy_parameters_not_effective")
+    if not str(profile.get("effective_strategy_parameters_hash") or "").startswith("sha256:"):
+        raise ApprovedProfileError("effective_strategy_parameters_hash_missing")
+    if materialized_strategy_parameters_hash(profile["effective_strategy_parameters"]) != profile.get(
+        "effective_strategy_parameters_hash"
+    ):
+        raise ApprovedProfileError("effective_strategy_parameters_hash_mismatch")
+    if not isinstance(profile.get("strategy_parameter_source_map"), dict):
+        raise ApprovedProfileError("strategy_parameter_source_map_missing")
     if not isinstance(profile.get("exit_policy"), dict):
         raise ApprovedProfileError("exit_policy_missing")
     if not str(profile.get("exit_policy_hash") or "").startswith("sha256:"):
@@ -652,6 +730,11 @@ def validate_approved_profile(profile: dict[str, Any]) -> dict[str, Any]:
         raise ApprovedProfileError("regime_policy_missing_allowed_regimes")
     if not isinstance(regime_policy.get("blocked_regimes"), list):
         raise ApprovedProfileError("regime_policy_missing_blocked_regimes")
+    if mode in LIVE_COMPATIBLE_PROFILE_MODES and bool(profile.get("candidate_regime_policy_required_for_live")):
+        if not bool(profile.get("candidate_regime_policy_applied_in_research")) and not str(
+            profile.get("candidate_regime_policy_equivalence_evidence_hash") or ""
+        ).startswith("sha256:"):
+            raise ApprovedProfileError("candidate_regime_policy_equivalence_evidence_missing")
     expected = profile.get(PROFILE_HASH_FIELD)
     if not isinstance(expected, str) or not expected.startswith("sha256:"):
         raise ApprovedProfileError("profile_content_hash_missing")
@@ -975,6 +1058,19 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
         ),
         "ENTRY_EDGE_BUFFER_RATIO": _value("ENTRY_EDGE_BUFFER_RATIO", default="0.0005"),
         "STRATEGY_MIN_EXPECTED_EDGE_RATIO": _value("STRATEGY_MIN_EXPECTED_EDGE_RATIO", default="0"),
+        "STRATEGY_ENTRY_SLIPPAGE_BPS": _value(
+            "STRATEGY_ENTRY_SLIPPAGE_BPS",
+            "MAX_MARKET_SLIPPAGE_BPS",
+            "SLIPPAGE_BPS",
+            default="0",
+        ),
+        "LIVE_FEE_RATE_ESTIMATE": _value(
+            "LIVE_FEE_RATE_ESTIMATE",
+            "PAPER_FEE_RATE",
+            "PAPER_FEE_RATE_ESTIMATE",
+            "FEE_RATE",
+            default="0.0004",
+        ),
         "STRATEGY_EXIT_RULES": _value("STRATEGY_EXIT_RULES", default="opposite_cross,max_holding_time"),
         "STRATEGY_EXIT_MAX_HOLDING_MIN": _value("STRATEGY_EXIT_MAX_HOLDING_MIN", default="0"),
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": _value("STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO", default="0"),
@@ -1045,6 +1141,8 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
             "SMA_COST_EDGE_MIN_RATIO": float(getattr(cfg, "SMA_COST_EDGE_MIN_RATIO")),
             "ENTRY_EDGE_BUFFER_RATIO": float(getattr(cfg, "ENTRY_EDGE_BUFFER_RATIO")),
             "STRATEGY_MIN_EXPECTED_EDGE_RATIO": float(getattr(cfg, "STRATEGY_MIN_EXPECTED_EDGE_RATIO")),
+            "STRATEGY_ENTRY_SLIPPAGE_BPS": float(getattr(cfg, "STRATEGY_ENTRY_SLIPPAGE_BPS")),
+            "LIVE_FEE_RATE_ESTIMATE": float(getattr(cfg, "LIVE_FEE_RATE_ESTIMATE")),
             "STRATEGY_EXIT_RULES": str(getattr(cfg, "STRATEGY_EXIT_RULES")),
             "STRATEGY_EXIT_MAX_HOLDING_MIN": int(getattr(cfg, "STRATEGY_EXIT_MAX_HOLDING_MIN")),
             "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": float(getattr(cfg, "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO")),
@@ -1200,6 +1298,7 @@ def diff_profile_to_runtime(
     _compare_scalar(mismatches, "interval", profile.get("interval"), runtime.get("interval"))
     profile_params = profile.get("strategy_parameters") if isinstance(profile.get("strategy_parameters"), dict) else {}
     runtime_params = runtime.get("strategy_parameters") if isinstance(runtime.get("strategy_parameters"), dict) else {}
+    _compare_behavior_parameter_coverage(mismatches, profile, runtime, profile_params, runtime_params)
     for key, expected in profile_params.items():
         if key not in runtime_params:
             mismatches.append({"field": f"strategy_parameters.{key}", "expected": expected, "actual": None})
@@ -1279,6 +1378,47 @@ def diff_profile_to_runtime(
             }
         )
     return tuple(_dedupe_mismatches(mismatches))
+
+
+def _compare_behavior_parameter_coverage(
+    mismatches: list[dict[str, object]],
+    profile: dict[str, Any],
+    runtime: dict[str, Any],
+    profile_params: dict[str, Any],
+    runtime_params: dict[str, Any],
+) -> None:
+    strategy_name = str(profile.get("strategy_name") or runtime.get("strategy_name") or "sma_with_filter")
+    spec = strategy_spec_for_name(strategy_name)
+    required = sorted(set(spec.behavior_affecting_parameter_names) - set(spec.research_only_parameter_names))
+    for key in required:
+        if key not in profile_params:
+            mismatches.append(
+                {
+                    "field": f"strategy_parameters.{key}",
+                    "expected": "profile_behavior_parameter_present",
+                    "actual": None,
+                    "reason": "profile_behavior_parameter_missing",
+                }
+            )
+        if key not in runtime_params:
+            mismatches.append(
+                {
+                    "field": f"strategy_parameters.{key}",
+                    "expected": "runtime_behavior_parameter_present",
+                    "actual": None,
+                    "reason": "runtime_behavior_parameter_missing",
+                }
+            )
+    unbound_runtime = sorted(key for key in runtime_params if key in set(required) and key not in profile_params)
+    for key in unbound_runtime:
+        mismatches.append(
+            {
+                "field": f"strategy_parameters.{key}",
+                "expected": None,
+                "actual": runtime_params.get(key),
+                "reason": "runtime_behavior_parameter_unbound_by_profile",
+            }
+        )
 
 
 def _dedupe_mismatches(mismatches: list[dict[str, object]]) -> list[dict[str, object]]:

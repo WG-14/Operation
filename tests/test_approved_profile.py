@@ -7,6 +7,7 @@ import pytest
 
 from bithumb_bot.approved_profile import (
     ApprovedProfileError,
+    STRATEGY_PARAMETER_ENV_KEYS,
     build_approved_profile,
     compute_approved_profile_hash,
     compute_file_content_hash,
@@ -35,6 +36,7 @@ from bithumb_bot.paths import PathConfig, PathManager, PathPolicyError
 from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.execution_reality_contract import execution_capability_contract_hash, execution_contract_hash
 from bithumb_bot.research.promotion_gate import build_candidate_profile
+from bithumb_bot.research.strategy_spec import strategy_spec_for_name
 from bithumb_bot.research.validation_pipeline import validation_run_binding_hash, validation_run_content_hash
 from bithumb_bot.storage_io import write_json_atomic
 
@@ -1143,6 +1145,134 @@ def test_runtime_contract_includes_sma_market_regime_enabled(tmp_path: Path) -> 
     runtime = runtime_contract_from_env_values(parse_env_file(env_path))
 
     assert runtime["strategy_parameters"]["SMA_MARKET_REGIME_ENABLED"] == "false"
+
+
+def test_strategy_parameter_env_keys_include_all_runtime_bound_behavior_params() -> None:
+    spec = strategy_spec_for_name("sma_with_filter")
+    required = set(spec.behavior_affecting_parameter_names) - set(spec.research_only_parameter_names)
+
+    assert required <= set(STRATEGY_PARAMETER_ENV_KEYS)
+
+
+def test_strategy_parameter_env_keys_include_sma_market_regime_enabled() -> None:
+    assert "SMA_MARKET_REGIME_ENABLED" in STRATEGY_PARAMETER_ENV_KEYS
+
+
+def test_candidate_profile_contains_raw_and_effective_strategy_parameters() -> None:
+    candidate = _candidate()
+    profile = build_candidate_profile(candidate)
+
+    assert profile["parameter_values_raw"] == candidate["parameter_values"]
+    assert profile["effective_strategy_parameters"]["SMA_MARKET_REGIME_ENABLED"] is True
+    assert profile["effective_strategy_parameters"]["SMA_COST_EDGE_ENABLED"] is True
+    assert profile["effective_strategy_parameters"]["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"] == 0.02
+    assert str(profile["effective_strategy_parameters_hash"]).startswith("sha256:")
+    assert profile["strategy_parameter_source_map"]["SMA_MARKET_REGIME_ENABLED"] == "raw_parameter_values"
+
+
+def test_approved_profile_strategy_parameters_are_effective_full_set(tmp_path: Path) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+
+    profile = _profile(str(promotion_path))
+
+    assert profile["strategy_parameters"] == profile["effective_strategy_parameters"]
+    assert profile["strategy_parameters"]["SMA_MARKET_REGIME_ENABLED"] is True
+    assert profile["strategy_parameters"]["STRATEGY_ENTRY_SLIPPAGE_BPS"] == 50.0
+    assert profile["strategy_parameters"]["LIVE_FEE_RATE_ESTIMATE"] == 0.0025
+
+
+def test_profile_runtime_diff_rejects_missing_behavior_affecting_profile_key(tmp_path: Path) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+    profile = _profile(str(promotion_path))
+    profile["strategy_parameters"].pop("SMA_MARKET_REGIME_ENABLED")
+    profile["effective_strategy_parameters"] = dict(profile["strategy_parameters"])
+    profile["effective_strategy_parameters_hash"] = sha256_prefixed(profile["effective_strategy_parameters"])
+    profile["profile_content_hash"] = compute_approved_profile_hash(profile)
+    runtime = {
+        "mode": "paper",
+        "strategy_name": profile["strategy_name"],
+        "market": profile["market"],
+        "interval": profile["interval"],
+        "strategy_parameters": dict(_profile(str(promotion_path))["strategy_parameters"]),
+        "cost_model": {"fee_rate": 0.0025, "slippage_bps": 50.0},
+        "execution_reality_contract": profile["execution_reality_contract"],
+        "execution_capability_contract": profile["execution_capability_contract"],
+    }
+
+    mismatches = diff_profile_to_runtime(profile, runtime)
+
+    assert any(item.get("reason") == "profile_behavior_parameter_missing" for item in mismatches)
+    assert any(item.get("reason") == "runtime_behavior_parameter_unbound_by_profile" for item in mismatches)
+
+
+def test_profile_runtime_diff_detects_sma_market_regime_enabled_default_drift(tmp_path: Path) -> None:
+    profile_path = _write_profile_with_source(tmp_path)
+    profile = load_approved_profile(profile_path)
+    runtime = runtime_contract_from_env_values({"SMA_SHORT": "2", "SMA_LONG": "4", "SMA_MARKET_REGIME_ENABLED": "false"})
+    runtime["execution_reality_contract"] = profile["execution_reality_contract"]
+    runtime["execution_capability_contract"] = profile["execution_capability_contract"]
+    runtime["cost_model"] = {"fee_rate": "0.0025", "slippage_bps": "50"}
+
+    mismatches = diff_profile_to_runtime(profile, runtime)
+
+    assert any(
+        item.get("field") == "strategy_parameters.SMA_MARKET_REGIME_ENABLED"
+        and item.get("actual") == "false"
+        for item in mismatches
+    )
+
+
+def test_profile_hash_changes_when_effective_strategy_parameter_changes(tmp_path: Path) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+    profile = _profile(str(promotion_path))
+    changed = dict(profile)
+    changed["strategy_parameters"] = dict(profile["strategy_parameters"])
+    changed["effective_strategy_parameters"] = dict(profile["effective_strategy_parameters"])
+    changed["strategy_parameters"]["SMA_MARKET_REGIME_ENABLED"] = False
+    changed["effective_strategy_parameters"]["SMA_MARKET_REGIME_ENABLED"] = False
+    changed["effective_strategy_parameters_hash"] = sha256_prefixed(changed["effective_strategy_parameters"])
+    changed.pop("profile_content_hash", None)
+
+    assert compute_approved_profile_hash(changed) != profile["profile_content_hash"]
+
+
+def test_live_ready_profile_requires_candidate_regime_policy_evidence(tmp_path: Path) -> None:
+    promotion = _promotion()
+    candidate_profile = dict(promotion["candidate_profile"])  # type: ignore[index]
+    candidate_profile["candidate_regime_policy_required_for_live"] = True
+    candidate_profile["candidate_regime_policy_equivalence_required"] = True
+    candidate_profile["candidate_regime_policy_applied_in_research"] = False
+    candidate_profile["candidate_regime_policy_equivalence_evidence_hash"] = None
+    candidate_profile["candidate_regime_policy_limitation_reasons"] = [
+        "research_backtest_candidate_regime_policy_not_applied"
+    ]
+    candidate_hash = sha256_prefixed(candidate_profile)
+    promotion.update(
+        {
+            "candidate_profile": candidate_profile,
+            "candidate_profile_hash": candidate_hash,
+            "verified_candidate_profile_hash": candidate_hash,
+            "strategy_profile_hash": candidate_hash,
+        }
+    )
+    promotion.pop("content_hash", None)
+    promotion["content_hash"] = sha256_prefixed(content_hash_payload(promotion))
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, promotion)
+    profile = build_approved_profile(
+        promotion=promotion,
+        mode="live_dry_run",
+        source_promotion_path=str(promotion_path),
+        market="KRW-BTC",
+        interval="1m",
+        generated_at="2026-05-04T00:00:00+00:00",
+    )
+
+    with pytest.raises(ApprovedProfileError, match="candidate_regime_policy_equivalence_evidence_missing"):
+        validate_approved_profile(profile)
 
 
 def test_profile_runtime_mismatch_detects_sma_market_regime_enabled_change(tmp_path: Path) -> None:

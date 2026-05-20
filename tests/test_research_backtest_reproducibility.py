@@ -17,6 +17,8 @@ from bithumb_bot.research.backtest_engine import (
     BacktestResourceLimitExceeded,
     BacktestResourceLimits,
     BacktestRunContext,
+    _behavior_hashes,
+    _trade_hash_payload,
     run_sma_backtest,
 )
 from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot, TopOfBookQuote
@@ -29,6 +31,7 @@ from bithumb_bot.research.experiment_manifest import (
     legacy_research_portfolio_policy,
     parse_manifest,
 )
+from bithumb_bot.research.strategy_spec import strategy_spec_for_name
 from bithumb_bot.research.audit_trail import AuditTraceScope, AuditTrailPolicy, verify_audit_trail, write_trace_manifest
 from bithumb_bot.research.return_panel import build_candidate_return_panel
 from bithumb_bot.research import cli as research_cli
@@ -188,6 +191,89 @@ def test_backtest_max_holding_changes_decision_hash() -> None:
 
     assert disabled.resource_usage["behavior_hash"] != enabled.resource_usage["behavior_hash"]
     assert any(trade.exit_rule == "max_holding_time" for trade in enabled.closed_trades)
+
+
+def test_research_backtest_effective_parameters_match_strategy_spec_defaults_when_not_legacy() -> None:
+    result = run_sma_backtest(
+        dataset=_max_holding_dataset(),
+        parameter_values={"SMA_SHORT": 2, "SMA_LONG": 4},
+        fee_rate=0.0004,
+        slippage_bps=0.0,
+        portfolio_policy=legacy_research_portfolio_policy(),
+    )
+    spec_defaults = strategy_spec_for_name("sma_with_filter").default_parameters
+
+    assert result.decisions
+    decision = result.decisions[0]
+    assert decision["strategy_spec"]["default_parameters"]["SMA_MARKET_REGIME_ENABLED"] is True
+    assert decision["strategy_spec"]["default_parameters"]["SMA_COST_EDGE_ENABLED"] is True
+    assert spec_defaults["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"] == 0.02
+    assert str(decision["decision_contract_hash"]).startswith("sha256:")
+
+
+def test_trade_ledger_hash_uses_actual_execution_fill_keys() -> None:
+    trade = {
+        "ts": 1,
+        "side": "BUY",
+        "signal_ts": 1,
+        "decision_ts": 2,
+        "submit_ts_assumption": 3,
+        "fill_reference_ts": 4,
+        "portfolio_effective_ts": 4,
+        "price": 101.0,
+        "qty": 2.0,
+        "fee": 0.1,
+        "cash": 900.0,
+        "asset_qty": 2.0,
+        "execution": {
+            "reference_price": 100.0,
+            "avg_fill_price": 101.0,
+            "filled_qty": 2.0,
+            "filled_notional": 202.0,
+            "remaining_qty": 0.0,
+            "fill_status": "filled",
+            "slippage_bps": 10.0,
+            "model_name": "fixed_bps",
+            "model_version": "research_fixed_bps_v1",
+            "model_params_hash": "sha256:model",
+        },
+    }
+    payload = _trade_hash_payload(trade)
+
+    assert payload["avg_fill_price"] == 101.0
+    assert payload["fill_status"] == "filled"
+    assert payload["filled_notional"] == 202.0
+    assert "fill_price" not in payload
+    assert "status" not in payload
+
+
+def test_trade_ledger_hash_changes_when_avg_fill_price_changes() -> None:
+    base = {"execution": {"avg_fill_price": 101.0, "fill_status": "filled"}}
+    changed = {"execution": {"avg_fill_price": 102.0, "fill_status": "filled"}}
+
+    assert _hash_for_trade(base) != _hash_for_trade(changed)
+
+
+def test_trade_ledger_hash_changes_when_fill_status_changes() -> None:
+    base = {"execution": {"avg_fill_price": 101.0, "fill_status": "filled"}}
+    changed = {"execution": {"avg_fill_price": 101.0, "fill_status": "partial"}}
+
+    assert _hash_for_trade(base) != _hash_for_trade(changed)
+
+
+def test_trade_ledger_hash_changes_when_portfolio_effective_ts_changes() -> None:
+    base = {"portfolio_effective_ts": 4, "execution": {"avg_fill_price": 101.0, "fill_status": "filled"}}
+    changed = {"portfolio_effective_ts": 5, "execution": {"avg_fill_price": 101.0, "fill_status": "filled"}}
+
+    assert _hash_for_trade(base) != _hash_for_trade(changed)
+
+
+def _hash_for_trade(trade: dict[str, object]) -> str:
+    return _behavior_hashes(
+        decision_material=[],
+        trade_material=[_trade_hash_payload(trade)],
+        equity_material=[],
+    )["trade_ledger_hash"]
 
 
 def test_closed_trade_diagnostics_include_mae_mfe_and_exit_rule() -> None:

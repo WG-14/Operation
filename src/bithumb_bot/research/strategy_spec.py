@@ -164,7 +164,36 @@ def validate_parameter_space_against_strategy_spec(
             "research-only strategy parameter(s) cannot be optimized for production-bound manifests: "
             + ",".join(research_only)
         )
+    if is_production_bound_target(deployment_tier):
+        runtime_bound_behavior = sorted(
+            set(spec.behavior_affecting_parameter_names) - set(spec.research_only_parameter_names)
+        )
+        missing_behavior = [key for key in runtime_bound_behavior if key not in parameter_space]
+        if missing_behavior:
+            raise StrategySpecError(
+                "production-bound manifests must declare every runtime-bound behavior-affecting "
+                "strategy parameter: " + ",".join(missing_behavior)
+            )
     return spec
+
+
+def strategy_parameter_source_map(
+    strategy_name: str,
+    parameter_values: dict[str, Any],
+    *,
+    fee_rate: float | None = None,
+    slippage_bps: float | None = None,
+) -> dict[str, str]:
+    spec = strategy_spec_for_name(strategy_name)
+    raw = dict(parameter_values)
+    sources = {key: "strategy_spec_default" for key in spec.default_parameters}
+    for key in raw:
+        sources[key] = "raw_parameter_values"
+    if fee_rate is not None and "LIVE_FEE_RATE_ESTIMATE" not in raw:
+        sources["LIVE_FEE_RATE_ESTIMATE"] = "cost_model_fee_rate"
+    if slippage_bps is not None and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in raw:
+        sources["STRATEGY_ENTRY_SLIPPAGE_BPS"] = "cost_model_slippage_bps"
+    return sources
 
 
 def materialize_strategy_parameters(
@@ -181,6 +210,10 @@ def materialize_strategy_parameters(
     if slippage_bps is not None and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in parameter_values:
         values["STRATEGY_ENTRY_SLIPPAGE_BPS"] = float(slippage_bps)
     return values
+
+
+def materialized_strategy_parameters_hash(parameter_values: dict[str, Any]) -> str:
+    return sha256_prefixed(dict(parameter_values))
 
 
 def exit_policy_from_parameters(strategy_name: str, parameter_values: dict[str, Any]) -> dict[str, Any]:

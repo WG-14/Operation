@@ -20,7 +20,13 @@ from .lineage import build_promotion_lineage, validate_lineage_artifact, Lineage
 from .experiment_registry import append_promotion_registry_event, validate_experiment_registry_binding
 from .final_selection import validate_final_selection_report
 from .deployment_policy import is_production_bound_target, validate_production_calibration_policy
-from .strategy_spec import exit_policy_from_parameters, exit_policy_hash
+from .strategy_spec import (
+    exit_policy_from_parameters,
+    exit_policy_hash,
+    materialize_strategy_parameters,
+    materialized_strategy_parameters_hash,
+    strategy_parameter_source_map,
+)
 from .metrics_contract import METRICS_SCHEMA_VERSION
 from .metrics_gate_policy import metrics_gate_policy_hash
 from .statistical_selection import validate_statistical_evidence_for_candidate
@@ -50,9 +56,39 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
     warning_reasons = _execution_calibration_warning_reasons(candidate)
     strategy_name = str(candidate.get("strategy_name") or "sma_with_filter")
     parameters = candidate.get("parameter_values") if isinstance(candidate.get("parameter_values"), dict) else {}
+    raw_parameters = (
+        candidate.get("parameter_values_raw")
+        if isinstance(candidate.get("parameter_values_raw"), dict)
+        else dict(parameters)
+    )
+    cost_model = candidate.get("cost_model") if isinstance(candidate.get("cost_model"), dict) else {}
+    effective_parameters = (
+        candidate.get("effective_strategy_parameters")
+        if isinstance(candidate.get("effective_strategy_parameters"), dict)
+        else materialize_strategy_parameters(
+            strategy_name,
+            raw_parameters,
+            fee_rate=cost_model.get("fee_rate"),
+            slippage_bps=cost_model.get("slippage_bps"),
+        )
+    )
+    effective_parameters_hash = str(
+        candidate.get("effective_strategy_parameters_hash")
+        or materialized_strategy_parameters_hash(effective_parameters)
+    )
+    source_map = (
+        candidate.get("strategy_parameter_source_map")
+        if isinstance(candidate.get("strategy_parameter_source_map"), dict)
+        else strategy_parameter_source_map(
+            strategy_name,
+            raw_parameters,
+            fee_rate=cost_model.get("fee_rate"),
+            slippage_bps=cost_model.get("slippage_bps"),
+        )
+    )
     exit_policy = candidate.get("exit_policy")
     if not isinstance(exit_policy, dict):
-        exit_policy = exit_policy_from_parameters(strategy_name, parameters)
+        exit_policy = exit_policy_from_parameters(strategy_name, effective_parameters)
     profile = {
         "strategy_name": candidate.get("strategy_name"),
         "strategy_spec": candidate.get("strategy_spec"),
@@ -69,7 +105,26 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         "final_holdout_composite_behavior_hash": candidate.get("final_holdout_composite_behavior_hash"),
         "validation_behavior_hash": candidate.get("validation_behavior_hash"),
         "candidate_id": candidate.get("parameter_candidate_id"),
-        "parameter_values": candidate.get("parameter_values"),
+        "parameter_values": dict(effective_parameters),
+        "parameter_values_raw": dict(raw_parameters),
+        "effective_strategy_parameters": dict(effective_parameters),
+        "effective_strategy_parameters_hash": effective_parameters_hash,
+        "strategy_parameter_source_map": dict(source_map),
+        "candidate_regime_policy_applied_in_research": bool(
+            candidate.get("candidate_regime_policy_applied_in_research")
+        ),
+        "candidate_regime_policy_required_for_live": bool(
+            candidate.get("candidate_regime_policy_required_for_live")
+        ),
+        "candidate_regime_policy_equivalence_required": bool(
+            candidate.get("candidate_regime_policy_equivalence_required")
+        ),
+        "candidate_regime_policy_equivalence_evidence_hash": candidate.get(
+            "candidate_regime_policy_equivalence_evidence_hash"
+        ),
+        "candidate_regime_policy_limitation_reasons": list(
+            candidate.get("candidate_regime_policy_limitation_reasons") or []
+        ),
         "cost_model": candidate.get("cost_model"),
         "base_cost_assumption": candidate.get("base_cost_assumption"),
         "cost_assumption_contract": candidate.get("cost_assumption_contract"),
@@ -235,6 +290,8 @@ def evaluate_candidate_for_promotion(candidate: dict[str, Any]) -> tuple[bool, l
         reasons.append("candidate_profile_hash_missing")
     elif sha256_prefixed(build_candidate_profile(candidate)) != profile_hash:
         reasons.append("candidate_profile_hash_mismatch")
+    _extend_strategy_parameter_contract_reasons(candidate, reasons)
+    _extend_candidate_regime_policy_reasons(candidate, reasons)
     _extend_execution_contract_reasons(candidate, reasons)
     if not _candidate_has_regime_policy(candidate):
         reasons.append("regime_policy_missing")
@@ -258,6 +315,8 @@ def validate_backtest_candidate_for_promotion(candidate: dict[str, Any] | None) 
         reasons.extend(["backtest_candidate_profile_hash_missing", "candidate_profile_hash_missing"])
     elif sha256_prefixed(build_candidate_profile(candidate)) != profile_hash:
         reasons.extend(["backtest_candidate_profile_hash_mismatch", "candidate_profile_hash_mismatch"])
+    _extend_strategy_parameter_contract_reasons(candidate, reasons, prefix="backtest_")
+    _extend_candidate_regime_policy_reasons(candidate, reasons, prefix="backtest_")
     _extend_execution_contract_reasons(candidate, reasons, prefix="backtest_")
     if not _candidate_has_regime_policy(candidate):
         reasons.extend(["backtest_regime_policy_missing", "regime_policy_missing"])
@@ -400,7 +459,55 @@ def _extend_portfolio_policy_reasons(
     elif sha256_prefixed(policy) != policy_hash:
         reasons.extend([f"{prefix}portfolio_policy_hash_mismatch", "portfolio_policy_hash_mismatch"])
     if not isinstance(simulation_hash, str) or not simulation_hash.startswith("sha256:"):
-        reasons.extend([f"{prefix}simulation_policy_hash_missing", "simulation_policy_hash_missing"])
+            reasons.extend([f"{prefix}simulation_policy_hash_missing", "simulation_policy_hash_missing"])
+
+
+def _extend_strategy_parameter_contract_reasons(
+    candidate: dict[str, Any],
+    reasons: list[str],
+    *,
+    prefix: str = "",
+) -> None:
+    if not is_production_bound_target(candidate.get("deployment_tier")):
+        return
+    effective = candidate.get("effective_strategy_parameters")
+    if not isinstance(effective, dict):
+        reasons.extend([f"{prefix}effective_strategy_parameters_missing", "effective_strategy_parameters_missing"])
+        return
+    expected_hash = candidate.get("effective_strategy_parameters_hash")
+    if not isinstance(expected_hash, str) or not expected_hash.startswith("sha256:"):
+        reasons.extend([
+            f"{prefix}effective_strategy_parameters_hash_missing",
+            "effective_strategy_parameters_hash_missing",
+        ])
+    elif materialized_strategy_parameters_hash(effective) != expected_hash:
+        reasons.extend([
+            f"{prefix}effective_strategy_parameters_hash_mismatch",
+            "effective_strategy_parameters_hash_mismatch",
+        ])
+    source_map = candidate.get("strategy_parameter_source_map")
+    if not isinstance(source_map, dict):
+        reasons.extend([f"{prefix}strategy_parameter_source_map_missing", "strategy_parameter_source_map_missing"])
+
+
+def _extend_candidate_regime_policy_reasons(
+    candidate: dict[str, Any],
+    reasons: list[str],
+    *,
+    prefix: str = "",
+) -> None:
+    if not is_production_bound_target(candidate.get("deployment_tier")):
+        return
+    if not bool(candidate.get("candidate_regime_policy_required_for_live")):
+        return
+    if bool(candidate.get("candidate_regime_policy_applied_in_research")):
+        return
+    evidence_hash = str(candidate.get("candidate_regime_policy_equivalence_evidence_hash") or "")
+    if bool(candidate.get("candidate_regime_policy_equivalence_required")) and not evidence_hash.startswith("sha256:"):
+        reasons.extend([
+            f"{prefix}candidate_regime_policy_equivalence_evidence_missing",
+            "candidate_regime_policy_equivalence_evidence_missing",
+        ])
 
 
 def _policy_hash_binding_reasons(
