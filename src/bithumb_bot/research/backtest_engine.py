@@ -2252,6 +2252,11 @@ def _strategy_diagnostics_from_trades(
         "mae_pct_by_trade": mae_pct_by_trade,
         "mfe_pct_by_trade": mfe_pct_by_trade,
         "p95_mae_pct": _percentile(mae_pct_by_trade, 0.95),
+        "p05_mae_pct": _percentile(mae_pct_by_trade, 0.05),
+        "p95_adverse_excursion_abs_pct": _percentile(
+            [abs(value) for value in mae_pct_by_trade],
+            0.95,
+        ),
         "worst_trade_mae_pct": min(mae_pct_by_trade) if mae_pct_by_trade else None,
         "avg_loss_holding_minutes": (
             sum(loss_holding_minutes) / len(loss_holding_minutes)

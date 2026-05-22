@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-DECISION_CONTRACT_VERSION = "decision_v2"
+DECISION_CONTRACT_VERSION = "decision_v3_entry_exit_risk_exit"
 
 BLOCK_LAYER_PRIORITY = (
     "fee_authority",

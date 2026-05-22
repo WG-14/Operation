@@ -1169,7 +1169,7 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
             "FEE_RATE",
             default="0.0004",
         ),
-        "STRATEGY_EXIT_RULES": _value("STRATEGY_EXIT_RULES", default="opposite_cross,max_holding_time"),
+        "STRATEGY_EXIT_RULES": _value("STRATEGY_EXIT_RULES", default="stop_loss,opposite_cross,max_holding_time"),
         "STRATEGY_EXIT_STOP_LOSS_RATIO": _value("STRATEGY_EXIT_STOP_LOSS_RATIO", default="0"),
         "STRATEGY_EXIT_MAX_HOLDING_MIN": _value("STRATEGY_EXIT_MAX_HOLDING_MIN", default="0"),
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": _value("STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO", default="0"),

@@ -574,19 +574,6 @@ def _apply_entry_exit_policy(
         context["exit_submit_expected"] = bool(state_interpretation["exit_submit_expected"])
         return apply_decision_contract(context)
 
-    if resolved_entry_signal == "BUY" and not exposure.entry_allowed:
-        context = _annotate_decision_context(
-            dict(base_context),
-            raw_signal=resolved_raw_signal,
-            final_signal="HOLD",
-            final_reason=str(exposure.entry_block_reason or "entry_blocked_by_position_state"),
-        )
-        return StrategyDecision(
-            signal="HOLD",
-            reason=str(exposure.entry_block_reason or "entry_blocked_by_position_state"),
-            context=context,
-        )
-
     if resolved_exit_signal == "SELL" and not exposure.exit_allowed and not allow_harmless_dust_exit_evaluation:
         context = _annotate_decision_context(
             dict(base_context),
@@ -627,6 +614,79 @@ def _apply_entry_exit_policy(
             context=context,
         )
 
+    if position.in_position:
+        exit_results: list[dict[str, Any]] = []
+        for rule in exit_rules:
+            rule_result = rule.evaluate(
+                position=position,
+                candle_ts=int(base_context["ts"]),
+                market_price=float(base_context["last_close"]),
+                signal_context={
+                    "base_signal": resolved_exit_signal,
+                    "base_reason": resolved_exit_reason,
+                    "raw_signal": resolved_raw_signal,
+                    "entry_signal": resolved_entry_signal,
+                    "exit_signal": resolved_exit_signal,
+                    "curr_s": base_context["curr_s"],
+                    "curr_l": base_context["curr_l"],
+                },
+            )
+            exit_results.append(
+                {
+                    "rule": rule.name,
+                    "triggered": bool(rule_result.should_exit),
+                    "reason": rule_result.reason,
+                    "context": rule_result.context,
+                }
+            )
+            if rule_result.should_exit:
+                context = dict(base_context)
+                context["position"] = position.as_dict()
+                context["exit"] = _build_exit_decision_context(
+                    exposure=exposure,
+                    triggered=True,
+                    reason=rule_result.reason,
+                    rule=rule.name,
+                    evaluations=exit_results,
+                )
+                context = _annotate_decision_context(
+                    context,
+                    raw_signal=resolved_raw_signal,
+                    final_signal="SELL",
+                    final_reason=rule_result.reason,
+                )
+                return StrategyDecision(signal="SELL", reason=rule_result.reason, context=context)
+
+        context = dict(base_context)
+        context["position"] = position.as_dict()
+        context["exit"] = _build_exit_decision_context(
+            exposure=exposure,
+            triggered=False,
+            reason="no exit rule triggered",
+            rule=None,
+            evaluations=exit_results,
+        )
+        context = _annotate_decision_context(
+            context,
+            raw_signal=resolved_raw_signal,
+            final_signal="HOLD",
+            final_reason="position held: no exit rule triggered",
+        )
+        return StrategyDecision(signal="HOLD", reason="position held: no exit rule triggered", context=context)
+
+    if resolved_entry_signal == "BUY" and not exposure.entry_allowed:
+        context = _annotate_decision_context(
+            dict(base_context),
+            raw_signal=resolved_raw_signal,
+            final_signal="HOLD",
+            final_reason=str(exposure.entry_block_reason or "entry_blocked_by_position_state"),
+        )
+        return StrategyDecision(
+            signal="HOLD",
+            reason=str(exposure.entry_block_reason or "entry_blocked_by_position_state"),
+            context=context,
+        )
+
     if not position.in_position:
         context = _annotate_decision_context(
             dict(base_context),
@@ -635,65 +695,6 @@ def _apply_entry_exit_policy(
             final_reason=resolved_entry_reason,
         )
         return StrategyDecision(signal=resolved_entry_signal, reason=resolved_entry_reason, context=context)
-
-    exit_results: list[dict[str, Any]] = []
-    for rule in exit_rules:
-        rule_result = rule.evaluate(
-            position=position,
-            candle_ts=int(base_context["ts"]),
-            market_price=float(base_context["last_close"]),
-            signal_context={
-                "base_signal": resolved_exit_signal,
-                "base_reason": resolved_exit_reason,
-                "raw_signal": resolved_raw_signal,
-                "entry_signal": resolved_entry_signal,
-                "exit_signal": resolved_exit_signal,
-                "curr_s": base_context["curr_s"],
-                "curr_l": base_context["curr_l"],
-            },
-        )
-        exit_results.append(
-            {
-                "rule": rule.name,
-                "triggered": bool(rule_result.should_exit),
-                "reason": rule_result.reason,
-                "context": rule_result.context,
-            }
-        )
-        if rule_result.should_exit:
-            context = dict(base_context)
-            context["position"] = position.as_dict()
-            context["exit"] = _build_exit_decision_context(
-                exposure=exposure,
-                triggered=True,
-                reason=rule_result.reason,
-                rule=rule.name,
-                evaluations=exit_results,
-            )
-            context = _annotate_decision_context(
-                context,
-                raw_signal=resolved_raw_signal,
-                final_signal="SELL",
-                final_reason=rule_result.reason,
-            )
-            return StrategyDecision(signal="SELL", reason=rule_result.reason, context=context)
-
-    context = dict(base_context)
-    context["position"] = position.as_dict()
-    context["exit"] = _build_exit_decision_context(
-        exposure=exposure,
-        triggered=False,
-        reason="no exit rule triggered",
-        rule=None,
-        evaluations=exit_results,
-    )
-    context = _annotate_decision_context(
-        context,
-        raw_signal=resolved_raw_signal,
-        final_signal="HOLD",
-        final_reason="position held: no exit rule triggered",
-    )
-    return StrategyDecision(signal="HOLD", reason="position held: no exit rule triggered", context=context)
 
 
 @dataclass(frozen=True)

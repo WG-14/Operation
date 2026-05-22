@@ -159,7 +159,7 @@ def _complete_runtime_bound_parameter_space(
         "STRATEGY_MIN_EXPECTED_EDGE_RATIO": [0.0],
         "STRATEGY_ENTRY_SLIPPAGE_BPS": [0.0],
         "LIVE_FEE_RATE_ESTIMATE": [0.0],
-        "STRATEGY_EXIT_RULES": ["opposite_cross,max_holding_time"],
+        "STRATEGY_EXIT_RULES": ["stop_loss,opposite_cross,max_holding_time"],
         "STRATEGY_EXIT_STOP_LOSS_RATIO": [0.0],
         "STRATEGY_EXIT_MAX_HOLDING_MIN": [0],
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": [0.0],
@@ -374,6 +374,33 @@ def test_backtest_stop_loss_is_first_class_exit_and_changes_behavior_hash() -> N
     assert enabled.strategy_diagnostics["stop_loss_exit_count"] == 1
     assert enabled.resource_usage["behavior_hash"] != disabled.resource_usage["behavior_hash"]
     assert enabled.decisions[0]["exit_policy"]["stop_loss"]["stop_loss_ratio"] == 0.05
+    assert enabled.decisions[0]["exit_policy"]["stop_loss"]["evaluation_price_basis"] == "closed_candle_mark"
+    assert enabled.decisions[0]["exit_policy"]["stop_loss"]["intrabar_stop_modeled"] is False
+    assert "intra_candle_path_unavailable" in enabled.decisions[0]["exit_policy"]["stop_loss"]["limitation_reasons"]
+
+
+def test_backtest_rejects_positive_stop_loss_ratio_without_stop_loss_rule() -> None:
+    with pytest.raises(ValueError, match="does not include stop_loss"):
+        run_sma_backtest(
+            dataset=_stop_loss_dataset(),
+            parameter_values={
+                "SMA_SHORT": 2,
+                "SMA_LONG": 3,
+                "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+                "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+                "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+                "SMA_COST_EDGE_ENABLED": False,
+                "SMA_MARKET_REGIME_ENABLED": False,
+                "STRATEGY_EXIT_RULES": "opposite_cross,max_holding_time",
+                "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.05,
+                "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
+                "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+                "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+            },
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            portfolio_policy=legacy_research_portfolio_policy(),
+        )
 
 
 def test_research_backtest_effective_parameters_match_strategy_spec_defaults_when_not_legacy() -> None:

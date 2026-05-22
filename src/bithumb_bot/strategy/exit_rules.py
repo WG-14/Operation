@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -98,6 +99,11 @@ class StopLossExitRule:
     stop_loss_ratio: float
     name: str = "stop_loss"
 
+    def __post_init__(self) -> None:
+        value = float(self.stop_loss_ratio)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"stop_loss_ratio must be finite and >= 0, got {value!r}")
+
     def evaluate(
         self,
         *,
@@ -106,7 +112,7 @@ class StopLossExitRule:
         market_price: float,
         signal_context: dict[str, object],
     ) -> ExitRuleDecision:
-        threshold = max(0.0, float(self.stop_loss_ratio))
+        threshold = float(self.stop_loss_ratio)
         unrealized_pnl_ratio = float(position.unrealized_pnl_ratio)
         should_exit = bool(
             position.in_position
@@ -177,9 +183,14 @@ def create_exit_rules(
     unknown = [name for name in normalized_names if name not in priority]
     if unknown:
         raise ValueError(f"unknown exit rule={unknown[0]!r}")
+    resolved_stop_loss_ratio = float(stop_loss_ratio)
+    if not math.isfinite(resolved_stop_loss_ratio) or resolved_stop_loss_ratio < 0.0:
+        raise ValueError(f"stop_loss_ratio must be finite and >= 0, got {resolved_stop_loss_ratio!r}")
+    if resolved_stop_loss_ratio > 0.0 and "stop_loss" not in normalized_names:
+        raise ValueError("stop_loss_ratio is positive but STRATEGY_EXIT_RULES does not include stop_loss")
     for name in sorted(dict.fromkeys(normalized_names), key=lambda item: priority[item]):
         if name == "stop_loss":
-            rules.append(StopLossExitRule(stop_loss_ratio=float(stop_loss_ratio)))
+            rules.append(StopLossExitRule(stop_loss_ratio=resolved_stop_loss_ratio))
         elif name == "opposite_cross":
             rules.append(
                 OppositeCrossExitRule(

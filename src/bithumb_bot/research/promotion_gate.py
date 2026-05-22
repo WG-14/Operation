@@ -113,12 +113,21 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
     exit_policy = candidate.get("exit_policy")
     if not isinstance(exit_policy, dict):
         exit_policy = exit_policy_from_parameters(strategy_name, effective_parameters)
+    elif not _exit_policy_has_current_stop_loss_schema(exit_policy):
+        exit_policy = exit_policy_from_parameters(strategy_name, effective_parameters)
+    resolved_exit_policy_hash = (
+        str(candidate.get("exit_policy_hash"))
+        if isinstance(candidate.get("exit_policy"), dict)
+        and _exit_policy_has_current_stop_loss_schema(candidate.get("exit_policy"))
+        and candidate.get("exit_policy_hash")
+        else exit_policy_hash(exit_policy)
+    )
     profile = {
         "strategy_name": candidate.get("strategy_name"),
         "strategy_spec": candidate.get("strategy_spec"),
         "strategy_spec_hash": candidate.get("strategy_spec_hash"),
         "exit_policy": exit_policy,
-        "exit_policy_hash": candidate.get("exit_policy_hash") or exit_policy_hash(exit_policy),
+        "exit_policy_hash": resolved_exit_policy_hash,
         "behavior_hash": candidate.get("behavior_hash"),
         "decision_behavior_hash": candidate.get("decision_behavior_hash"),
         "trade_ledger_hash": candidate.get("trade_ledger_hash"),
@@ -295,6 +304,21 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         if candidate.get(key) is not None:
             profile[key] = candidate.get(key)
     return profile
+
+
+def _exit_policy_has_current_stop_loss_schema(exit_policy: object) -> bool:
+    if not isinstance(exit_policy, dict):
+        return False
+    stop_loss = exit_policy.get("stop_loss")
+    if not isinstance(stop_loss, dict):
+        return False
+    return (
+        stop_loss.get("evaluation_price_basis") == "closed_candle_mark"
+        and stop_loss.get("intrabar_stop_modeled") is False
+        and isinstance(stop_loss.get("limitation_reasons"), list)
+        and "intra_candle_path_unavailable" in stop_loss.get("limitation_reasons", [])
+        and "candle_close_stop_may_exit_later_than_real_stop" in stop_loss.get("limitation_reasons", [])
+    )
 
 
 def build_candidate_behavior_profile(candidate: dict[str, Any]) -> dict[str, Any]:

@@ -1911,6 +1911,35 @@ def test_candidate_profile_hash_binds_official_promotion_grade_wrc_availability(
     assert sha256_prefixed(profile) != sha256_prefixed(build_candidate_profile(changed))
 
 
+def test_candidate_profile_rematerializes_legacy_exit_policy_schema() -> None:
+    candidate = _candidate(
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 4,
+            "STRATEGY_EXIT_RULES": "stop_loss,opposite_cross,max_holding_time",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.05,
+        },
+        exit_policy={
+            "schema_version": 1,
+            "strategy_name": "sma_with_filter",
+            "rules": ["stop_loss", "opposite_cross", "max_holding_time"],
+            "stop_loss": {
+                "enabled": True,
+                "stop_loss_ratio": 0.05,
+                "disabled_when_zero": True,
+            },
+        },
+        exit_policy_hash="sha256:legacy-exit-policy",
+    )
+
+    profile = build_candidate_profile(candidate)
+
+    assert profile["exit_policy_hash"] != "sha256:legacy-exit-policy"
+    assert profile["exit_policy"]["stop_loss"]["evaluation_price_basis"] == "closed_candle_mark"
+    assert profile["exit_policy"]["stop_loss"]["intrabar_stop_modeled"] is False
+    assert "intra_candle_path_unavailable" in profile["exit_policy"]["stop_loss"]["limitation_reasons"]
+
+
 def test_promotion_refuses_required_metrics_contract_when_validation_v2_removed(tmp_path, monkeypatch) -> None:
     manager = _manager(tmp_path, monkeypatch)
     candidate = _candidate_with_required_metrics_contract(validation_metrics_v2=None)

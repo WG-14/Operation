@@ -110,6 +110,7 @@ def _seed_position_and_dust_state(
     *,
     qty_open: float,
     dust_metadata: dict[str, object],
+    entry_price: float = 40_000_000.0,
     position_state: str = "open_exposure",
     executable_lot_count: int = 0,
     dust_tracking_lot_count: int = 0,
@@ -162,7 +163,7 @@ def _seed_position_and_dust_state(
             1,
             "entry-1",
             1_700_000_000_000,
-            40_000_000.0,
+            entry_price,
             qty_open,
             executable_lot_count,
             dust_tracking_lot_count,
@@ -227,7 +228,7 @@ def test_market_regime_allows_trend_entry_and_records_replay_fingerprint() -> No
     assert decision.context["signal_flow"]["primary_block_layer"] != "market_regime"
     replay = decision.context["replay_fingerprint"]
     assert replay["strategy_name"] == "sma_with_filter"
-    assert replay["decision_contract_version"] == "decision_v2"
+    assert replay["decision_contract_version"] == "decision_v3_entry_exit_risk_exit"
     assert replay["pair"] == "BTC_KRW"
     assert replay["interval"] == "1m"
     assert replay["sma_short"] == 2
@@ -304,7 +305,7 @@ def test_replay_fingerprint_preserves_distinct_through_ts_ms() -> None:
     assert replay["candle_ts"] == last_candle_ts
     assert replay["through_ts_ms"] == through_ts_ms
     assert replay["strategy_name"] == "sma_with_filter"
-    assert replay["decision_contract_version"] == "decision_v2"
+    assert replay["decision_contract_version"] == "decision_v3_entry_exit_risk_exit"
     assert replay["regime_feature_version"] == decision.context["market_regime"]["version"]
 
 
@@ -606,6 +607,85 @@ def test_research_runtime_raw_sell_filter_block_equivalence(relaxed_test_order_r
     assert research_decision["entry_blocked"] is False
     assert research_decision["exit_filter_suppression_prevented"] is True
     assert runtime_decision.context["exit"]["rule"] == research_decision["exit_rule"] == "opposite_cross"
+
+
+def test_research_runtime_raw_buy_open_position_stop_loss_equivalence(relaxed_test_order_rules) -> None:
+    closes = [10.0, 9.0, 8.0, 9.0, 10.0, 9.0, 10.0, 9.0, 11.0, 8.0]
+    runtime_conn = _build_candle_db(closes)
+    try:
+        _seed_position_and_dust_state(
+            runtime_conn,
+            qty_open=0.0002,
+            dust_metadata={},
+            entry_price=9.0,
+            executable_lot_count=2,
+        )
+        runtime_decision = create_sma_with_filter_strategy(
+            short_n=2,
+            long_n=3,
+            pair="BTC_KRW",
+            interval="1m",
+            min_gap_ratio=0.0,
+            volatility_window=3,
+            min_volatility_ratio=0.0,
+            overextended_lookback=1,
+            overextended_max_return_ratio=0.0,
+            slippage_bps=0.0,
+            live_fee_rate_estimate=0.0,
+            entry_edge_buffer_ratio=0.0,
+            cost_edge_enabled=False,
+            market_regime_enabled=False,
+            candidate_regime_policy=_allowing_policy(),
+            exit_rule_names=["stop_loss"],
+            exit_stop_loss_ratio=0.05,
+        ).decide(runtime_conn)
+    finally:
+        runtime_conn.close()
+
+    research_result = run_sma_backtest(
+        dataset=_research_dataset_from_closes(closes),
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "STRATEGY_EXIT_RULES": "stop_loss",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.05,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        portfolio_policy=PortfolioPolicy(
+            schema_version=1,
+            starting_cash_krw=1_000_000.0,
+            quote_currency="KRW",
+            initial_position_qty=0.0,
+            cash_interest_policy="zero",
+            position_sizing=PositionSizingPolicy(
+                type="fractional_cash",
+                buy_fraction=0.99,
+                sell_policy="sell_all_available_position",
+                cash_buffer_policy="retain_1_percent_before_fees",
+            ),
+            source="unit_test",
+        ),
+    )
+    research_decision = next(
+        item
+        for item in research_result.decisions
+        if item["raw_signal"] == "BUY" and item["exit_rule"] == "stop_loss"
+    )
+
+    assert runtime_decision is not None
+    assert runtime_decision.signal == research_decision["final_signal"] == "SELL"
+    assert runtime_decision.context["raw_signal"] == research_decision["raw_signal"] == "BUY"
+    assert runtime_decision.context["entry_allowed"] is False
+    assert runtime_decision.context["exit"]["rule"] == research_decision["exit_rule"] == "stop_loss"
 
 
 def test_gap_filter_blocks_entry_and_writes_context() -> None:
@@ -1264,4 +1344,15 @@ def test_strategy_entry_slippage_defaults_to_zero_when_env_values_are_unset(monk
     try:
         assert config_module.settings.STRATEGY_ENTRY_SLIPPAGE_BPS == 0.0
     finally:
+        importlib.reload(config_module)
+
+
+def test_runtime_config_rejects_negative_stop_loss_ratio(monkeypatch) -> None:
+    config_module = importlib.import_module("bithumb_bot.config")
+    monkeypatch.setenv("STRATEGY_EXIT_STOP_LOSS_RATIO", "-0.01")
+    try:
+        with pytest.raises(ValueError, match="STRATEGY_EXIT_STOP_LOSS_RATIO"):
+            importlib.reload(config_module)
+    finally:
+        monkeypatch.delenv("STRATEGY_EXIT_STOP_LOSS_RATIO", raising=False)
         importlib.reload(config_module)

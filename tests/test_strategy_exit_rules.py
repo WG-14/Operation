@@ -168,6 +168,113 @@ def test_runtime_stop_loss_exits_while_raw_signal_is_hold(
     assert decision.context["exit"]["rule"] == "stop_loss"
 
 
+def test_stop_loss_rule_rejects_negative_ratio() -> None:
+    with pytest.raises(ValueError, match="stop_loss_ratio"):
+        StopLossExitRule(stop_loss_ratio=-0.01)
+
+
+def test_positive_stop_loss_ratio_requires_stop_loss_rule() -> None:
+    with pytest.raises(ValueError, match="does not include stop_loss"):
+        create_exit_rules(
+            rule_names=["opposite_cross", "max_holding_time"],
+            stop_loss_ratio=0.01,
+            max_holding_sec=0.0,
+            min_take_profit_ratio=0.0,
+            live_fee_rate_estimate=0.0,
+            small_loss_tolerance_ratio=0.0,
+        )
+
+
+def test_runtime_raw_buy_open_position_checks_stop_loss_before_entry_gate(
+    tmp_path,
+    relaxed_test_order_rules,
+) -> None:
+    old_db_path = settings.DB_PATH
+    old_env_db_path = os.environ.get("DB_PATH")
+    db_path = str(tmp_path / "exit_stop_loss_raw_buy.sqlite")
+    os.environ["DB_PATH"] = db_path
+    object.__setattr__(settings, "DB_PATH", db_path)
+
+    conn = ensure_db()
+    try:
+        candle_ts = _insert_candles(conn, [10.0, 10.0, 10.0, 10.0, 11.0])
+        _insert_open_position_lot(conn, entry_ts=candle_ts - (2 * 60_000), entry_price=12.0)
+        decision = create_sma_with_filter_strategy(
+            short_n=2,
+            long_n=3,
+            exit_rule_names=["stop_loss", "opposite_cross", "max_holding_time"],
+            exit_stop_loss_ratio=0.05,
+            exit_max_holding_min=999,
+            min_gap_ratio=0.0,
+            volatility_window=3,
+            min_volatility_ratio=0.0,
+            overextended_lookback=1,
+            overextended_max_return_ratio=0.0,
+            cost_edge_enabled=False,
+            market_regime_enabled=False,
+            candidate_regime_policy={"allowed": True},
+        ).decide(conn)
+    finally:
+        conn.close()
+        object.__setattr__(settings, "DB_PATH", old_db_path)
+        if old_env_db_path is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = old_env_db_path
+
+    assert decision is not None
+    assert decision.signal == "SELL"
+    assert decision.context["raw_signal"] == "BUY"
+    assert decision.context["entry_allowed"] is False
+    assert decision.context["entry_blocked"] is True
+    assert decision.context["exit"]["rule"] == "stop_loss"
+
+
+def test_runtime_raw_buy_open_position_checks_max_holding_before_entry_gate(
+    tmp_path,
+    relaxed_test_order_rules,
+) -> None:
+    old_db_path = settings.DB_PATH
+    old_env_db_path = os.environ.get("DB_PATH")
+    db_path = str(tmp_path / "exit_max_holding_raw_buy.sqlite")
+    os.environ["DB_PATH"] = db_path
+    object.__setattr__(settings, "DB_PATH", db_path)
+
+    conn = ensure_db()
+    try:
+        candle_ts = _insert_candles(conn, [10.0, 10.0, 10.0, 10.0, 11.0])
+        _insert_open_position_lot(conn, entry_ts=candle_ts - (20 * 60_000), entry_price=10.0)
+        decision = create_sma_with_filter_strategy(
+            short_n=2,
+            long_n=3,
+            exit_rule_names=["stop_loss", "opposite_cross", "max_holding_time"],
+            exit_stop_loss_ratio=0.05,
+            exit_max_holding_min=10,
+            min_gap_ratio=0.0,
+            volatility_window=3,
+            min_volatility_ratio=0.0,
+            overextended_lookback=1,
+            overextended_max_return_ratio=0.0,
+            cost_edge_enabled=False,
+            market_regime_enabled=False,
+            candidate_regime_policy={"allowed": True},
+        ).decide(conn)
+    finally:
+        conn.close()
+        object.__setattr__(settings, "DB_PATH", old_db_path)
+        if old_env_db_path is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = old_env_db_path
+
+    assert decision is not None
+    assert decision.signal == "SELL"
+    assert decision.context["raw_signal"] == "BUY"
+    assert decision.context["entry_allowed"] is False
+    assert decision.context["entry_blocked"] is True
+    assert decision.context["exit"]["rule"] == "max_holding_time"
+
+
 def test_runtime_stop_loss_priority_over_opposite_cross_when_entry_filters_would_block(
     tmp_path,
     relaxed_test_order_rules,

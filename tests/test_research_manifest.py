@@ -53,7 +53,7 @@ def _all_runtime_behavior_parameter_space() -> dict[str, list[object]]:
         "STRATEGY_MIN_EXPECTED_EDGE_RATIO": [0.0],
         "STRATEGY_ENTRY_SLIPPAGE_BPS": [0.0],
         "LIVE_FEE_RATE_ESTIMATE": [0.001],
-        "STRATEGY_EXIT_RULES": ["opposite_cross,max_holding_time"],
+        "STRATEGY_EXIT_RULES": ["stop_loss,opposite_cross,max_holding_time"],
         "STRATEGY_EXIT_STOP_LOSS_RATIO": [0.0],
         "STRATEGY_EXIT_MAX_HOLDING_MIN": [0],
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": [0.0],
@@ -131,6 +131,29 @@ def test_missing_stop_loss_parameter_fails_closed_for_production_bound() -> None
     payload["parameter_space"].pop("STRATEGY_EXIT_STOP_LOSS_RATIO")
 
     with pytest.raises(ManifestValidationError, match="STRATEGY_EXIT_STOP_LOSS_RATIO"):
+        parse_manifest(payload)
+
+
+def test_negative_stop_loss_parameter_is_rejected() -> None:
+    payload = _manifest()
+    payload["parameter_space"] = {
+        **payload["parameter_space"],  # type: ignore[arg-type]
+        "STRATEGY_EXIT_STOP_LOSS_RATIO": [-0.01],
+    }
+
+    with pytest.raises(ManifestValidationError, match="STRATEGY_EXIT_STOP_LOSS_RATIO"):
+        parse_manifest(payload)
+
+
+def test_positive_stop_loss_requires_stop_loss_rule() -> None:
+    payload = _manifest()
+    payload["parameter_space"] = {
+        **payload["parameter_space"],  # type: ignore[arg-type]
+        "STRATEGY_EXIT_RULES": ["opposite_cross,max_holding_time"],
+        "STRATEGY_EXIT_STOP_LOSS_RATIO": [0.05],
+    }
+
+    with pytest.raises(ManifestValidationError, match="does not include stop_loss"):
         parse_manifest(payload)
 
 

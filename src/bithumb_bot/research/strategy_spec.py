@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,7 +115,7 @@ SMA_WITH_FILTER_SPEC = StrategySpec(
         "STRATEGY_MIN_EXPECTED_EDGE_RATIO": 0.0,
         "STRATEGY_ENTRY_SLIPPAGE_BPS": 0.0,
         "LIVE_FEE_RATE_ESTIMATE": 0.0004,
-        "STRATEGY_EXIT_RULES": "opposite_cross,max_holding_time",
+        "STRATEGY_EXIT_RULES": "stop_loss,opposite_cross,max_holding_time",
         "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.0,
         "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
@@ -126,7 +127,16 @@ SMA_WITH_FILTER_SPEC = StrategySpec(
     exit_policy_schema={
         "schema_version": 1,
         "rules": ("stop_loss", "opposite_cross", "max_holding_time"),
-        "stop_loss": {"unit": "unrealized_pnl_ratio", "disabled_value": 0},
+        "stop_loss": {
+            "unit": "unrealized_pnl_ratio",
+            "disabled_value": 0,
+            "evaluation_price_basis": "closed_candle_mark",
+            "intrabar_stop_modeled": False,
+            "limitation_reasons": (
+                "intra_candle_path_unavailable",
+                "candle_close_stop_may_exit_later_than_real_stop",
+            ),
+        },
         "max_holding_time": {"unit": "minutes", "disabled_value": 0},
         "opposite_cross": {
             "min_take_profit_ratio": "max(configured, roundtrip_fee)",
@@ -178,6 +188,7 @@ def validate_parameter_space_against_strategy_spec(
                 "production-bound manifests must declare every runtime-bound behavior-affecting "
                 "strategy parameter: " + ",".join(missing_behavior)
             )
+    _validate_exit_policy_parameter_values(parameter_space)
     return spec
 
 
@@ -213,6 +224,7 @@ def materialize_strategy_parameters(
         values["LIVE_FEE_RATE_ESTIMATE"] = float(fee_rate)
     if slippage_bps is not None and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in parameter_values:
         values["STRATEGY_ENTRY_SLIPPAGE_BPS"] = float(slippage_bps)
+    _validate_exit_policy_materialized_values(values)
     return values
 
 
@@ -233,6 +245,12 @@ def exit_policy_from_parameters(strategy_name: str, parameter_values: dict[str, 
             "enabled": "stop_loss" in rules and stop_loss_ratio > 0.0,
             "stop_loss_ratio": stop_loss_ratio,
             "disabled_when_zero": True,
+            "evaluation_price_basis": "closed_candle_mark",
+            "intrabar_stop_modeled": False,
+            "limitation_reasons": [
+                "intra_candle_path_unavailable",
+                "candle_close_stop_may_exit_later_than_real_stop",
+            ],
         },
         "opposite_cross": {
             "enabled": "opposite_cross" in rules,
@@ -255,3 +273,43 @@ def exit_policy_hash(policy: dict[str, Any]) -> str:
 
 def _normalize_exit_rule_names(raw: str) -> tuple[str, ...]:
     return tuple(token.strip().lower() for token in raw.split(",") if token.strip())
+
+
+def _validate_exit_policy_parameter_values(parameter_space: dict[str, tuple[object, ...]]) -> None:
+    rules_values = parameter_space.get("STRATEGY_EXIT_RULES")
+    ratio_values = parameter_space.get("STRATEGY_EXIT_STOP_LOSS_RATIO")
+    if ratio_values is None:
+        return
+    for raw_ratio in ratio_values:
+        ratio = _non_negative_float("STRATEGY_EXIT_STOP_LOSS_RATIO", raw_ratio)
+        if ratio <= 0.0 or rules_values is None:
+            continue
+        for raw_rules in rules_values:
+            rules = _normalize_exit_rule_names(str(raw_rules or ""))
+            if "stop_loss" not in rules:
+                raise StrategySpecError(
+                    "STRATEGY_EXIT_STOP_LOSS_RATIO is positive but "
+                    "STRATEGY_EXIT_RULES does not include stop_loss"
+                )
+
+
+def _validate_exit_policy_materialized_values(values: dict[str, Any]) -> None:
+    stop_loss_ratio = _non_negative_float(
+        "STRATEGY_EXIT_STOP_LOSS_RATIO",
+        values.get("STRATEGY_EXIT_STOP_LOSS_RATIO", 0.0),
+    )
+    rules = _normalize_exit_rule_names(str(values.get("STRATEGY_EXIT_RULES") or ""))
+    if stop_loss_ratio > 0.0 and "stop_loss" not in rules:
+        raise StrategySpecError(
+            "STRATEGY_EXIT_STOP_LOSS_RATIO is positive but STRATEGY_EXIT_RULES does not include stop_loss"
+        )
+
+
+def _non_negative_float(name: str, value: object) -> float:
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise StrategySpecError(f"{name} must be a finite value >= 0, got {value!r}") from exc
+    if not math.isfinite(resolved) or resolved < 0.0:
+        raise StrategySpecError(f"{name} must be a finite value >= 0, got {value!r}")
+    return resolved
