@@ -109,7 +109,12 @@ def build_signal_flow(
         _candidate(reasons, "candidate_regime", context.get("regime_block_reason"))
 
     position_gate = _dict(context.get("position_gate"))
-    if base_signal == "BUY" and not bool(position_gate.get("entry_allowed", context.get("entry_allowed", True))):
+    protective_exit_overrode_entry = bool(context.get("protective_exit_overrode_entry", False))
+    if (
+        base_signal == "BUY"
+        and not protective_exit_overrode_entry
+        and not bool(position_gate.get("entry_allowed", context.get("entry_allowed", True)))
+    ):
         _candidate(reasons, "position_gate", position_gate.get("entry_block_reason", context.get("entry_block_reason")))
 
     economics = _dict(context.get("pre_trade_economics"))

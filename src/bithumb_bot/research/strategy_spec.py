@@ -121,7 +121,7 @@ SMA_WITH_FILTER_SPEC = StrategySpec(
         "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
         "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
     },
-    decision_contract_version="research_sma_decision_contract.v2",
+    decision_contract_version="research_sma_decision_contract.v3_entry_exit_risk_exit",
     required_data=("candles",),
     optional_data=("top_of_book",),
     exit_policy_schema={

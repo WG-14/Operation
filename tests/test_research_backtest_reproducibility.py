@@ -371,6 +371,7 @@ def test_backtest_stop_loss_is_first_class_exit_and_changes_behavior_hash() -> N
     assert stop_loss_decisions
     assert stop_loss_decisions[0]["raw_signal"] == "HOLD"
     assert stop_loss_decisions[0]["final_signal"] == "SELL"
+    assert stop_loss_decisions[0]["protective_exit_overrode_entry"] is False
     assert enabled.strategy_diagnostics["stop_loss_exit_count"] == 1
     assert enabled.resource_usage["behavior_hash"] != disabled.resource_usage["behavior_hash"]
     assert enabled.decisions[0]["exit_policy"]["stop_loss"]["stop_loss_ratio"] == 0.05
@@ -417,6 +418,10 @@ def test_research_backtest_effective_parameters_match_strategy_spec_defaults_whe
     decision = result.decisions[0]
     assert decision["strategy_spec"]["default_parameters"]["SMA_MARKET_REGIME_ENABLED"] is True
     assert decision["strategy_spec"]["default_parameters"]["SMA_COST_EDGE_ENABLED"] is True
+    assert (
+        decision["strategy_spec"]["decision_contract_version"]
+        == "research_sma_decision_contract.v3_entry_exit_risk_exit"
+    )
     assert spec_defaults["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"] == 0.02
     assert str(decision["decision_contract_hash"]).startswith("sha256:")
 

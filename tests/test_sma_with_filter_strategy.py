@@ -538,6 +538,7 @@ def test_runtime_raw_sell_exit_uses_exit_channel_when_entry_filter_would_block(
     assert decision.context["entry_filter_blocked"] is True
     assert decision.context["raw_filter_would_block"] is True
     assert decision.context["entry_blocked"] is False
+    assert decision.context["protective_exit_overrode_entry"] is False
     assert decision.context["exit_filter_suppression_prevented"] is True
     assert "gap" in decision.context["blocked_filters"]
     assert decision.context["exit_signal"] == "SELL"
@@ -602,9 +603,11 @@ def test_research_runtime_raw_sell_filter_block_equivalence(relaxed_test_order_r
     assert runtime_decision.context["exit_signal"] == research_decision["exit_signal"] == "SELL"
     assert runtime_decision.context["raw_filter_would_block"] is True
     assert runtime_decision.context["entry_blocked"] is False
+    assert runtime_decision.context["protective_exit_overrode_entry"] is False
     assert runtime_decision.context["exit_filter_suppression_prevented"] is True
     assert research_decision["raw_filter_would_block"] is True
     assert research_decision["entry_blocked"] is False
+    assert research_decision["protective_exit_overrode_entry"] is False
     assert research_decision["exit_filter_suppression_prevented"] is True
     assert runtime_decision.context["exit"]["rule"] == research_decision["exit_rule"] == "opposite_cross"
 
@@ -685,7 +688,95 @@ def test_research_runtime_raw_buy_open_position_stop_loss_equivalence(relaxed_te
     assert runtime_decision.signal == research_decision["final_signal"] == "SELL"
     assert runtime_decision.context["raw_signal"] == research_decision["raw_signal"] == "BUY"
     assert runtime_decision.context["entry_allowed"] is False
+    assert runtime_decision.context["entry_blocked"] is False
+    assert runtime_decision.context["protective_exit_overrode_entry"] is True
+    assert runtime_decision.context["entry_block_reason"] is None
+    assert research_decision["entry_blocked"] is False
+    assert research_decision["protective_exit_overrode_entry"] is True
     assert runtime_decision.context["exit"]["rule"] == research_decision["exit_rule"] == "stop_loss"
+
+
+def test_research_runtime_raw_buy_open_position_max_holding_equivalence(relaxed_test_order_rules) -> None:
+    closes = [10.0, 9.0, 8.0, 9.0, 10.0, 9.0, 10.0, 9.0, 11.0, 8.0]
+    runtime_conn = _build_candle_db(closes)
+    try:
+        _seed_position_and_dust_state(
+            runtime_conn,
+            qty_open=0.0002,
+            dust_metadata={},
+            entry_price=10.0,
+            executable_lot_count=2,
+        )
+        runtime_decision = create_sma_with_filter_strategy(
+            short_n=2,
+            long_n=3,
+            pair="BTC_KRW",
+            interval="1m",
+            min_gap_ratio=0.0,
+            volatility_window=3,
+            min_volatility_ratio=0.0,
+            overextended_lookback=1,
+            overextended_max_return_ratio=0.0,
+            slippage_bps=0.0,
+            live_fee_rate_estimate=0.0,
+            entry_edge_buffer_ratio=0.0,
+            cost_edge_enabled=False,
+            market_regime_enabled=False,
+            candidate_regime_policy=_allowing_policy(),
+            exit_rule_names=["max_holding_time"],
+            exit_max_holding_min=2,
+        ).decide(runtime_conn)
+    finally:
+        runtime_conn.close()
+
+    research_result = run_sma_backtest(
+        dataset=_research_dataset_from_closes(closes),
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "STRATEGY_EXIT_RULES": "max_holding_time",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.0,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 2,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        portfolio_policy=PortfolioPolicy(
+            schema_version=1,
+            starting_cash_krw=1_000_000.0,
+            quote_currency="KRW",
+            initial_position_qty=0.0,
+            cash_interest_policy="zero",
+            position_sizing=PositionSizingPolicy(
+                type="fractional_cash",
+                buy_fraction=0.99,
+                sell_policy="sell_all_available_position",
+                cash_buffer_policy="retain_1_percent_before_fees",
+            ),
+            source="unit_test",
+        ),
+    )
+    research_decision = next(
+        item
+        for item in research_result.decisions
+        if item["raw_signal"] == "BUY" and item["exit_rule"] == "max_holding_time"
+    )
+
+    assert runtime_decision is not None
+    assert runtime_decision.signal == research_decision["final_signal"] == "SELL"
+    assert runtime_decision.context["raw_signal"] == research_decision["raw_signal"] == "BUY"
+    assert runtime_decision.context["entry_blocked"] is False
+    assert runtime_decision.context["protective_exit_overrode_entry"] is True
+    assert runtime_decision.context["entry_block_reason"] is None
+    assert research_decision["entry_blocked"] is False
+    assert research_decision["protective_exit_overrode_entry"] is True
+    assert runtime_decision.context["exit"]["rule"] == research_decision["exit_rule"] == "max_holding_time"
 
 
 def test_gap_filter_blocks_entry_and_writes_context() -> None:
@@ -711,6 +802,8 @@ def test_gap_filter_blocks_entry_and_writes_context() -> None:
     assert "gap" in decision.context["blocked_filters"]
     assert decision.context["filters"]["gap"]["passed"] is False
     assert decision.context["features"]["base_signal"] == "BUY"
+    assert decision.context["entry_blocked"] is True
+    assert decision.context["protective_exit_overrode_entry"] is False
 
 
 def test_volatility_filter_blocks_low_range_entry() -> None:

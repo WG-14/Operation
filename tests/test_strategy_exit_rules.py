@@ -226,7 +226,9 @@ def test_runtime_raw_buy_open_position_checks_stop_loss_before_entry_gate(
     assert decision.signal == "SELL"
     assert decision.context["raw_signal"] == "BUY"
     assert decision.context["entry_allowed"] is False
-    assert decision.context["entry_blocked"] is True
+    assert decision.context["entry_blocked"] is False
+    assert decision.context["protective_exit_overrode_entry"] is True
+    assert decision.context["entry_block_reason"] is None
     assert decision.context["exit"]["rule"] == "stop_loss"
 
 
@@ -271,7 +273,9 @@ def test_runtime_raw_buy_open_position_checks_max_holding_before_entry_gate(
     assert decision.signal == "SELL"
     assert decision.context["raw_signal"] == "BUY"
     assert decision.context["entry_allowed"] is False
-    assert decision.context["entry_blocked"] is True
+    assert decision.context["entry_blocked"] is False
+    assert decision.context["protective_exit_overrode_entry"] is True
+    assert decision.context["entry_block_reason"] is None
     assert decision.context["exit"]["rule"] == "max_holding_time"
 
 
@@ -317,6 +321,7 @@ def test_runtime_stop_loss_priority_over_opposite_cross_when_entry_filters_would
     assert decision.context["raw_signal"] == "SELL"
     assert decision.context["raw_filter_would_block"] is True
     assert decision.context["entry_blocked"] is False
+    assert decision.context["protective_exit_overrode_entry"] is False
     assert decision.context["exit_filter_suppression_prevented"] is True
     assert decision.context["exit"]["rule"] == "stop_loss"
     assert [item["rule"] for item in decision.context["exit"]["evaluations"]] == ["stop_loss"]

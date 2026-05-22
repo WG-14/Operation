@@ -41,6 +41,9 @@ from ..sma_decision import evaluate_entry_edge_filter, evaluate_sma_entry_decisi
 from .exit_rules import ExitRule, create_exit_rules
 
 
+PROTECTIVE_EXIT_RULE_NAMES = frozenset({"stop_loss", "max_holding_time"})
+
+
 def _load_signal_rows(
     conn: sqlite3.Connection,
     *,
@@ -524,9 +527,17 @@ def _apply_entry_exit_policy(
         final_reason: str,
     ) -> dict[str, Any]:
         entry = context.get("entry") if isinstance(context.get("entry"), dict) else {}
+        exit_context = context.get("exit") if isinstance(context.get("exit"), dict) else {}
         entry_signal = str(entry.get("entry_signal", raw_signal)).strip().upper() or raw_signal
         filtered_entry = raw_signal == "BUY" and raw_signal != entry_signal
-        entry_blocked = raw_signal == "BUY" and final_signal != raw_signal
+        exit_rule_name = str(exit_context.get("rule") or "").strip().lower()
+        protective_exit_overrode_entry = bool(
+            raw_signal == "BUY"
+            and position.in_position
+            and final_signal == "SELL"
+            and exit_rule_name in PROTECTIVE_EXIT_RULE_NAMES
+        )
+        entry_blocked = raw_signal == "BUY" and final_signal == "HOLD"
         raw_filter_would_block = bool(context.get("raw_filter_would_block", context.get("entry_filter_blocked", False)))
         exit_filter_suppression_prevented = bool(
             raw_signal == "SELL"
@@ -555,6 +566,7 @@ def _apply_entry_exit_policy(
         context["exit_reason_raw"] = resolved_exit_reason
         context["raw_filter_would_block"] = raw_filter_would_block
         context["entry_blocked"] = entry_blocked
+        context["protective_exit_overrode_entry"] = protective_exit_overrode_entry
         context["exit_filter_suppression_prevented"] = exit_filter_suppression_prevented
         context["entry_block_reason"] = entry_block_reason
         context["dust_classification"] = str(normalized_state["dust_classification"])

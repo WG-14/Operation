@@ -735,6 +735,11 @@ def run_sma_backtest(
                     exit_rule = rule.name
                     exit_reason = result.reason
                     break
+        protective_exit_overrode_entry = bool(
+            raw_signal == "BUY"
+            and action == "SELL"
+            and exit_rule in {"stop_loss", "max_holding_time"}
+        )
         decision_payload = _research_decision_payload(
             dataset=dataset,
             dataset_content_hash=dataset_content_hash,
@@ -757,6 +762,7 @@ def run_sma_backtest(
             blocked=bool(raw_signal in {"BUY", "SELL"} and action == "HOLD"),
             raw_filter_would_block=raw_filter_would_block,
             entry_blocked=entry_blocked,
+            protective_exit_overrode_entry=protective_exit_overrode_entry,
             exit_filter_suppression_prevented=bool(
                 raw_signal == "SELL"
                 and raw_filter_would_block
@@ -1698,6 +1704,7 @@ def _research_decision_payload(
     blocked: bool,
     raw_filter_would_block: bool,
     entry_blocked: bool,
+    protective_exit_overrode_entry: bool,
     exit_filter_suppression_prevented: bool,
     blocked_filters: list[str],
     prev_s: float,
@@ -1798,6 +1805,7 @@ def _research_decision_payload(
         "blocked": bool(blocked),
         "raw_filter_would_block": bool(raw_filter_would_block),
         "entry_blocked": bool(entry_blocked),
+        "protective_exit_overrode_entry": bool(protective_exit_overrode_entry),
         # Legacy compatibility alias: for SELL this means filters would have
         # blocked the raw signal if entry filters governed exits.
         "entry_filter_blocked": bool(raw_filter_would_block),

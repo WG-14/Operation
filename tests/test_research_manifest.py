@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
@@ -305,6 +308,16 @@ def test_manifest_parses_required_contract() -> None:
     assert manifest.execution_model.scenarios[0].slippage_bps == 0.0
     assert manifest.portfolio_policy.source == "legacy_research_default"
     assert "legacy_portfolio_policy_default_used" in manifest.portfolio_policy.warning_codes()
+
+
+def test_production_example_manifest_declares_default_stop_loss_policy_family() -> None:
+    path = Path("examples/research/sma_filter_manifest.production.example.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    parameter_space = payload["parameter_space"]
+    assert parameter_space["STRATEGY_EXIT_RULES"] == ["stop_loss,opposite_cross,max_holding_time"]
+    assert parameter_space["STRATEGY_EXIT_STOP_LOSS_RATIO"] == [0.0]
+    parse_manifest(payload)
 
 
 def test_portfolio_policy_binds_manifest_hash() -> None:
