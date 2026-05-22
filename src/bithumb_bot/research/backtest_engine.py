@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -14,7 +15,7 @@ from bithumb_bot.market_regime import (
 from bithumb_bot.market_regime.thresholds import MarketRegimeThresholds
 from bithumb_bot.canonical_decision import canonical_payload_hash
 from bithumb_bot.position_authority import research_position_authority_snapshot
-from bithumb_bot.sma_decision import evaluate_sma_entry_decision
+from bithumb_bot.sma_decision import evaluate_sma_entry_decision_from_features
 
 from .dataset_snapshot import DatasetSnapshot
 from .execution_model import ExecutionFill, ExecutionModel, ExecutionRequest, FixedBpsExecutionModel, model_params_hash
@@ -435,6 +436,15 @@ def run_sma_backtest(
     highs = [candle.high for candle in candles]
     lows = [candle.low for candle in candles]
     volumes = [candle.volume for candle in candles]
+    short_sma_values = _rolling_sma_values(closes, short_n)
+    long_sma_values = _rolling_sma_values(closes, long_n)
+    volatility_window = max(1, int(effective_parameters.get("SMA_FILTER_VOL_WINDOW", 10)))
+    volume_window = max(1, int(effective_parameters.get("SMA_FILTER_VOLUME_WINDOW", 10)))
+    liquidity_window = max(1, int(effective_parameters.get("SMA_FILTER_LIQUIDITY_WINDOW", 10)))
+    overextended_lookback = max(1, int(effective_parameters.get("SMA_FILTER_OVEREXT_LOOKBACK", 3)))
+    overextended_max_return_ratio = float(effective_parameters.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0))
+    close_volatility_ratios = _rolling_close_range_ratios(closes, volatility_window)
+    overextended_ratios = _overextended_return_ratios(closes, overextended_lookback)
     regime_snapshots: list[dict[str, object]] = []
     regime_coverage_accumulator = _RegimeCoverageAccumulator()
     thresholds = MarketRegimeThresholds(
@@ -528,10 +538,12 @@ def run_sma_backtest(
             slippage_total=slippage_total,
             closed_pnls=closed_pnls,
         )
-        prev_short = _sma(closes, short_n, index)
-        prev_long = _sma(closes, long_n, index)
-        curr_short = _sma(closes, short_n, index + 1)
-        curr_long = _sma(closes, long_n, index + 1)
+        prev_short = short_sma_values[index]
+        prev_long = long_sma_values[index]
+        curr_short = short_sma_values[index + 1]
+        curr_long = long_sma_values[index + 1]
+        if prev_short is None or prev_long is None or curr_short is None or curr_long is None:
+            continue
         above = curr_short > curr_long
         regime_snapshot = classify_market_regime_from_arrays(
             closes=closes,
@@ -541,12 +553,12 @@ def run_sma_backtest(
             index=index,
             short_sma=curr_short,
             long_sma=curr_long,
-            volatility_window=max(1, int(effective_parameters.get("SMA_FILTER_VOL_WINDOW", 10))),
-            volume_window=max(1, int(effective_parameters.get("SMA_FILTER_VOLUME_WINDOW", 10))),
-            liquidity_window=max(1, int(effective_parameters.get("SMA_FILTER_LIQUIDITY_WINDOW", 10))),
+            volatility_window=volatility_window,
+            volume_window=volume_window,
+            liquidity_window=liquidity_window,
             thresholds=thresholds,
-            overextended_lookback=max(1, int(effective_parameters.get("SMA_FILTER_OVEREXT_LOOKBACK", 3))),
-            overextended_max_return_ratio=float(effective_parameters.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0)),
+            overextended_lookback=overextended_lookback,
+            overextended_max_return_ratio=overextended_max_return_ratio,
         ).as_dict()
         regime_coverage_accumulator.update(regime_snapshot)
         if accumulator.retain_full_detail():
@@ -559,17 +571,18 @@ def run_sma_backtest(
         pending_buy_qty = sum(item.qty for item in pending_fills if item.side == "BUY")
         pending_sell_qty = sum(item.qty for item in pending_fills if item.side == "SELL")
         sellable_qty = max(0.0, qty - pending_sell_qty)
-        entry_decision = evaluate_sma_entry_decision(
-            closes=closes[: index + 1],
+        entry_decision = evaluate_sma_entry_decision_from_features(
             prev_s=prev_short,
             prev_l=prev_long,
             curr_s=curr_short,
             curr_l=curr_long,
+            gap_ratio=abs((curr_short - curr_long) / curr_long) if curr_long != 0.0 else 0.0,
+            volatility_ratio=close_volatility_ratios[index],
+            overextended_ratio=overextended_ratios[index],
+            market_regime_snapshot=regime_snapshot,
             min_gap_ratio=min_gap,
-            volatility_window=max(1, int(effective_parameters.get("SMA_FILTER_VOL_WINDOW", 10))),
             min_volatility_ratio=min_range,
-            overextended_lookback=max(1, int(effective_parameters.get("SMA_FILTER_OVEREXT_LOOKBACK", 3))),
-            overextended_max_return_ratio=float(effective_parameters.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0)),
+            overextended_max_return_ratio=overextended_max_return_ratio,
             slippage_bps=float(effective_parameters.get("STRATEGY_ENTRY_SLIPPAGE_BPS", slippage_bps) or 0.0),
             live_fee_rate_estimate=float(effective_parameters.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
             entry_edge_buffer_ratio=float(effective_parameters.get("ENTRY_EDGE_BUFFER_RATIO") or 0.0),
@@ -1151,6 +1164,63 @@ def run_sma_backtest(
 
 def _sma(values: list[float], n: int, end: int) -> float:
     return sum(values[end - n : end]) / n
+
+
+def _rolling_sma_values(values: list[float], n: int) -> list[float | None]:
+    window = int(n)
+    out: list[float | None] = [None] * (len(values) + 1)
+    if window <= 0 or len(values) < window:
+        return out
+    rolling_sum = sum(values[:window])
+    out[window] = rolling_sum / window
+    for end in range(window + 1, len(values) + 1):
+        rolling_sum += values[end - 1]
+        rolling_sum -= values[end - window - 1]
+        out[end] = rolling_sum / window
+    return out
+
+
+def _rolling_close_range_ratios(values: list[float], window: int) -> list[float]:
+    window = max(1, int(window))
+    out: list[float] = [0.0] * len(values)
+    min_indexes: deque[int] = deque()
+    max_indexes: deque[int] = deque()
+    rolling_sum = 0.0
+    for index, value in enumerate(values):
+        value = float(value)
+        rolling_sum += value
+        stale_before = index - window + 1
+        if index >= window:
+            rolling_sum -= float(values[index - window])
+        while min_indexes and min_indexes[0] < stale_before:
+            min_indexes.popleft()
+        while max_indexes and max_indexes[0] < stale_before:
+            max_indexes.popleft()
+        while min_indexes and float(values[min_indexes[-1]]) >= value:
+            min_indexes.pop()
+        while max_indexes and float(values[max_indexes[-1]]) <= value:
+            max_indexes.pop()
+        min_indexes.append(index)
+        max_indexes.append(index)
+        count = min(window, index + 1)
+        mean = rolling_sum / count if count > 0 else 0.0
+        out[index] = (
+            ((float(values[max_indexes[0]]) - float(values[min_indexes[0]])) / mean)
+            if mean != 0.0 and min_indexes and max_indexes
+            else 0.0
+        )
+    return out
+
+
+def _overextended_return_ratios(values: list[float], lookback: int) -> list[float]:
+    lookback = max(1, int(lookback))
+    out: list[float] = [0.0] * len(values)
+    for index, value in enumerate(values):
+        if index < lookback:
+            continue
+        base = float(values[index - lookback])
+        out[index] = abs((float(value) - base) / base) if base != 0.0 else 0.0
+    return out
 
 
 def _create_exit_rules(**kwargs: Any):

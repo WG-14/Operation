@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import sqlite3
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -47,6 +48,8 @@ from bithumb_bot.research.parameter_space import candidate_id
 from bithumb_bot.research.promotion_gate import PromotionGateError, _verify_report_content_hash, promote_candidate
 from bithumb_bot.research.validation_protocol import _promotion_blocking_reasons, run_research_backtest, run_research_walk_forward
 from bithumb_bot.research import validation_protocol
+from bithumb_bot.sma_decision import evaluate_sma_entry_decision, evaluate_sma_entry_decision_from_features
+from bithumb_bot.market_regime import classify_sma_market_regime
 from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
 
 
@@ -1271,6 +1274,162 @@ def test_sma_backtest_uses_bounded_regime_fast_path(monkeypatch) -> None:
     assert calls == list(range(4, len(snapshot.candles)))
 
 
+def _assert_feature_decision_matches_legacy(
+    *,
+    closes: list[float],
+    prev_s: float,
+    prev_l: float,
+    curr_s: float,
+    curr_l: float,
+    min_gap_ratio: float = 0.0,
+    volatility_window: int = 3,
+    min_volatility_ratio: float = 0.0,
+    overextended_lookback: int = 2,
+    overextended_max_return_ratio: float = 0.0,
+    slippage_bps: float = 0.0,
+    live_fee_rate_estimate: float = 0.0,
+    entry_edge_buffer_ratio: float = 0.0,
+    cost_edge_enabled: bool = False,
+    cost_edge_min_ratio: float = 0.0,
+    market_regime_enabled: bool = False,
+) -> None:
+    legacy = evaluate_sma_entry_decision(
+        closes=closes,
+        prev_s=prev_s,
+        prev_l=prev_l,
+        curr_s=curr_s,
+        curr_l=curr_l,
+        min_gap_ratio=min_gap_ratio,
+        volatility_window=volatility_window,
+        min_volatility_ratio=min_volatility_ratio,
+        overextended_lookback=overextended_lookback,
+        overextended_max_return_ratio=overextended_max_return_ratio,
+        slippage_bps=slippage_bps,
+        live_fee_rate_estimate=live_fee_rate_estimate,
+        entry_edge_buffer_ratio=entry_edge_buffer_ratio,
+        cost_edge_enabled=cost_edge_enabled,
+        cost_edge_min_ratio=cost_edge_min_ratio,
+        market_regime_enabled=market_regime_enabled,
+    )
+    vol_window = max(1, int(volatility_window))
+    vol_closes = [float(value) for value in closes][-vol_window:]
+    vol_mean = sum(vol_closes) / len(vol_closes) if vol_closes else 0.0
+    overext_lookback = max(1, int(overextended_lookback))
+    base_close = closes[-1 - overext_lookback] if len(closes) > overext_lookback else 0.0
+    overextended_ratio = abs((closes[-1] - base_close) / base_close) if base_close else 0.0
+    regime_snapshot = classify_sma_market_regime(
+        closes=closes,
+        short_sma=curr_s,
+        long_sma=curr_l,
+        volatility_window=vol_window,
+        min_volatility_ratio=min_volatility_ratio,
+        overextended_lookback=overext_lookback,
+        overextended_max_return_ratio=overextended_max_return_ratio,
+        min_trend_strength_ratio=min_gap_ratio,
+    ).as_dict()
+    feature = evaluate_sma_entry_decision_from_features(
+        prev_s=prev_s,
+        prev_l=prev_l,
+        curr_s=curr_s,
+        curr_l=curr_l,
+        gap_ratio=abs((curr_s - curr_l) / curr_l) if curr_l else 0.0,
+        volatility_ratio=((max(vol_closes) - min(vol_closes)) / vol_mean) if vol_mean else 0.0,
+        overextended_ratio=overextended_ratio,
+        market_regime_snapshot=regime_snapshot,
+        min_gap_ratio=min_gap_ratio,
+        min_volatility_ratio=min_volatility_ratio,
+        overextended_max_return_ratio=overextended_max_return_ratio,
+        slippage_bps=slippage_bps,
+        live_fee_rate_estimate=live_fee_rate_estimate,
+        entry_edge_buffer_ratio=entry_edge_buffer_ratio,
+        cost_edge_enabled=cost_edge_enabled,
+        cost_edge_min_ratio=cost_edge_min_ratio,
+        market_regime_enabled=market_regime_enabled,
+    )
+    fields = (
+        "base_signal",
+        "entry_signal",
+        "entry_reason",
+        "blocked_filters",
+        "gap_ratio",
+        "volatility_ratio",
+        "overextended_ratio",
+        "market_regime_triggered",
+        "candidate_regime_triggered",
+    )
+    for field in fields:
+        legacy_value = getattr(legacy, field)
+        feature_value = getattr(feature, field)
+        if isinstance(legacy_value, float):
+            assert feature_value == pytest.approx(legacy_value)
+        else:
+            assert feature_value == legacy_value
+
+
+def test_feature_based_sma_entry_decision_matches_legacy_filter_cases() -> None:
+    base = {
+        "closes": [100.0, 99.0, 98.0, 99.0, 101.0],
+        "prev_s": 99.0,
+        "prev_l": 100.0,
+        "curr_s": 101.0,
+        "curr_l": 100.0,
+    }
+    _assert_feature_decision_matches_legacy(**base)
+    _assert_feature_decision_matches_legacy(**base, min_gap_ratio=0.02)
+    _assert_feature_decision_matches_legacy(**base, min_volatility_ratio=0.1)
+    _assert_feature_decision_matches_legacy(**base, overextended_max_return_ratio=0.01)
+    _assert_feature_decision_matches_legacy(**base, cost_edge_enabled=True, cost_edge_min_ratio=0.02)
+    _assert_feature_decision_matches_legacy(
+        **base,
+        min_gap_ratio=0.02,
+        market_regime_enabled=True,
+    )
+
+
+def test_sma_backtest_hot_loop_uses_precomputed_feature_path(monkeypatch) -> None:
+    snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
+
+    def fail_sma(*args, **kwargs):
+        raise AssertionError("_sma should not be called from run_sma_backtest")
+
+    calls = 0
+    original = backtest_engine.evaluate_sma_entry_decision_from_features
+
+    def counting_feature_decision(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(backtest_engine, "_sma", fail_sma)
+    monkeypatch.setattr(backtest_engine, "evaluate_sma_entry_decision_from_features", counting_feature_decision)
+
+    result = run_sma_backtest(
+        dataset=snapshot,
+        parameter_values={"SMA_SHORT": 2, "SMA_LONG": 4},
+        fee_rate=0.0,
+        slippage_bps=0.0,
+    )
+
+    assert result.decisions
+    assert calls == len(snapshot.candles) - 4
+
+
+def test_sma_backtest_source_has_no_growing_prefix_or_hot_loop_sma_calls() -> None:
+    source = inspect.getsource(backtest_engine.run_sma_backtest)
+
+    assert "closes[: index + 1]" not in source
+    assert "_sma(" not in source
+
+
+def test_precomputed_sma_values_match_legacy_sma() -> None:
+    values = [100.0, 99.5, 101.25, 102.0, 100.75, 99.0]
+
+    for window in (1, 2, 3, 5):
+        rolling = backtest_engine._rolling_sma_values(values, window)
+        for end in range(window, len(values) + 1):
+            assert rolling[end] == pytest.approx(backtest_engine._sma(values, window, end))
+
+
 def test_sma_backtest_caches_dataset_content_hash(monkeypatch) -> None:
     snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
     calls = 0
@@ -1329,16 +1488,28 @@ def test_tiny_three_day_sma_backtest_completes_structurally() -> None:
         candles=candles,
     )
 
-    result = run_sma_backtest(
-        dataset=snapshot,
-        parameter_values={"SMA_SHORT": 7, "SMA_LONG": 30},
-        fee_rate=0.0,
-        slippage_bps=0.0,
-    )
+    kwargs = {
+        "dataset": snapshot,
+        "parameter_values": {"SMA_SHORT": 7, "SMA_LONG": 30},
+        "fee_rate": 0.0,
+        "slippage_bps": 0.0,
+    }
+    result = run_sma_backtest(**kwargs)
+    repeated = run_sma_backtest(**kwargs)
 
     assert result.candle_count == 4320
     assert len(result.decisions) == 4320 - 30
     assert result.metrics_v2 is not None
+    assert result.metrics.as_dict() == repeated.metrics.as_dict()
+    assert result.metrics_v2.as_dict() == repeated.metrics_v2.as_dict()
+    assert result.resource_usage["decision_hash"] == repeated.resource_usage["decision_hash"]
+    assert result.resource_usage["behavior_hash"] == repeated.resource_usage["behavior_hash"]
+    assert result.resource_usage["trade_ledger_hash"] == repeated.resource_usage["trade_ledger_hash"]
+    assert result.resource_usage["equity_curve_hash"] == repeated.resource_usage["equity_curve_hash"]
+    assert result.resource_usage["composite_behavior_hash"] == repeated.resource_usage["composite_behavior_hash"]
+    assert result.closed_trades == repeated.closed_trades
+    assert result.regime_coverage == repeated.regime_coverage
+    assert result.regime_performance == repeated.regime_performance
 
 
 def test_research_run_policy_participates_in_manifest_hash() -> None:

@@ -131,8 +131,6 @@ def evaluate_sma_entry_decision(
     fee_authority_degraded_blocks_entry: bool = False,
 ) -> SmaEntryDecision:
     close_values = [float(value) for value in closes]
-    raw_signal, raw_reason = base_signal(prev_s=prev_s, prev_l=prev_l, curr_s=curr_s, curr_l=curr_l)
-    gap_ratio = compute_gap_ratio(curr_s=curr_s, curr_l=curr_l)
 
     vol_window = max(1, int(volatility_window))
     vol_closes = close_values[-vol_window:]
@@ -152,6 +150,57 @@ def evaluate_sma_entry_decision(
         overextended_max_return_ratio=float(overextended_max_return_ratio),
         min_trend_strength_ratio=float(min_gap_ratio),
     )
+    return evaluate_sma_entry_decision_from_features(
+        prev_s=prev_s,
+        prev_l=prev_l,
+        curr_s=curr_s,
+        curr_l=curr_l,
+        gap_ratio=compute_gap_ratio(curr_s=curr_s, curr_l=curr_l),
+        volatility_ratio=volatility_ratio,
+        overextended_ratio=overextended_ratio,
+        market_regime_snapshot=market_regime_snapshot.as_dict(),
+        min_gap_ratio=min_gap_ratio,
+        min_volatility_ratio=min_volatility_ratio,
+        overextended_max_return_ratio=overextended_max_return_ratio,
+        slippage_bps=slippage_bps,
+        live_fee_rate_estimate=live_fee_rate_estimate,
+        entry_edge_buffer_ratio=entry_edge_buffer_ratio,
+        cost_edge_enabled=cost_edge_enabled,
+        cost_edge_min_ratio=cost_edge_min_ratio,
+        market_regime_enabled=market_regime_enabled,
+        candidate_regime_policy=candidate_regime_policy,
+        require_candidate_regime_policy=require_candidate_regime_policy,
+        fee_authority_degraded_blocks_entry=fee_authority_degraded_blocks_entry,
+    )
+
+
+def evaluate_sma_entry_decision_from_features(
+    *,
+    prev_s: float,
+    prev_l: float,
+    curr_s: float,
+    curr_l: float,
+    gap_ratio: float,
+    volatility_ratio: float,
+    overextended_ratio: float,
+    market_regime_snapshot: dict[str, object],
+    min_gap_ratio: float,
+    min_volatility_ratio: float,
+    overextended_max_return_ratio: float,
+    slippage_bps: float,
+    live_fee_rate_estimate: float,
+    entry_edge_buffer_ratio: float,
+    cost_edge_enabled: bool,
+    cost_edge_min_ratio: float,
+    market_regime_enabled: bool,
+    candidate_regime_policy: dict[str, object] | None = None,
+    require_candidate_regime_policy: bool = False,
+    fee_authority_degraded_blocks_entry: bool = False,
+) -> SmaEntryDecision:
+    raw_signal, raw_reason = base_signal(prev_s=prev_s, prev_l=prev_l, curr_s=curr_s, curr_l=curr_l)
+    gap_ratio = float(gap_ratio)
+    volatility_ratio = float(volatility_ratio)
+    overextended_ratio = float(overextended_ratio)
 
     gap_filter_enabled = float(min_gap_ratio) > 0
     volatility_filter_enabled = float(min_volatility_ratio) > 0
@@ -183,11 +232,17 @@ def evaluate_sma_entry_decision(
     if raw_signal == "BUY" and fee_authority_degraded_blocks_entry:
         blocked_filters.append("fee_authority_degraded")
 
-    market_regime_payload = market_regime_snapshot.as_dict()
+    market_regime_payload = dict(market_regime_snapshot)
+    market_regime_allows_entry = bool(
+        market_regime_payload.get(
+            "allows_entry",
+            market_regime_payload.get("allows_sma_entry", False),
+        )
+    )
     market_regime_triggered = bool(
         market_regime_enabled
         and raw_signal == "BUY"
-        and not market_regime_snapshot.allows_entry
+        and not market_regime_allows_entry
     )
     candidate_regime_decision = evaluate_live_regime_policy(
         current_snapshot=market_regime_payload,
@@ -209,7 +264,7 @@ def evaluate_sma_entry_decision(
         elif blocked_filters:
             entry_reason = f"filtered entry: {', '.join(blocked_filters)}"
         elif market_regime_triggered:
-            entry_reason = f"market regime blocked: {market_regime_snapshot.block_reason}"
+            entry_reason = f"market regime blocked: {market_regime_payload.get('block_reason')}"
         else:
             entry_reason = f"candidate regime blocked: {candidate_regime_decision.get('regime_block_reason')}"
 
