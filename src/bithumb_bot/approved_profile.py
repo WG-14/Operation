@@ -2044,6 +2044,28 @@ def _validate_decision_equivalence_evidence(
         raise ApprovedProfileError(f"{label}_decision_equivalence_binding_validation_nonempty")
     if report.get("artifact_binding_validation"):
         raise ApprovedProfileError(f"{label}_decision_equivalence_artifact_binding_validation_nonempty")
+    expected_plugin_hash = str(parent_profile.get("strategy_plugin_contract_hash") or "").strip()
+    research_plugin_hash = str(report.get("research_strategy_plugin_contract_hash") or "").strip()
+    runtime_plugin_hash = str(report.get("runtime_strategy_plugin_contract_hash") or "").strip()
+    if not research_plugin_hash.startswith("sha256:"):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_research_strategy_plugin_contract_hash_missing")
+    if not runtime_plugin_hash.startswith("sha256:"):
+        raise ApprovedProfileError(f"{label}_decision_equivalence_runtime_strategy_plugin_contract_hash_missing")
+    if research_plugin_hash != expected_plugin_hash:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_research_strategy_plugin_contract_hash_mismatch")
+    if runtime_plugin_hash != expected_plugin_hash:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_runtime_strategy_plugin_contract_hash_mismatch")
+    expected_decision_contract_version = ""
+    strategy_plugin_contract = parent_profile.get("strategy_plugin_contract")
+    if isinstance(strategy_plugin_contract, dict):
+        expected_decision_contract_version = str(
+            strategy_plugin_contract.get("decision_contract_version") or ""
+        ).strip()
+    report_decision_contract_version = str(report.get("strategy_decision_contract_version") or "").strip()
+    if not report_decision_contract_version:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_strategy_decision_contract_version_missing")
+    if expected_decision_contract_version and report_decision_contract_version != expected_decision_contract_version:
+        raise ApprovedProfileError(f"{label}_decision_equivalence_strategy_decision_contract_version_mismatch")
     if bool(report.get("blocked_decision_equivalence")):
         raise ApprovedProfileError(f"{label}_decision_equivalence_blocked")
     if report.get("comparison_contract_version") != "canonical_decision_v1" or report.get("canonical_schema") is not True:

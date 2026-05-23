@@ -562,10 +562,13 @@ def _write_evidence_payload(tmp_path: Path, name: str, payload: dict[str, object
     path = tmp_path / name
     payload["evidence_path"] = str(path.resolve())
     profile_hash = str(payload.get("approved_profile_content_hash") or "sha256:profile")
+    plugin = resolve_research_strategy_plugin("sma_with_filter")
     profile_stub = {
         "profile_content_hash": profile_hash,
         "dataset_content_hash": payload.get("decision_equivalence_dataset_content_hash")
         or "sha256:dataset",
+        "strategy_plugin_contract": plugin.contract_payload(),
+        "strategy_plugin_contract_hash": plugin.contract_hash(),
     }
     _attach_decision_equivalence_report(tmp_path, payload, profile_stub)
     payload["content_hash"] = compute_evidence_content_hash(payload)
@@ -677,6 +680,13 @@ def _attach_decision_equivalence_report(
         "binding_validation": [],
         "research_export_content_hash": "sha256:research_export",
         "runtime_export_content_hash": "sha256:runtime_export",
+        "research_strategy_plugin_contract_hash": profile.get("strategy_plugin_contract_hash"),
+        "runtime_strategy_plugin_contract_hash": profile.get("strategy_plugin_contract_hash"),
+        "strategy_decision_contract_version": (
+            profile.get("strategy_plugin_contract", {}).get("decision_contract_version")
+            if isinstance(profile.get("strategy_plugin_contract"), dict)
+            else None
+        ),
         "repo_owned_export_artifacts": True,
         "legacy_or_unverified_export": False,
         "outcome": "PASS_POSITIVE_EQUIVALENCE",
@@ -2612,6 +2622,30 @@ def test_profile_promote_fails_when_decision_equivalence_mismatch_count_nonzero(
         (
             {"runtime_export_content_hash": ""},
             "paper_validation_evidence_decision_equivalence_runtime_export_hash_missing",
+        ),
+        (
+            {"research_strategy_plugin_contract_hash": ""},
+            "paper_validation_evidence_decision_equivalence_research_strategy_plugin_contract_hash_missing",
+        ),
+        (
+            {"runtime_strategy_plugin_contract_hash": ""},
+            "paper_validation_evidence_decision_equivalence_runtime_strategy_plugin_contract_hash_missing",
+        ),
+        (
+            {"research_strategy_plugin_contract_hash": "sha256:other"},
+            "paper_validation_evidence_decision_equivalence_research_strategy_plugin_contract_hash_mismatch",
+        ),
+        (
+            {"runtime_strategy_plugin_contract_hash": "sha256:other"},
+            "paper_validation_evidence_decision_equivalence_runtime_strategy_plugin_contract_hash_mismatch",
+        ),
+        (
+            {"strategy_decision_contract_version": ""},
+            "paper_validation_evidence_decision_equivalence_strategy_decision_contract_version_missing",
+        ),
+        (
+            {"strategy_decision_contract_version": "stale_contract_v0"},
+            "paper_validation_evidence_decision_equivalence_strategy_decision_contract_version_mismatch",
         ),
         (
             {"binding_validation": [{"reason_codes": ["decision_profile_hash_not_bound_to_report"]}]},
