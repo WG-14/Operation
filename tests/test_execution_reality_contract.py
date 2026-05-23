@@ -15,6 +15,7 @@ from bithumb_bot.execution_reality_contract import (
 )
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
 from bithumb_bot.research.hashing import sha256_prefixed
+from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.research.strategy_spec import (
     exit_policy_from_parameters,
     materialize_strategy_parameters,
@@ -975,6 +976,7 @@ def test_depth_availability_does_not_satisfy_queue_ticks_impact_or_intracandle()
 def test_profile_runtime_execution_contract_mismatch_is_reason_coded() -> None:
     profile_contract = _contract()
     runtime_contract = _contract(fill_reference_policy="latency_adjusted_orderbook")
+    strategy_plugin = resolve_research_strategy_plugin("sma_with_filter")
     strategy_parameters = materialize_strategy_parameters("sma_with_filter", {})
     exit_policy = exit_policy_from_parameters("sma_with_filter", strategy_parameters)
     profile = {
@@ -985,6 +987,8 @@ def test_profile_runtime_execution_contract_mismatch_is_reason_coded() -> None:
         "manifest_hash": "sha256:manifest",
         "dataset_content_hash": "sha256:dataset",
         "strategy_name": "sma_with_filter",
+        "strategy_plugin_contract": strategy_plugin.contract_payload(),
+        "strategy_plugin_contract_hash": strategy_plugin.contract_hash(),
         "market": "KRW-BTC",
         "interval": "1m",
         "strategy_parameters": strategy_parameters,

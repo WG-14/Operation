@@ -11,6 +11,7 @@ from bithumb_bot.config import settings
 from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.promotion_gate import build_candidate_profile
+from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.research.strategy_spec import (
     StrategySpecError,
     strategy_spec_for_name,
@@ -164,6 +165,7 @@ def _set_matching_runtime_execution_contract_settings() -> None:
 
 
 def _write_paper_profile(tmp_path: Path, *, sma_short: int) -> Path:
+    strategy_plugin = resolve_research_strategy_plugin("sma_with_filter")
     parameters = {
         "SMA_SHORT": sma_short,
         "SMA_LONG": int(settings.SMA_LONG),
@@ -239,6 +241,8 @@ def _write_paper_profile(tmp_path: Path, *, sma_short: int) -> Path:
         "dataset_snapshot_id": "snap",
         "dataset_content_hash": "sha256:dataset",
         "strategy_name": "sma_with_filter",
+        "strategy_plugin_contract": strategy_plugin.contract_payload(),
+        "strategy_plugin_contract_hash": strategy_plugin.contract_hash(),
         "parameter_candidate_id": "candidate_001",
         "parameter_values": parameters,
         "cost_model": {

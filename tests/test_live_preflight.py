@@ -12,6 +12,7 @@ from bithumb_bot.config import settings
 from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.promotion_gate import build_candidate_profile
+from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.broker import order_rules
 from bithumb_bot.markets import MarketInfo, MarketRegistry
@@ -269,6 +270,7 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
     parameters = _candidate_profile_for_current_settings()
     if sma_short is not None:
         parameters["SMA_SHORT"] = int(sma_short)
+    strategy_plugin = resolve_research_strategy_plugin("sma_with_filter")
     base_cost_assumption = {
         "label": "test_runtime_base_cost",
         "role": "base",
@@ -325,6 +327,8 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
         "dataset_snapshot_id": "snap",
         "dataset_content_hash": "sha256:dataset",
         "strategy_name": "sma_with_filter",
+        "strategy_plugin_contract": strategy_plugin.contract_payload(),
+        "strategy_plugin_contract_hash": strategy_plugin.contract_hash(),
         "parameter_candidate_id": "candidate_001",
         "parameter_values": parameters,
         "cost_model": {
