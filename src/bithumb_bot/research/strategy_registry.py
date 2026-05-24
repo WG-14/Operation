@@ -36,6 +36,14 @@ RuntimeEnvParameterExtractor = Callable[[dict[str, str]], dict[str, Any]]
 RuntimeSettingsParameterExtractor = Callable[[object], dict[str, Any]]
 DecisionPayloadAdapter = Callable[[dict[str, object], Any], dict[str, object]]
 ExitSignalContextBuilder = Callable[[Any], dict[str, object]]
+ExitRuleFactory = Callable[
+    [
+        dict[str, Any],
+        dict[str, Any],
+        float,
+    ],
+    list[Any],
+]
 ResearchExportNormalizer = Callable[
     [
         list[dict[str, object]],
@@ -80,6 +88,7 @@ class ResearchStrategyPlugin:
     diagnostics_namespace: str
     decision_payload_adapter: DecisionPayloadAdapter | None = None
     exit_signal_context_builder: ExitSignalContextBuilder | None = None
+    exit_rule_factory: ExitRuleFactory | None = None
     research_export_normalizer: ResearchExportNormalizer | None = None
 
     def contract_payload(self) -> dict[str, Any]:
@@ -142,6 +151,13 @@ class ResearchStrategyPlugin:
                 self.exit_signal_context_builder.__qualname__
                 if self.exit_signal_context_builder is not None
                 else None
+            ),
+            "exit_rule_factory_supported": self.exit_rule_factory is not None,
+            "exit_rule_factory_module": (
+                self.exit_rule_factory.__module__ if self.exit_rule_factory is not None else None
+            ),
+            "exit_rule_factory_qualname": (
+                self.exit_rule_factory.__qualname__ if self.exit_rule_factory is not None else None
             ),
             "research_export_normalizer_supported": self.research_export_normalizer is not None,
             "research_export_normalizer_module": (
@@ -384,6 +400,30 @@ def _sma_research_export_normalizer(
     )
 
 
+def _sma_exit_rule_factory(
+    active_exit_policy: dict[str, Any],
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+) -> list[Any]:
+    from bithumb_bot.strategy.exit_rules import create_sma_exit_rules
+
+    return create_sma_exit_rules(
+        rule_names=list(active_exit_policy.get("rules") or ()),
+        stop_loss_ratio=float(active_exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)),
+        max_holding_sec=float(
+            active_exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)
+        )
+        * 60.0,
+        min_take_profit_ratio=float(
+            active_exit_policy.get("opposite_cross", {}).get("min_take_profit_ratio", 0.0)
+        ),
+        live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
+        small_loss_tolerance_ratio=float(
+            active_exit_policy.get("opposite_cross", {}).get("small_loss_tolerance_ratio", 0.0)
+        ),
+    )
+
+
 def runtime_strategy_parameters_from_env(strategy_name: str, env: dict[str, str]) -> dict[str, Any]:
     plugin = resolve_research_strategy_plugin(strategy_name)
     if plugin.runtime_parameter_adapter is None:
@@ -536,6 +576,7 @@ _SMA_WITH_FILTER_PLUGIN = ResearchStrategyPlugin(
     diagnostics_namespace="sma_with_filter",
     decision_payload_adapter=_sma_decision_payload_adapter,
     exit_signal_context_builder=_sma_exit_signal_context,
+    exit_rule_factory=_sma_exit_rule_factory,
     research_export_normalizer=_sma_research_export_normalizer,
 )
 

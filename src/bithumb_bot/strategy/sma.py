@@ -38,7 +38,7 @@ from ..strategy_config import (
 from ..utils_time import parse_interval_sec
 from .base import PositionContext, StrategyDecision
 from ..sma_decision import evaluate_entry_edge_filter, evaluate_sma_entry_decision
-from .exit_rules import ExitRule, create_exit_rules
+from .exit_rules import ExitRule, create_sma_exit_rules
 
 
 # Currently implemented protective exits that can override raw BUY entry intent.
@@ -837,7 +837,7 @@ class SmaCrossStrategy:
             slippage_bps=float(self.slippage_bps),
             entry_edge_buffer_ratio=float(self.entry_edge_buffer_ratio),
         )
-        exit_rules = create_exit_rules(
+        exit_rules = create_sma_exit_rules(
             rule_names=self.exit_rule_names,
             max_holding_sec=float(self.exit_max_holding_min) * 60.0,
             min_take_profit_ratio=float(self.exit_min_take_profit_ratio),
@@ -1057,7 +1057,7 @@ class SmaWithFilterStrategy:
             slippage_bps=float(self.slippage_bps),
             entry_edge_buffer_ratio=float(self.entry_edge_buffer_ratio),
         )
-        exit_rules = create_exit_rules(
+        exit_rules = create_sma_exit_rules(
             rule_names=self.exit_rule_names,
             max_holding_sec=float(self.exit_max_holding_min) * 60.0,
             min_take_profit_ratio=float(self.exit_min_take_profit_ratio),

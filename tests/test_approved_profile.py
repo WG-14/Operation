@@ -1492,6 +1492,14 @@ def test_profile_runtime_diff_detects_sma_market_regime_enabled_default_drift(tm
     )
 
 
+def test_runtime_contract_missing_strategy_name_uses_sma_compatibility_default() -> None:
+    runtime = runtime_contract_from_env_values({"SMA_SHORT": "2", "SMA_LONG": "4"})
+
+    assert runtime["strategy_name"] == "sma_with_filter"
+    assert runtime["strategy_parameters"]["SMA_SHORT"] == "2"
+    assert runtime["exit_policy"]["strategy_name"] == "sma_with_filter"
+
+
 def test_profile_hash_changes_when_effective_strategy_parameter_changes(tmp_path: Path) -> None:
     promotion_path = tmp_path / "promotion.json"
     write_json_atomic(promotion_path, _promotion())

@@ -8,7 +8,12 @@ from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.strategy.base import PositionContext
 
-from bithumb_bot.strategy.exit_rules import OppositeCrossExitRule, StopLossExitRule, create_exit_rules
+from bithumb_bot.strategy.exit_rules import (
+    OppositeCrossExitRule,
+    StopLossExitRule,
+    create_exit_rules,
+    create_sma_exit_rules,
+)
 from bithumb_bot.strategy.sma import create_sma_strategy, create_sma_with_filter_strategy
 
 
@@ -175,7 +180,7 @@ def test_stop_loss_rule_rejects_negative_ratio() -> None:
 
 def test_positive_stop_loss_ratio_requires_stop_loss_rule() -> None:
     with pytest.raises(ValueError, match="does not include stop_loss"):
-        create_exit_rules(
+        create_sma_exit_rules(
             rule_names=["opposite_cross", "max_holding_time"],
             stop_loss_ratio=0.01,
             max_holding_sec=0.0,
@@ -628,8 +633,23 @@ def test_noise_band_boundary_comparisons_are_applied_as_expected() -> None:
     assert at_min_profit_floor.should_exit is True
 
 
-def test_exit_rule_factory_scope_is_explicit() -> None:
+def test_common_exit_rule_factory_scope_is_strategy_neutral() -> None:
     rules = create_exit_rules(
+        rule_names=["max_holding_time", "stop_loss"],
+        max_holding_sec=60.0,
+        stop_loss_ratio=0.03,
+    )
+
+    assert [rule.name for rule in rules] == ["stop_loss", "max_holding_time"]
+    with pytest.raises(ValueError, match="unknown exit rule='opposite_cross'"):
+        create_exit_rules(
+            rule_names=["opposite_cross"],
+            max_holding_sec=60.0,
+        )
+
+
+def test_sma_exit_rule_factory_owns_opposite_cross() -> None:
+    rules = create_sma_exit_rules(
         rule_names=["max_holding_time", "opposite_cross", "stop_loss"],
         max_holding_sec=60.0,
         min_take_profit_ratio=0.002,
@@ -640,7 +660,7 @@ def test_exit_rule_factory_scope_is_explicit() -> None:
 
     assert [rule.name for rule in rules] == ["stop_loss", "opposite_cross", "max_holding_time"]
     with pytest.raises(ValueError, match="unknown exit rule='take_profit'"):
-        create_exit_rules(
+        create_sma_exit_rules(
             rule_names=["take_profit"],
             max_holding_sec=60.0,
             min_take_profit_ratio=0.002,

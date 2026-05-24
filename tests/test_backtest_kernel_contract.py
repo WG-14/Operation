@@ -256,6 +256,14 @@ def test_backtest_kernel_module_owns_decision_event_implementation() -> None:
     assert "resolve_research_strategy_plugin(strategy_name)" in implementation_source
 
 
+def test_backtest_kernel_does_not_own_sma_specific_exit_rule_names() -> None:
+    implementation_source = inspect.getsource(backtest_kernel._run_decision_event_backtest_impl)
+
+    assert "opposite_cross" not in implementation_source
+    assert "strategy_plugin.exit_rule_factory" in implementation_source
+    assert "common_rules" in implementation_source
+
+
 def test_backtest_engine_public_entrypoint_delegates_to_kernel_boundary() -> None:
     source = inspect.getsource(backtest_engine.run_decision_event_backtest)
 

@@ -46,7 +46,10 @@ CANONICAL_EQUIVALENCE_FIELDS_V2 = tuple(
     if field
     not in {
         # These are artifact/provenance or source-timing diagnostics. The
-        # semantic fields they derive from remain compared directly.
+        # semantic fields they derive from remain compared directly. For v2,
+        # strategy-owned behavior drift is represented by strategy_behavior_hash;
+        # feature_snapshot_hash is diagnostic provenance and is intentionally not
+        # promotion-equivalence authority.
         "decision_ts",
         "db_data_fingerprint",
         "replay_fingerprint_hash",

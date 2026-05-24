@@ -80,8 +80,17 @@ def test_runtime_strategy_decision_exports_canonical_operational_fields() -> Non
     assert event["feature_snapshot_hash"].startswith("sha256:")
     assert event["strategy_behavior_hash"].startswith("sha256:")
     assert event["strategy_specific_payload"]["curr_s"] == 102.0
-    assert "curr_s" not in CANONICAL_DECISION_SCHEMA_FIELDS
-    assert "gap_ratio" not in CANONICAL_DECISION_SCHEMA_FIELDS
+    for sma_field in (
+        "prev_s",
+        "prev_l",
+        "curr_s",
+        "curr_l",
+        "gap_ratio",
+        "range_ratio",
+        "expected_edge_ratio",
+        "required_edge_ratio",
+    ):
+        assert sma_field not in CANONICAL_DECISION_SCHEMA_FIELDS
 
 
 def test_runtime_order_rules_hash_changes_with_rule_inputs() -> None:

@@ -172,13 +172,10 @@ def create_exit_rules(
     *,
     rule_names: list[str],
     max_holding_sec: float,
-    min_take_profit_ratio: float,
-    live_fee_rate_estimate: float,
-    small_loss_tolerance_ratio: float,
     stop_loss_ratio: float = 0.0,
 ) -> list[ExitRule]:
     rules: list[ExitRule] = []
-    priority = {"stop_loss": 0, "opposite_cross": 1, "max_holding_time": 2}
+    priority = {"stop_loss": 0, "max_holding_time": 1}
     normalized_names = [str(raw_name).strip().lower() for raw_name in rule_names if str(raw_name).strip()]
     unknown = [name for name in normalized_names if name not in priority]
     if unknown:
@@ -191,7 +188,35 @@ def create_exit_rules(
     for name in sorted(dict.fromkeys(normalized_names), key=lambda item: priority[item]):
         if name == "stop_loss":
             rules.append(StopLossExitRule(stop_loss_ratio=resolved_stop_loss_ratio))
-        elif name == "opposite_cross":
+        elif name == "max_holding_time":
+            rules.append(MaxHoldingTimeExitRule(max_holding_sec=float(max_holding_sec)))
+    return rules
+
+
+def create_sma_exit_rules(
+    *,
+    rule_names: list[str],
+    max_holding_sec: float,
+    min_take_profit_ratio: float,
+    live_fee_rate_estimate: float,
+    small_loss_tolerance_ratio: float,
+    stop_loss_ratio: float = 0.0,
+) -> list[ExitRule]:
+    rules: list[ExitRule] = []
+    priority = {"stop_loss": 0, "opposite_cross": 1, "max_holding_time": 2}
+    normalized_names = [str(raw_name).strip().lower() for raw_name in rule_names if str(raw_name).strip()]
+    unknown = [name for name in normalized_names if name not in priority]
+    if unknown:
+        raise ValueError(f"unknown exit rule={unknown[0]!r}")
+    common_names = [name for name in normalized_names if name in {"stop_loss", "max_holding_time"}]
+    common_rules = create_exit_rules(
+        rule_names=common_names,
+        max_holding_sec=max_holding_sec,
+        stop_loss_ratio=stop_loss_ratio,
+    )
+    common_by_name = {rule.name: rule for rule in common_rules}
+    for name in sorted(dict.fromkeys(normalized_names), key=lambda item: priority[item]):
+        if name == "opposite_cross":
             rules.append(
                 OppositeCrossExitRule(
                     min_take_profit_ratio=float(min_take_profit_ratio),
@@ -199,6 +224,6 @@ def create_exit_rules(
                     small_loss_tolerance_ratio=float(small_loss_tolerance_ratio),
                 )
             )
-        elif name == "max_holding_time":
-            rules.append(MaxHoldingTimeExitRule(max_holding_sec=float(max_holding_sec)))
+        else:
+            rules.append(common_by_name[name])
     return rules

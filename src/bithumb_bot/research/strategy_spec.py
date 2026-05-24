@@ -300,19 +300,24 @@ def exit_policy_from_parameters(strategy_name: str, parameter_values: dict[str, 
             "schema_version": 1,
             "strategy_name": strategy_name,
             "rules": [],
+            "common_rules": [],
+            "strategy_rules": [],
             "entry_exit_policy": "strategy_emits_no_exit_intent",
             "stop_loss": {"enabled": False, "disabled_when_zero": True},
-            "opposite_cross": {"enabled": False},
             "max_holding_time": {"enabled": False, "disabled_when_zero": True},
         }
     values = materialize_strategy_parameters(strategy_name, parameter_values)
     rules = _normalize_exit_rule_names(str(values.get("STRATEGY_EXIT_RULES") or ""))
+    common_rules = tuple(rule for rule in rules if rule in {"stop_loss", "max_holding_time"})
+    strategy_rules = tuple(rule for rule in rules if rule not in set(common_rules))
     stop_loss_ratio = float(values.get("STRATEGY_EXIT_STOP_LOSS_RATIO") or 0.0)
     max_holding_min = int(values.get("STRATEGY_EXIT_MAX_HOLDING_MIN") or 0)
     return {
         "schema_version": 1,
         "strategy_name": strategy_name,
         "rules": list(rules),
+        "common_rules": list(common_rules),
+        "strategy_rules": list(strategy_rules),
         "stop_loss": {
             "enabled": "stop_loss" in rules and stop_loss_ratio > 0.0,
             "stop_loss_ratio": stop_loss_ratio,

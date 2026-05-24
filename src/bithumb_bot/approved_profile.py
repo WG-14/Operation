@@ -1164,6 +1164,8 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
                 return env[key]
         return default
 
+    # Backward-compatibility default for existing paper/runtime env files.
+    # Unsupported or non-runtime-capable explicit strategy names still fail closed below.
     strategy_name = _value("STRATEGY_NAME", default="sma_with_filter")
     _require_runtime_replay_supported_strategy(strategy_name)
     strategy_parameters = runtime_strategy_parameters_from_env(strategy_name, env)
@@ -1208,6 +1210,8 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
         str(getattr(cfg, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
         or str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
     )
+    # Backward-compatibility default for existing paper/runtime settings objects.
+    # Unsupported or non-runtime-capable explicit strategy names still fail closed below.
     strategy_name = str(getattr(cfg, "STRATEGY_NAME", "") or "sma_with_filter")
     _require_runtime_replay_supported_strategy(strategy_name)
     strategy_parameters = runtime_strategy_parameters_from_settings(strategy_name, cfg)

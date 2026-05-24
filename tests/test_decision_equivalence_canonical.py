@@ -253,6 +253,16 @@ def test_canonical_v2_strategy_behavior_hash_mismatch_fails_with_reason() -> Non
     assert "decision_strategy_behavior_hash_mismatch" in result.report["reason_codes"]
 
 
+def test_canonical_v2_feature_snapshot_hash_is_diagnostic_not_equivalence_authority() -> None:
+    result = _compare(
+        _decision_v2(feature_snapshot_hash="sha256:research_feature_snapshot"),
+        _decision_v2(feature_snapshot_hash="sha256:runtime_feature_snapshot"),
+    )
+
+    assert result.ok is True
+    assert "decision_feature_mismatch" not in result.report["reason_codes"]
+
+
 def test_mixed_canonical_contract_versions_fail_with_reason_code() -> None:
     result = _compare(_decision(), _decision_v2())
 

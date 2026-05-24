@@ -356,21 +356,21 @@ def _run_decision_event_backtest_impl(
                         else 0.0
                     ),
                 )
-                for rule in _create_exit_rules(
-                    rule_names=list(active_exit_policy["rules"]),
+                exit_rules = _create_exit_rules(
+                    rule_names=list(active_exit_policy.get("common_rules") or ()),
                     stop_loss_ratio=float(active_exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)),
                     max_holding_sec=float(
                         active_exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)
                     )
                     * 60.0,
-                    min_take_profit_ratio=float(
-                        active_exit_policy.get("opposite_cross", {}).get("min_take_profit_ratio", 0.0)
-                    ),
-                    live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-                    small_loss_tolerance_ratio=float(
-                        active_exit_policy.get("opposite_cross", {}).get("small_loss_tolerance_ratio", 0.0)
-                    ),
-                ):
+                )
+                if strategy_plugin.exit_rule_factory is not None:
+                    exit_rules = strategy_plugin.exit_rule_factory(
+                        active_exit_policy,
+                        parameter_values,
+                        fee_rate,
+                    )
+                for rule in exit_rules:
                     strategy_signal_context = (
                         strategy_plugin.exit_signal_context_builder(event)
                         if strategy_plugin.exit_signal_context_builder is not None
