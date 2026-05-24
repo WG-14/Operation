@@ -146,6 +146,26 @@ SMA_WITH_FILTER_SPEC = StrategySpec(
 )
 
 
+NOOP_BASELINE_SPEC = StrategySpec(
+    strategy_name="noop_baseline",
+    strategy_version="noop_baseline.research_contract.v1",
+    accepted_parameter_names=("NOOP_DECISION_START_INDEX", "NOOP_DECISION_REASON"),
+    required_parameter_names=(),
+    behavior_affecting_parameter_names=("NOOP_DECISION_START_INDEX", "NOOP_DECISION_REASON"),
+    metadata_only_parameter_names=(),
+    research_only_parameter_names=(),
+    default_parameters={"NOOP_DECISION_START_INDEX": 0, "NOOP_DECISION_REASON": "noop_baseline_hold"},
+    decision_contract_version="research_noop_baseline_decision_contract.v1",
+    required_data=("candles",),
+    optional_data=(),
+    exit_policy_schema={
+        "schema_version": 1,
+        "rules": (),
+        "description": "No-op baseline never emits executable entry or exit intent.",
+    },
+)
+
+
 def strategy_spec_for_name(strategy_name: str) -> StrategySpec:
     if strategy_name == "__test_top_of_book_required__":
         return SMA_WITH_FILTER_SPEC
@@ -238,6 +258,17 @@ def materialized_strategy_parameters_hash(parameter_values: dict[str, Any]) -> s
 
 
 def exit_policy_from_parameters(strategy_name: str, parameter_values: dict[str, Any]) -> dict[str, Any]:
+    spec = strategy_spec_for_name(strategy_name)
+    if not spec.exit_policy_schema.get("rules"):
+        return {
+            "schema_version": 1,
+            "strategy_name": strategy_name,
+            "rules": [],
+            "entry_exit_policy": "strategy_emits_no_exit_intent",
+            "stop_loss": {"enabled": False, "disabled_when_zero": True},
+            "opposite_cross": {"enabled": False},
+            "max_holding_time": {"enabled": False, "disabled_when_zero": True},
+        }
     values = materialize_strategy_parameters(strategy_name, parameter_values)
     rules = _normalize_exit_rule_names(str(values.get("STRATEGY_EXIT_RULES") or ""))
     stop_loss_ratio = float(values.get("STRATEGY_EXIT_STOP_LOSS_RATIO") or 0.0)

@@ -18,6 +18,7 @@ from bithumb_bot.position_authority import research_position_authority_snapshot
 from bithumb_bot.sma_decision import evaluate_sma_entry_decision_from_features
 
 from .dataset_snapshot import DatasetSnapshot
+from .decision_event import ResearchDecisionEvent
 from .execution_model import ExecutionFill, ExecutionModel, ExecutionRequest, FixedBpsExecutionModel, model_params_hash
 from .execution_timing import (
     ExecutionReferenceEvent,
@@ -88,6 +89,7 @@ class BacktestResourceLimitExceeded(RuntimeError):
 class _BacktestAccumulator:
     context: BacktestRunContext
     total_candles: int
+    diagnostics_namespace: str = "sma_with_filter"
     decision_count: int = 0
     signal_count: int = 0
     retained_decision_count: int = 0
@@ -101,6 +103,8 @@ class _BacktestAccumulator:
     last_heartbeat_bar: int = 0
     decision_hash_material: list[str] = field(default_factory=list)
     behavior_hash_material: list[dict[str, object]] = field(default_factory=list)
+    common_behavior_hash_material: list[dict[str, object]] = field(default_factory=list)
+    strategy_behavior_hash_material: list[dict[str, object]] = field(default_factory=list)
     trade_ledger_hash_material: list[dict[str, object]] = field(default_factory=list)
     equity_curve_hash_material: list[dict[str, object]] = field(default_factory=list)
     raw_sell_filter_blocked_while_in_position_count: int = 0
@@ -184,6 +188,38 @@ class _BacktestAccumulator:
                 "blocked_filters": payload.get("blocked_filters"),
                 "regime_decision": payload.get("regime_decision"),
                 "regime_block_reason": payload.get("regime_block_reason"),
+            }
+        )
+        self.common_behavior_hash_material.append(
+            {
+                "candle_ts": payload.get("candle_ts"),
+                "raw_signal": payload.get("raw_signal"),
+                "final_signal": payload.get("final_signal"),
+                "position_state_hash": payload.get("position_state_hash"),
+                "execution_intent": payload.get("execution_intent"),
+                "order_intent": payload.get("order_intent"),
+                "exit_intent": payload.get("exit_intent"),
+            }
+        )
+        strategy_namespace = str(
+            payload.get("strategy_diagnostics_namespace")
+            or payload.get("strategy_name")
+            or self.diagnostics_namespace
+        )
+        self.strategy_behavior_hash_material.append(
+            {
+                "namespace": strategy_namespace,
+                "payload": payload.get("strategy_behavior_payload")
+                or payload.get("strategy_diagnostics")
+                or {
+                    "raw_signal": payload.get("raw_signal"),
+                    "entry_signal": payload.get("entry_signal"),
+                    "exit_signal": payload.get("exit_signal"),
+                    "entry_reason": payload.get("entry_reason"),
+                    "exit_rule": payload.get("exit_rule"),
+                    "blocked_filters": payload.get("blocked_filters"),
+                    "feature_hash": payload.get("feature_hash"),
+                },
             }
         )
         if retained:
@@ -278,6 +314,8 @@ class _BacktestAccumulator:
         payload["decision_hash"] = canonical_payload_hash(self.decision_hash_material)
         payload.update(_behavior_hashes(
             decision_material=self.behavior_hash_material,
+            common_decision_material=self.common_behavior_hash_material,
+            strategy_decision_material=self.strategy_behavior_hash_material,
             trade_material=self.trade_ledger_hash_material,
             equity_material=self.equity_curve_hash_material,
         ))
@@ -300,6 +338,7 @@ class _BacktestAccumulator:
 
     def strategy_diagnostics(self, *, trades: list[dict[str, object]]) -> dict[str, object]:
         return _strategy_diagnostics_from_trades(
+            namespace=self.diagnostics_namespace,
             trades=trades,
             raw_sell_filter_blocked_while_in_position_count=self.raw_sell_filter_blocked_while_in_position_count,
             raw_buy_filter_blocked_count=self.raw_buy_filter_blocked_count,
@@ -1249,6 +1288,264 @@ def run_sma_backtest(
     )
 
 
+def run_noop_baseline_backtest(
+    *,
+    dataset: DatasetSnapshot,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    parameter_stability_score: float | None = None,
+    execution_model: ExecutionModel | None = None,
+    execution_timing_policy: ExecutionTimingPolicy | None = None,
+    portfolio_policy: PortfolioPolicy | None = None,
+    context: BacktestRunContext | None = None,
+) -> BacktestRun:
+    del execution_model
+    from .strategy_registry import resolve_research_strategy_plugin
+
+    strategy_plugin = resolve_research_strategy_plugin("noop_baseline")
+    strategy_spec = strategy_spec_for_name("noop_baseline")
+    effective_parameters = materialize_strategy_parameters(
+        "noop_baseline",
+        parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+    )
+    start_index = max(0, int(effective_parameters.get("NOOP_DECISION_START_INDEX", 0)))
+    decision_reason = str(effective_parameters.get("NOOP_DECISION_REASON") or "noop_baseline_hold")
+    active_exit_policy = exit_policy_from_parameters("noop_baseline", effective_parameters)
+    active_exit_policy_hash = exit_policy_hash(active_exit_policy)
+    candles = dataset.candles
+    run_context = context or BacktestRunContext(report_detail="full")
+    timing_policy = execution_timing_policy or ExecutionTimingPolicy()
+    policy = portfolio_policy or legacy_research_portfolio_policy()
+    starting_cash = float(policy.starting_cash_krw)
+    initial_qty = float(policy.initial_position_qty)
+    accumulator = _BacktestAccumulator(
+        context=run_context,
+        total_candles=len(candles),
+        diagnostics_namespace=strategy_plugin.diagnostics_namespace,
+    )
+    dataset_content_hash = dataset.content_hash()
+    if not candles:
+        audit_trace_index = _complete_audit_trace(run_context, status="completed")
+        return BacktestRun(
+            metrics=_empty_metrics(parameter_stability_score),
+            metrics_v2=_empty_metrics_v2(starting_cash=starting_cash, initial_position_qty=initial_qty),
+            trades=(),
+            candle_count=0,
+            warnings=("not_enough_candles",),
+            execution_event_summary=empty_execution_event_summary(),
+            resource_usage=accumulator.resource_usage(candles_processed=0),
+            strategy_diagnostics=_noop_strategy_diagnostics(decision_count=0),
+            retained_detail_summary=_retained_detail_summary(accumulator, retained_regime_snapshot_count=0),
+            audit_trace_index=audit_trace_index,
+        )
+
+    decisions: list[dict[str, object]] = []
+    equity_curve: list[EquityPoint] = []
+    cash = starting_cash
+    qty = initial_qty
+    peak = starting_cash
+    max_drawdown = 0.0
+    first_ts = candle_close_ts(candles[0], interval=dataset.interval)
+    retain_initial_equity = accumulator.retain_equity_point()
+    if retain_initial_equity:
+        equity_curve.append(EquityPoint(ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty))
+    accumulator.update_equity(retained=retain_initial_equity, ts=first_ts, asset_qty=qty)
+    accumulator.record_equity_point(ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty)
+    _trace_equity_mark(run_context, ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty)
+
+    for index, candle in enumerate(candles):
+        if index < start_index:
+            continue
+        mark_boundary_ts = candle_close_ts(candle, interval=dataset.interval)
+        decision_boundary_ts = mark_boundary_ts + int(timing_policy.decision_guard_ms)
+        feature_snapshot = {
+            "candle_index": int(index),
+            "close": float(candle.close),
+            "start_index": int(start_index),
+        }
+        event = ResearchDecisionEvent(
+            candle_ts=int(candle.ts),
+            decision_ts=int(decision_boundary_ts),
+            strategy_name=strategy_plugin.name,
+            strategy_version=strategy_plugin.version,
+            raw_signal="HOLD",
+            final_signal="HOLD",
+            reason=decision_reason,
+            feature_snapshot=feature_snapshot,
+            strategy_diagnostics={
+                "schema_version": 1,
+                "hold_decision_count": int(accumulator.decision_count + 1),
+                "start_index": int(start_index),
+            },
+            entry_signal="HOLD",
+            exit_signal="HOLD",
+        )
+        decision_payload = _research_decision_payload(
+            dataset=dataset,
+            dataset_content_hash=dataset_content_hash,
+            parameter_values=effective_parameters,
+            strategy_name=strategy_plugin.name,
+            strategy_spec=strategy_spec.as_dict(),
+            strategy_spec_hash=strategy_spec.spec_hash(),
+            strategy_plugin_contract=strategy_plugin.contract_payload(),
+            strategy_plugin_contract_hash=strategy_plugin.contract_hash(),
+            exit_policy=active_exit_policy,
+            exit_policy_hash=active_exit_policy_hash,
+            fee_rate=fee_rate,
+            slippage_bps=slippage_bps,
+            timing_policy=timing_policy,
+            portfolio_policy=policy,
+            candle_ts=event.candle_ts,
+            decision_ts=event.decision_ts,
+            raw_signal=event.raw_signal,
+            entry_signal=event.entry_signal or event.raw_signal,
+            exit_signal=event.exit_signal or event.raw_signal,
+            final_signal=event.final_signal,
+            raw_reason=event.reason,
+            blocked=False,
+            raw_filter_would_block=False,
+            entry_blocked=False,
+            protective_exit_overrode_entry=False,
+            exit_filter_suppression_prevented=False,
+            blocked_filters=list(event.blocked_filters),
+            prev_s=0.0,
+            prev_l=0.0,
+            curr_s=0.0,
+            curr_l=0.0,
+            gap_ratio=0.0,
+            range_ratio=0.0,
+            regime_snapshot={"composite_regime": "not_evaluated"},
+            entry_reason=event.reason,
+            market_regime_decision={"regime_decision": "not_configured"},
+            market_regime_blocked=False,
+            candidate_regime_blocked=False,
+            qty=qty,
+            sellable_qty=qty,
+            exit_rule="",
+            exit_reason="",
+            exit_evaluations=[],
+        )
+        decision_payload.update(
+            {
+                "decision_event_schema_version": 1,
+                "strategy_decision_contract_version": strategy_plugin.decision_contract_version,
+                "raw_reason": event.reason,
+                "feature_snapshot": dict(event.feature_snapshot),
+                "strategy_diagnostics_namespace": strategy_plugin.diagnostics_namespace,
+                "strategy_diagnostics": dict(event.strategy_diagnostics),
+                "strategy_behavior_payload": {
+                    "strategy_name": event.strategy_name,
+                    "strategy_version": event.strategy_version,
+                    "raw_signal": event.raw_signal,
+                    "final_signal": event.final_signal,
+                    "reason": event.reason,
+                    "feature_snapshot": dict(event.feature_snapshot),
+                },
+                "execution_intent": "none",
+                "order_intent": None,
+                "exit_intent": None,
+            }
+        )
+        retain_decision = accumulator.retain_decision()
+        if retain_decision:
+            decisions.append(decision_payload)
+        accumulator.update_decision(decision_payload, retained=retain_decision)
+        _trace_decision(run_context, decision_payload)
+        mark_equity = cash + qty * float(candle.close)
+        retain_equity = accumulator.retain_equity_point()
+        peak, max_drawdown = _record_equity_mark(
+            equity_curve=equity_curve,
+            ts=mark_boundary_ts,
+            cash=cash,
+            qty=qty,
+            mark_price=candle.close,
+            peak=peak,
+            max_drawdown=max_drawdown,
+            retain=retain_equity,
+        )
+        accumulator.update_equity(retained=retain_equity, ts=mark_boundary_ts, asset_qty=qty)
+        accumulator.record_equity_point(ts=mark_boundary_ts, equity=mark_equity, cash=cash, asset_qty=qty)
+        _trace_equity_mark(run_context, ts=mark_boundary_ts, equity=mark_equity, cash=cash, asset_qty=qty)
+        accumulator.maybe_emit_heartbeat(index + 1)
+        accumulator.check_limits(candles_processed=index + 1, trades=[])
+
+    last = candles[-1]
+    final_equity = cash + qty * float(last.close)
+    return_pct = ((final_equity / starting_cash) - 1.0) * 100.0 if starting_cash > 0.0 else 0.0
+    position_intervals, closed_trade_records, execution_records, derived_open_cost_basis = _metrics_v2_ledgers_from_trades(
+        trades=[],
+    )
+    metrics_v2 = build_metrics_v2(
+        starting_cash=starting_cash,
+        final_cash=cash,
+        final_asset_qty=qty,
+        final_mark_price=last.close,
+        final_open_cost_basis=derived_open_cost_basis,
+        equity_curve=tuple(equity_curve),
+        position_intervals=position_intervals,
+        closed_trades=closed_trade_records,
+        execution_records=execution_records,
+        **(
+            {}
+            if accumulator.retain_full_detail()
+            else accumulator.metrics_summary_inputs(max_drawdown_pct=max_drawdown * 100.0)
+        ),
+    )
+    if not accumulator.retain_full_detail():
+        metrics_v2 = replace(
+            metrics_v2,
+            limitation_reasons=tuple(
+                sorted(set(metrics_v2.limitation_reasons) | {"bounded_detail_equity_curve_not_retained"})
+            ),
+        )
+    audit_trace_index = _complete_audit_trace(run_context, status="completed")
+    strategy_diagnostics = _noop_strategy_diagnostics(
+        decision_count=accumulator.decision_count,
+        start_index=start_index,
+    )
+    resource_usage = accumulator.resource_usage(candles_processed=max(0, len(candles) - start_index))
+    resource_usage["strategy_diagnostics"] = strategy_diagnostics
+    return BacktestRun(
+        metrics=_metrics(
+            return_pct=return_pct,
+            max_drawdown_pct=max_drawdown * 100.0,
+            closed_pnls=[],
+            fee_total=0.0,
+            slippage_total=0.0,
+            parameter_stability_score=parameter_stability_score,
+        ),
+        metrics_v2=metrics_v2,
+        trades=(),
+        candle_count=len(candles),
+        warnings=(),
+        regime_performance=(),
+        regime_coverage=(),
+        execution_event_summary=empty_execution_event_summary(),
+        decisions=tuple(decisions),
+        equity_curve=tuple(equity_curve),
+        position_intervals=position_intervals,
+        closed_trades=closed_trade_records,
+        resource_usage=resource_usage,
+        strategy_diagnostics=strategy_diagnostics,
+        retained_detail_summary=_retained_detail_summary(accumulator, retained_regime_snapshot_count=0),
+        audit_trace_index=audit_trace_index,
+    )
+
+
+def _noop_strategy_diagnostics(*, decision_count: int, start_index: int = 0) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "hold_decision_count": int(decision_count),
+        "start_index": int(start_index),
+    }
+    payload["strategy_diagnostics_namespace"] = "noop_baseline"
+    payload["strategy_specific_diagnostics"] = {"noop_baseline": dict(payload)}
+    return payload
+
+
 def _sma(values: list[float], n: int, end: int) -> float:
     return sum(values[end - n : end]) / n
 
@@ -1344,6 +1641,8 @@ def _retained_detail_summary(
         "decision_hash": canonical_payload_hash(accumulator.decision_hash_material),
         **_behavior_hashes(
             decision_material=accumulator.behavior_hash_material,
+            common_decision_material=accumulator.common_behavior_hash_material,
+            strategy_decision_material=accumulator.strategy_behavior_hash_material,
             trade_material=accumulator.trade_ledger_hash_material,
             equity_material=accumulator.equity_curve_hash_material,
         ),
@@ -1388,10 +1687,14 @@ def _trade_hash_payload(trade: dict[str, object]) -> dict[str, object]:
 def _behavior_hashes(
     *,
     decision_material: list[dict[str, object]],
+    common_decision_material: list[dict[str, object]] | None = None,
+    strategy_decision_material: list[dict[str, object]] | None = None,
     trade_material: list[dict[str, object]],
     equity_material: list[dict[str, object]],
 ) -> dict[str, str]:
     decision_hash = canonical_payload_hash(decision_material)
+    common_decision_hash = canonical_payload_hash(common_decision_material or [])
+    strategy_decision_hash = canonical_payload_hash(strategy_decision_material or [])
     trade_hash = canonical_payload_hash(trade_material)
     equity_hash = canonical_payload_hash(equity_material)
     composite_hash = canonical_payload_hash(
@@ -1403,6 +1706,8 @@ def _behavior_hashes(
     )
     return {
         "decision_behavior_hash": decision_hash,
+        "common_decision_behavior_hash": common_decision_hash,
+        "strategy_behavior_hash": strategy_decision_hash,
         "trade_ledger_hash": trade_hash,
         "equity_curve_hash": equity_hash,
         "composite_behavior_hash": composite_hash,
@@ -2227,6 +2532,7 @@ def execution_event_summary(trades: Any) -> dict[str, object]:
 
 def _strategy_diagnostics_from_trades(
     *,
+    namespace: str = "sma_with_filter",
     trades: list[dict[str, object]],
     raw_sell_filter_blocked_while_in_position_count: int,
     raw_buy_filter_blocked_count: int,
@@ -2285,8 +2591,8 @@ def _strategy_diagnostics_from_trades(
         ),
     }
     strategy_specific = dict(payload)
-    payload["strategy_diagnostics_namespace"] = "sma_with_filter"
-    payload["strategy_specific_diagnostics"] = {"sma_with_filter": strategy_specific}
+    payload["strategy_diagnostics_namespace"] = str(namespace)
+    payload["strategy_specific_diagnostics"] = {str(namespace): strategy_specific}
     return payload
 
 

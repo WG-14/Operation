@@ -77,6 +77,35 @@ def test_research_rejects_unknown_strategy_params() -> None:
         parse_manifest(payload)
 
 
+def test_noop_baseline_manifest_uses_its_own_parameter_contract() -> None:
+    payload = _manifest()
+    payload["strategy_name"] = "noop_baseline"
+    payload["parameter_space"] = {"NOOP_DECISION_START_INDEX": [0, 2]}
+
+    manifest = parse_manifest(payload)
+
+    assert manifest.strategy_name == "noop_baseline"
+    assert manifest.parameter_space == {"NOOP_DECISION_START_INDEX": (0, 2)}
+
+
+def test_noop_baseline_manifest_rejects_sma_parameters() -> None:
+    payload = _manifest()
+    payload["strategy_name"] = "noop_baseline"
+    payload["parameter_space"] = {"SMA_SHORT": [2], "SMA_LONG": [4]}
+
+    with pytest.raises(ManifestValidationError, match="unknown strategy parameter"):
+        parse_manifest(payload)
+
+
+def test_production_bound_noop_manifest_requires_noop_behavior_parameters() -> None:
+    payload = _production_manifest()
+    payload["strategy_name"] = "noop_baseline"
+    payload["parameter_space"] = {"NOOP_DECISION_REASON": ["hold_for_architecture_canary"]}
+
+    with pytest.raises(ManifestValidationError, match="NOOP_DECISION_START_INDEX"):
+        parse_manifest(payload)
+
+
 def test_research_rejects_unused_behavior_params_for_production_bound() -> None:
     payload = _manifest()
     payload["deployment_tier"] = "paper_candidate"

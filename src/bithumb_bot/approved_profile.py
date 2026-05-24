@@ -1175,6 +1175,8 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
                 return env[key]
         return default
 
+    strategy_name = _value("STRATEGY_NAME", default="sma_with_filter")
+    _require_runtime_replay_supported_strategy(strategy_name)
     strategy_parameters = {
         "SMA_SHORT": _value("SMA_SHORT", default="7"),
         "SMA_LONG": _value("SMA_LONG", default="30"),
@@ -1219,7 +1221,7 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
         "live_dry_run": _value("LIVE_DRY_RUN", default="true"),
         "live_real_order_armed": _value("LIVE_REAL_ORDER_ARMED", default="false"),
         "profile_selector": _value(APPROVED_PROFILE_SELECTOR_ENV, "STRATEGY_APPROVED_PROFILE_PATH"),
-        "strategy_name": _value("STRATEGY_NAME", default="sma_with_filter"),
+        "strategy_name": strategy_name,
         "market": _value("MARKET", "PAIR", default="KRW-BTC"),
         "interval": _value("INTERVAL", default="1m"),
         "strategy_parameters": strategy_parameters,
@@ -1239,7 +1241,7 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
             ),
         },
     }
-    runtime["exit_policy"] = exit_policy_from_parameters("sma_with_filter", strategy_parameters)
+    runtime["exit_policy"] = exit_policy_from_parameters(strategy_name, strategy_parameters)
     runtime["exit_policy_hash"] = sha256_prefixed(runtime["exit_policy"])
     execution_contract = _execution_contract_from_env_values(env)
     if execution_contract is not None:
@@ -1255,12 +1257,14 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
         str(getattr(cfg, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
         or str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
     )
+    strategy_name = str(getattr(cfg, "STRATEGY_NAME", "") or "sma_with_filter")
+    _require_runtime_replay_supported_strategy(strategy_name)
     runtime = {
         "mode": str(getattr(cfg, "MODE", "")),
         "live_dry_run": bool(getattr(cfg, "LIVE_DRY_RUN", True)),
         "live_real_order_armed": bool(getattr(cfg, "LIVE_REAL_ORDER_ARMED", False)),
         "profile_selector": profile_selector,
-        "strategy_name": str(getattr(cfg, "STRATEGY_NAME", "")),
+        "strategy_name": strategy_name,
         "market": str(getattr(cfg, "PAIR", "")),
         "interval": str(getattr(cfg, "INTERVAL", "")),
         "strategy_parameters": {
@@ -1291,7 +1295,7 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
             "slippage_bps": float(getattr(cfg, "STRATEGY_ENTRY_SLIPPAGE_BPS")),
         },
     }
-    runtime["exit_policy"] = exit_policy_from_parameters("sma_with_filter", runtime["strategy_parameters"])
+    runtime["exit_policy"] = exit_policy_from_parameters(strategy_name, runtime["strategy_parameters"])
     runtime["exit_policy_hash"] = sha256_prefixed(runtime["exit_policy"])
     execution_contract = _execution_contract_from_settings(cfg)
     if execution_contract is not None:
@@ -1300,6 +1304,15 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
         runtime["execution_capability_contract"] = execution_contract.get("execution_capability_contract")
         runtime["execution_capability_contract_hash"] = execution_contract.get("execution_capability_contract_hash")
     return runtime
+
+
+def _require_runtime_replay_supported_strategy(strategy_name: str) -> None:
+    try:
+        plugin = resolve_research_strategy_plugin(str(strategy_name or ""))
+    except ResearchStrategyRegistryError as exc:
+        raise ApprovedProfileError(f"runtime_strategy_unsupported:{strategy_name}") from exc
+    if plugin.runtime_replay_builder is None:
+        raise ApprovedProfileError(f"runtime_replay_unsupported_for_strategy:{plugin.name}")
 
 
 def _execution_contract_from_env_values(env: dict[str, str]) -> dict[str, Any] | None:

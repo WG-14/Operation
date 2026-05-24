@@ -34,6 +34,26 @@ def test_research_strategy_registry_resolves_sma_with_filter() -> None:
     assert requirements.optional_data == ("top_of_book",)
 
 
+def test_research_strategy_registry_resolves_noop_baseline_as_independent_plugin() -> None:
+    runner = resolve_research_strategy("noop_baseline")
+    plugin = resolve_research_strategy_plugin("noop_baseline")
+    sma_plugin = resolve_research_strategy_plugin("sma_with_filter")
+
+    assert callable(runner)
+    assert plugin.name == "noop_baseline"
+    assert plugin.runner is runner
+    assert plugin.spec is strategy_spec_for_name("noop_baseline")
+    assert plugin.spec is not sma_plugin.spec
+    assert plugin.contract_hash() != sma_plugin.contract_hash()
+    assert plugin.runtime_replay_builder is None
+    assert plugin.contract_payload()["runtime_replay_supported"] is False
+    assert plugin.contract_payload()["diagnostics_namespace"] == "noop_baseline"
+    assert plugin.contract_payload()["runner_qualname"] == "_run_noop_baseline"
+    requirements = research_strategy_data_requirements("noop_baseline")
+    assert requirements.required_data == ("candles",)
+    assert requirements.optional_data == ()
+
+
 def test_research_strategy_registry_rejects_unknown_strategy() -> None:
     with pytest.raises(ResearchStrategyRegistryError, match="unsupported research strategy"):
         resolve_research_strategy("profit_hunter")
