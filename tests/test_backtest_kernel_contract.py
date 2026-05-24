@@ -246,11 +246,14 @@ def test_backtest_kernel_class_preserves_decision_event_api_behavior() -> None:
     assert via_class.resource_usage["trade_ledger_hash"] == via_function.resource_usage["trade_ledger_hash"]
 
 
-def test_backtest_kernel_module_declares_transitional_private_impl_boundary() -> None:
+def test_backtest_kernel_module_owns_decision_event_implementation() -> None:
     source = inspect.getsource(backtest_kernel.run_decision_event_backtest)
+    implementation_source = inspect.getsource(backtest_kernel._run_decision_event_backtest_impl)
 
-    assert "Transitional implementation boundary" in source
-    assert "from .backtest_engine import _run_decision_event_backtest_impl" in source
+    assert "_run_decision_event_backtest_impl(" in source
+    assert "from .backtest_engine import _run_decision_event_backtest_impl" not in source
+    assert "Execute strategy decision events through the shared research backtest kernel" in implementation_source
+    assert "resolve_research_strategy_plugin(strategy_name)" in implementation_source
 
 
 def test_backtest_engine_public_entrypoint_delegates_to_kernel_boundary() -> None:
