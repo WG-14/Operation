@@ -2538,11 +2538,73 @@ def test_sma_backtest_hot_loop_uses_precomputed_feature_path(monkeypatch) -> Non
     assert calls == len(snapshot.candles) - 4
 
 
+def test_sma_decision_adapter_emits_deterministic_strategy_events() -> None:
+    snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
+    adapter = backtest_engine.SmaWithFilterDecisionAdapter(
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 4,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+        },
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        timing_policy=ExecutionTimingPolicy(),
+    )
+
+    first = adapter.build_events(snapshot)
+    second = adapter.build_events(snapshot)
+
+    assert first == second
+    assert len(first) == len(snapshot.candles) - 4
+    assert {event.strategy_name for event in first} == {"sma_with_filter"}
+    assert {event.strategy_version for event in first} == {
+        strategy_spec_for_name("sma_with_filter").strategy_version
+    }
+    assert any(event.raw_signal == "BUY" for event in first)
+    assert any(event.raw_signal == "SELL" for event in first)
+    buy = next(event for event in first if event.raw_signal == "BUY")
+    assert buy.order_intent == {"side": "BUY", "sizing": "portfolio_policy_fractional_cash"}
+    assert buy.feature_snapshot["short_sma"] > buy.feature_snapshot["long_sma"]
+    assert buy.strategy_diagnostics["adapter"] == "SmaWithFilterDecisionAdapter"
+    assert buy.extra_payload["adapter"] == "SmaWithFilterDecisionAdapter"
+
+
+def test_sma_backtest_consumes_sma_decision_adapter_events(monkeypatch) -> None:
+    snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
+    calls = 0
+    original = backtest_engine.SmaWithFilterDecisionAdapter.build_events
+
+    def counting_build_events(self, dataset):
+        nonlocal calls
+        calls += 1
+        return original(self, dataset)
+
+    monkeypatch.setattr(backtest_engine.SmaWithFilterDecisionAdapter, "build_events", counting_build_events)
+
+    result = run_sma_backtest(
+        dataset=snapshot,
+        parameter_values={"SMA_SHORT": 2, "SMA_LONG": 4},
+        fee_rate=0.0,
+        slippage_bps=0.0,
+    )
+
+    assert calls == 1
+    assert result.decisions
+    assert {decision["strategy_plugin_contract"]["name"] for decision in result.decisions} == {
+        "sma_with_filter"
+    }
+
+
 def test_sma_backtest_source_has_no_growing_prefix_or_hot_loop_sma_calls() -> None:
     source = inspect.getsource(backtest_engine.run_sma_backtest)
 
     assert "closes[: index + 1]" not in source
     assert "_sma(" not in source
+    assert "SmaWithFilterDecisionAdapter" in source
 
 
 def test_precomputed_sma_values_match_legacy_sma() -> None:

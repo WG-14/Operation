@@ -454,6 +454,174 @@ class _ResearchPositionContext:
     unrealized_pnl_ratio: float = 0.0
 
 
+@dataclass(frozen=True)
+class SmaWithFilterDecisionAdapter:
+    parameter_values: dict[str, Any]
+    fee_rate: float
+    slippage_bps: float
+    timing_policy: ExecutionTimingPolicy
+    strategy_name: str = "sma_with_filter"
+
+    def build_events(self, dataset: DatasetSnapshot) -> tuple[ResearchDecisionEvent, ...]:
+        short_n = int(self.parameter_values.get("SMA_SHORT", self.parameter_values.get("short_n", 0)))
+        long_n = int(self.parameter_values.get("SMA_LONG", self.parameter_values.get("long_n", 0)))
+        if short_n <= 0 or long_n <= 0 or short_n >= long_n:
+            raise ValueError("SMA_SHORT must be smaller than SMA_LONG")
+
+        candles = dataset.candles
+        if len(candles) < long_n + 2:
+            return ()
+
+        closes = [candle.close for candle in candles]
+        highs = [candle.high for candle in candles]
+        lows = [candle.low for candle in candles]
+        volumes = [candle.volume for candle in candles]
+        short_sma_values = _rolling_sma_values(closes, short_n)
+        long_sma_values = _rolling_sma_values(closes, long_n)
+        min_gap = float(
+            self.parameter_values.get(
+                "SMA_FILTER_GAP_MIN_RATIO",
+                self.parameter_values.get("strategy_min_expected_edge_ratio", 0.0),
+            )
+        )
+        min_range = float(self.parameter_values.get("SMA_FILTER_VOL_MIN_RANGE_RATIO", 0.0))
+        volatility_window = max(1, int(self.parameter_values.get("SMA_FILTER_VOL_WINDOW", 10)))
+        volume_window = max(1, int(self.parameter_values.get("SMA_FILTER_VOLUME_WINDOW", 10)))
+        liquidity_window = max(1, int(self.parameter_values.get("SMA_FILTER_LIQUIDITY_WINDOW", 10)))
+        overextended_lookback = max(1, int(self.parameter_values.get("SMA_FILTER_OVEREXT_LOOKBACK", 3)))
+        overextended_max_return_ratio = float(self.parameter_values.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0))
+        close_volatility_ratios = _rolling_close_range_ratios(closes, volatility_window)
+        overextended_ratios = _overextended_return_ratios(closes, overextended_lookback)
+        thresholds = MarketRegimeThresholds(
+            min_trend_strength_ratio=max(0.0, min_gap),
+            low_volatility_ratio=max(0.0, min_range),
+        )
+        strategy_spec = strategy_spec_for_name(self.strategy_name)
+        events: list[ResearchDecisionEvent] = []
+        prev_above: bool | None = None
+        for index in range(long_n, len(candles)):
+            candle = candles[index]
+            prev_short = short_sma_values[index]
+            prev_long = long_sma_values[index]
+            curr_short = short_sma_values[index + 1]
+            curr_long = long_sma_values[index + 1]
+            if prev_short is None or prev_long is None or curr_short is None or curr_long is None:
+                continue
+            above = curr_short > curr_long
+            regime_snapshot = classify_market_regime_from_arrays(
+                closes=closes,
+                highs=highs,
+                lows=lows,
+                volumes=volumes,
+                index=index,
+                short_sma=curr_short,
+                long_sma=curr_long,
+                volatility_window=volatility_window,
+                volume_window=volume_window,
+                liquidity_window=liquidity_window,
+                thresholds=thresholds,
+                overextended_lookback=overextended_lookback,
+                overextended_max_return_ratio=overextended_max_return_ratio,
+            ).as_dict()
+            entry_decision = evaluate_sma_entry_decision_from_features(
+                prev_s=prev_short,
+                prev_l=prev_long,
+                curr_s=curr_short,
+                curr_l=curr_long,
+                gap_ratio=abs((curr_short - curr_long) / curr_long) if curr_long != 0.0 else 0.0,
+                volatility_ratio=close_volatility_ratios[index],
+                overextended_ratio=overextended_ratios[index],
+                market_regime_snapshot=regime_snapshot,
+                min_gap_ratio=min_gap,
+                min_volatility_ratio=min_range,
+                overextended_max_return_ratio=overextended_max_return_ratio,
+                slippage_bps=float(self.parameter_values.get("STRATEGY_ENTRY_SLIPPAGE_BPS", self.slippage_bps) or 0.0),
+                live_fee_rate_estimate=float(self.parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or self.fee_rate),
+                entry_edge_buffer_ratio=float(self.parameter_values.get("ENTRY_EDGE_BUFFER_RATIO") or 0.0),
+                cost_edge_enabled=bool(self.parameter_values.get("SMA_COST_EDGE_ENABLED", True)),
+                cost_edge_min_ratio=float(self.parameter_values.get("SMA_COST_EDGE_MIN_RATIO") or 0.0),
+                market_regime_enabled=bool(self.parameter_values.get("SMA_MARKET_REGIME_ENABLED", True)),
+                candidate_regime_policy=None,
+            )
+            raw_signal = "HOLD"
+            raw_reason = "sma no crossover"
+            if prev_above is not None:
+                if not prev_above and above:
+                    raw_signal = "BUY"
+                    raw_reason = "sma golden cross"
+                elif prev_above and not above:
+                    raw_signal = "SELL"
+                    raw_reason = "sma dead cross"
+            blocked_filters = tuple(entry_decision.blocked_filters) if raw_signal in {"BUY", "SELL"} else ()
+            raw_filter_would_block = bool(
+                raw_signal in {"BUY", "SELL"}
+                and (
+                    blocked_filters
+                    or entry_decision.market_regime_triggered
+                    or entry_decision.candidate_regime_triggered
+                )
+            )
+            entry_filter_blocked = bool(raw_signal == "BUY" and raw_filter_would_block)
+            entry_signal = "HOLD" if entry_filter_blocked else raw_signal
+            feature_snapshot = _feature_snapshot(
+                short_sma=curr_short,
+                long_sma=curr_long,
+                gap_ratio=entry_decision.gap_ratio,
+                range_ratio=entry_decision.volatility_ratio,
+                index=index,
+            )
+            decision_ts = candle_close_ts(candle, interval=dataset.interval) + int(self.timing_policy.decision_guard_ms)
+            events.append(
+                ResearchDecisionEvent(
+                    candle_ts=int(candle.ts),
+                    decision_ts=int(decision_ts),
+                    strategy_name=self.strategy_name,
+                    strategy_version=strategy_spec.strategy_version,
+                    raw_signal=raw_signal,
+                    final_signal=entry_signal,
+                    reason=entry_decision.entry_reason if entry_filter_blocked else raw_reason,
+                    feature_snapshot=feature_snapshot,
+                    strategy_diagnostics={
+                        "schema_version": 1,
+                        "adapter": "SmaWithFilterDecisionAdapter",
+                        "candle_index": int(index),
+                        "raw_signal": raw_signal,
+                        "entry_signal": entry_signal,
+                        "raw_filter_would_block": raw_filter_would_block,
+                        "blocked_filters": blocked_filters,
+                        "market_regime_triggered": bool(entry_decision.market_regime_triggered),
+                        "candidate_regime_triggered": bool(entry_decision.candidate_regime_triggered),
+                    },
+                    entry_signal=entry_signal,
+                    exit_signal=raw_signal,
+                    blocked_filters=blocked_filters,
+                    order_intent=(
+                        {"side": "BUY", "sizing": "portfolio_policy_fractional_cash"}
+                        if entry_signal == "BUY"
+                        else None
+                    ),
+                    extra_payload={
+                        "adapter": "SmaWithFilterDecisionAdapter",
+                        "index": int(index),
+                        "processed_count": int(index - long_n + 1),
+                        "prev_above": prev_above,
+                        "above": above,
+                        "prev_s": float(prev_short),
+                        "prev_l": float(prev_long),
+                        "curr_s": float(curr_short),
+                        "curr_l": float(curr_long),
+                        "regime_snapshot": regime_snapshot,
+                        "entry_decision": entry_decision,
+                        "raw_reason": raw_reason,
+                        "raw_filter_would_block": raw_filter_would_block,
+                        "entry_filter_blocked": entry_filter_blocked,
+                    },
+                )
+            )
+            prev_above = above
+        return tuple(events)
+
+
 def run_sma_backtest(
     *,
     dataset: DatasetSnapshot,
@@ -494,13 +662,6 @@ def run_sma_backtest(
     active_exit_policy_hash = exit_policy_hash(active_exit_policy)
     short_n = int(effective_parameters.get("SMA_SHORT", effective_parameters.get("short_n", 0)))
     long_n = int(effective_parameters.get("SMA_LONG", effective_parameters.get("long_n", 0)))
-    min_gap = float(
-        effective_parameters.get(
-            "SMA_FILTER_GAP_MIN_RATIO",
-            effective_parameters.get("strategy_min_expected_edge_ratio", 0.0),
-        )
-    )
-    min_range = float(effective_parameters.get("SMA_FILTER_VOL_MIN_RANGE_RATIO", 0.0))
     if short_n <= 0 or long_n <= 0 or short_n >= long_n:
         raise ValueError("SMA_SHORT must be smaller than SMA_LONG")
 
@@ -530,25 +691,16 @@ def run_sma_backtest(
             audit_trace_index=audit_trace_index,
         )
 
-    closes = [candle.close for candle in candles]
-    highs = [candle.high for candle in candles]
-    lows = [candle.low for candle in candles]
-    volumes = [candle.volume for candle in candles]
-    short_sma_values = _rolling_sma_values(closes, short_n)
-    long_sma_values = _rolling_sma_values(closes, long_n)
-    volatility_window = max(1, int(effective_parameters.get("SMA_FILTER_VOL_WINDOW", 10)))
-    volume_window = max(1, int(effective_parameters.get("SMA_FILTER_VOLUME_WINDOW", 10)))
-    liquidity_window = max(1, int(effective_parameters.get("SMA_FILTER_LIQUIDITY_WINDOW", 10)))
-    overextended_lookback = max(1, int(effective_parameters.get("SMA_FILTER_OVEREXT_LOOKBACK", 3)))
-    overextended_max_return_ratio = float(effective_parameters.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO", 0.0))
-    close_volatility_ratios = _rolling_close_range_ratios(closes, volatility_window)
-    overextended_ratios = _overextended_return_ratios(closes, overextended_lookback)
+    timing_policy = execution_timing_policy or ExecutionTimingPolicy()
+    adapter = SmaWithFilterDecisionAdapter(
+        parameter_values=effective_parameters,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        timing_policy=timing_policy,
+    )
+    decision_events = adapter.build_events(dataset)
     regime_snapshots: list[dict[str, object]] = []
     regime_coverage_accumulator = _RegimeCoverageAccumulator()
-    thresholds = MarketRegimeThresholds(
-        min_trend_strength_ratio=max(0.0, min_gap),
-        low_volatility_ratio=max(0.0, min_range),
-    )
     cash = starting_cash
     qty = initial_qty
     entry_cost_basis = 0.0
@@ -590,14 +742,14 @@ def run_sma_backtest(
         asset_qty=initial_qty,
     )
     closed_pnls: list[float] = []
-    prev_above: bool | None = None
     model = execution_model or FixedBpsExecutionModel(fee_rate=fee_rate, slippage_bps=slippage_bps)
-    timing_policy = execution_timing_policy or ExecutionTimingPolicy()
 
-    for index in range(long_n, len(candles)):
+    for event in decision_events:
+        event_extra = event.extra_payload
+        index = int(event_extra["index"])
         candle = candles[index]
         mark_boundary_ts = candle_close_ts(candle, interval=dataset.interval)
-        decision_boundary_ts = mark_boundary_ts + int(timing_policy.decision_guard_ms)
+        decision_boundary_ts = int(event.decision_ts)
         cash, qty, entry_cost_basis, entry_regime_snapshot, entry_ts, entry_price, entry_decision_hash, open_trade_path, entry_fee, entry_slippage, fee_total, slippage_total = _apply_pending_fills(
             pending_fills=pending_fills,
             trades=trades,
@@ -636,28 +788,11 @@ def run_sma_backtest(
             slippage_total=slippage_total,
             closed_pnls=closed_pnls,
         )
-        prev_short = short_sma_values[index]
-        prev_long = long_sma_values[index]
-        curr_short = short_sma_values[index + 1]
-        curr_long = long_sma_values[index + 1]
-        if prev_short is None or prev_long is None or curr_short is None or curr_long is None:
-            continue
-        above = curr_short > curr_long
-        regime_snapshot = classify_market_regime_from_arrays(
-            closes=closes,
-            highs=highs,
-            lows=lows,
-            volumes=volumes,
-            index=index,
-            short_sma=curr_short,
-            long_sma=curr_long,
-            volatility_window=volatility_window,
-            volume_window=volume_window,
-            liquidity_window=liquidity_window,
-            thresholds=thresholds,
-            overextended_lookback=overextended_lookback,
-            overextended_max_return_ratio=overextended_max_return_ratio,
-        ).as_dict()
+        prev_short = float(event_extra["prev_s"])
+        prev_long = float(event_extra["prev_l"])
+        curr_short = float(event_extra["curr_s"])
+        curr_long = float(event_extra["curr_l"])
+        regime_snapshot = dict(event_extra["regime_snapshot"])
         regime_coverage_accumulator.update(regime_snapshot)
         if accumulator.retain_full_detail():
             regime_snapshots.append(regime_snapshot)
@@ -669,43 +804,14 @@ def run_sma_backtest(
         pending_buy_qty = sum(item.qty for item in pending_fills if item.side == "BUY")
         pending_sell_qty = sum(item.qty for item in pending_fills if item.side == "SELL")
         sellable_qty = max(0.0, qty - pending_sell_qty)
-        entry_decision = evaluate_sma_entry_decision_from_features(
-            prev_s=prev_short,
-            prev_l=prev_long,
-            curr_s=curr_short,
-            curr_l=curr_long,
-            gap_ratio=abs((curr_short - curr_long) / curr_long) if curr_long != 0.0 else 0.0,
-            volatility_ratio=close_volatility_ratios[index],
-            overextended_ratio=overextended_ratios[index],
-            market_regime_snapshot=regime_snapshot,
-            min_gap_ratio=min_gap,
-            min_volatility_ratio=min_range,
-            overextended_max_return_ratio=overextended_max_return_ratio,
-            slippage_bps=float(effective_parameters.get("STRATEGY_ENTRY_SLIPPAGE_BPS", slippage_bps) or 0.0),
-            live_fee_rate_estimate=float(effective_parameters.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-            entry_edge_buffer_ratio=float(effective_parameters.get("ENTRY_EDGE_BUFFER_RATIO") or 0.0),
-            cost_edge_enabled=bool(effective_parameters.get("SMA_COST_EDGE_ENABLED", True)),
-            cost_edge_min_ratio=float(effective_parameters.get("SMA_COST_EDGE_MIN_RATIO") or 0.0),
-            market_regime_enabled=bool(effective_parameters.get("SMA_MARKET_REGIME_ENABLED", True)),
-            candidate_regime_policy=None,
-        )
-        raw_signal = "HOLD"
-        raw_reason = "sma no crossover"
-        if prev_above is not None:
-            if not prev_above and above:
-                raw_signal = "BUY"
-                raw_reason = "sma golden cross"
-            elif prev_above and not above:
-                raw_signal = "SELL"
-                raw_reason = "sma dead cross"
-        blocked_filters = list(entry_decision.blocked_filters) if raw_signal in {"BUY", "SELL"} else []
-        raw_filter_would_block = bool(
-            raw_signal in {"BUY", "SELL"}
-            and (blocked_filters or entry_decision.market_regime_triggered or entry_decision.candidate_regime_triggered)
-        )
-        entry_filter_blocked = bool(raw_signal == "BUY" and raw_filter_would_block)
-        entry_signal = "HOLD" if entry_filter_blocked else raw_signal
-        entry_reason = entry_decision.entry_reason if entry_filter_blocked else raw_reason
+        entry_decision = event_extra["entry_decision"]
+        raw_signal = str(event.raw_signal or "HOLD").upper()
+        raw_reason = str(event_extra["raw_reason"])
+        blocked_filters = list(event.blocked_filters)
+        raw_filter_would_block = bool(event_extra["raw_filter_would_block"])
+        entry_filter_blocked = bool(event_extra["entry_filter_blocked"])
+        entry_signal = str(event.entry_signal or raw_signal).upper()
+        entry_reason = event.reason
         gap_ratio = entry_decision.gap_ratio
         range_ratio = entry_decision.volatility_ratio
         if qty > 1e-12 and entry_price is not None:
@@ -718,7 +824,7 @@ def run_sma_backtest(
                     "unrealized_pnl_pct": pnl_ratio * 100.0,
                 }
             )
-        if not entry_filter_blocked and prev_above is not None:
+        if not entry_filter_blocked and event_extra["prev_above"] is not None:
             if entry_signal == "BUY" and qty <= 0.0 and pending_buy_qty <= 0.0:
                 action = "BUY"
         if sellable_qty > 0.0:
@@ -893,9 +999,8 @@ def run_sma_backtest(
                     cash=mark_cash,
                     asset_qty=mark_qty,
                 )
-                prev_above = above
-                accumulator.maybe_emit_heartbeat(index - long_n + 1)
-                accumulator.check_limits(candles_processed=index - long_n + 1, trades=trades)
+                accumulator.maybe_emit_heartbeat(int(event_extra["processed_count"]))
+                accumulator.check_limits(candles_processed=int(event_extra["processed_count"]), trades=trades)
                 continue
             spend = cash * buy_fraction
             fill = model.simulate(
@@ -938,9 +1043,8 @@ def run_sma_backtest(
                     cash=mark_cash,
                     asset_qty=mark_qty,
                 )
-                prev_above = above
-                accumulator.maybe_emit_heartbeat(index - long_n + 1)
-                accumulator.check_limits(candles_processed=index - long_n + 1, trades=trades)
+                accumulator.maybe_emit_heartbeat(int(event_extra["processed_count"]))
+                accumulator.check_limits(candles_processed=int(event_extra["processed_count"]), trades=trades)
                 continue
             exec_price = float(fill.avg_fill_price)
             fee = fill.fee
@@ -1039,9 +1143,8 @@ def run_sma_backtest(
                     cash=mark_cash,
                     asset_qty=mark_qty,
                 )
-                prev_above = above
-                accumulator.maybe_emit_heartbeat(index - long_n + 1)
-                accumulator.check_limits(candles_processed=index - long_n + 1, trades=trades)
+                accumulator.maybe_emit_heartbeat(int(event_extra["processed_count"]))
+                accumulator.check_limits(candles_processed=int(event_extra["processed_count"]), trades=trades)
                 continue
             fill = model.simulate(
                 ExecutionRequest(
@@ -1083,9 +1186,8 @@ def run_sma_backtest(
                     cash=mark_cash,
                     asset_qty=mark_qty,
                 )
-                prev_above = above
-                accumulator.maybe_emit_heartbeat(index - long_n + 1)
-                accumulator.check_limits(candles_processed=index - long_n + 1, trades=trades)
+                accumulator.maybe_emit_heartbeat(int(event_extra["processed_count"]))
+                accumulator.check_limits(candles_processed=int(event_extra["processed_count"]), trades=trades)
                 continue
             exec_price = float(fill.avg_fill_price)
             sell_qty = fill.filled_qty
@@ -1165,9 +1267,8 @@ def run_sma_backtest(
             cash=mark_cash,
             asset_qty=mark_qty,
         )
-        prev_above = above
-        accumulator.maybe_emit_heartbeat(index - long_n + 1)
-        accumulator.check_limits(candles_processed=index - long_n + 1, trades=trades)
+        accumulator.maybe_emit_heartbeat(int(event_extra["processed_count"]))
+        accumulator.check_limits(candles_processed=int(event_extra["processed_count"]), trades=trades)
 
     last = candles[-1]
     last_mark_ts = candle_close_ts(last, interval=dataset.interval)
