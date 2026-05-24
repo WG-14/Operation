@@ -16,8 +16,9 @@ if TYPE_CHECKING:
 class BacktestKernel:
     """Stable common-kernel API for decision-event backtests.
 
-    Transitional boundary: the public API lives in this module, while the
-    helper-heavy implementation still delegates to ``backtest_engine``.
+    Transitional boundary: the public API lives in this module. The helper-heavy
+    implementation is still hosted privately in ``backtest_engine`` until that
+    helper graph can be split without duplicating execution/accounting logic.
     """
 
     def run(
@@ -64,12 +65,12 @@ def run_decision_event_backtest(
     portfolio_policy: PortfolioPolicy | None = None,
     context: BacktestRunContext | None = None,
 ) -> BacktestRun:
-    # Transitional compatibility boundary: new call sites should import this
-    # module, while the implementation remains in backtest_engine until the
-    # surrounding helper graph can be split without a circular import.
-    from .backtest_engine import run_decision_event_backtest as _run_decision_event_backtest
+    # Transitional implementation boundary: public call sites enter here, while
+    # the single implementation remains private in backtest_engine until the
+    # surrounding helper graph can be split without behavior drift.
+    from .backtest_engine import _run_decision_event_backtest_impl
 
-    return _run_decision_event_backtest(
+    return _run_decision_event_backtest_impl(
         dataset=dataset,
         strategy_name=strategy_name,
         parameter_values=parameter_values,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+from bithumb_bot.research import backtest_engine, backtest_kernel
 from bithumb_bot.research.backtest_engine import BacktestRunContext
-from bithumb_bot.research import backtest_kernel
 from bithumb_bot.research.backtest_kernel import BacktestKernel, run_decision_event_backtest
 from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
 from bithumb_bot.research.decision_event import ResearchDecisionEvent
@@ -246,8 +246,15 @@ def test_backtest_kernel_class_preserves_decision_event_api_behavior() -> None:
     assert via_class.resource_usage["trade_ledger_hash"] == via_function.resource_usage["trade_ledger_hash"]
 
 
-def test_backtest_kernel_module_declares_transitional_engine_delegate_boundary() -> None:
+def test_backtest_kernel_module_declares_transitional_private_impl_boundary() -> None:
     source = inspect.getsource(backtest_kernel.run_decision_event_backtest)
 
-    assert "Transitional compatibility boundary" in source
-    assert "from .backtest_engine import run_decision_event_backtest as _run_decision_event_backtest" in source
+    assert "Transitional implementation boundary" in source
+    assert "from .backtest_engine import _run_decision_event_backtest_impl" in source
+
+
+def test_backtest_engine_public_entrypoint_delegates_to_kernel_boundary() -> None:
+    source = inspect.getsource(backtest_engine.run_decision_event_backtest)
+
+    assert "Compatibility wrapper for the common backtest kernel boundary" in source
+    assert "from .backtest_kernel import run_decision_event_backtest as _run_decision_event_backtest" in source

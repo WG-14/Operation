@@ -1846,7 +1846,7 @@ def run_buy_and_hold_baseline_backtest(
     )
 
 
-def run_decision_event_backtest(
+def _run_decision_event_backtest_impl(
     *,
     dataset: DatasetSnapshot,
     strategy_name: str,
@@ -1862,9 +1862,10 @@ def run_decision_event_backtest(
 ) -> BacktestRun:
     """Execute strategy decision events through the shared research backtest kernel.
 
-    Import new call sites from ``bithumb_bot.research.backtest_kernel``. This
-    compatibility entrypoint remains for existing callers while the helper graph
-    in this module is split into a standalone implementation module.
+    Private implementation used by ``backtest_kernel`` while the helper graph in
+    this module is split into a standalone implementation module. Public callers
+    must enter through ``bithumb_bot.research.backtest_kernel`` or the
+    compatibility wrapper below.
     """
     from .strategy_registry import resolve_research_strategy_plugin
 
@@ -2523,6 +2524,44 @@ def run_decision_event_backtest(
             retained_regime_snapshot_count=len(regime_snapshots),
         ),
         audit_trace_index=audit_trace_index,
+    )
+
+
+def run_decision_event_backtest(
+    *,
+    dataset: DatasetSnapshot,
+    strategy_name: str,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    decision_events: tuple[ResearchDecisionEvent, ...],
+    parameter_stability_score: float | None = None,
+    execution_model: ExecutionModel | None = None,
+    execution_timing_policy: ExecutionTimingPolicy | None = None,
+    portfolio_policy: PortfolioPolicy | None = None,
+    context: BacktestRunContext | None = None,
+) -> BacktestRun:
+    """Compatibility wrapper for the common backtest kernel boundary.
+
+    New call sites should import ``run_decision_event_backtest`` from
+    ``bithumb_bot.research.backtest_kernel``. This legacy module entrypoint
+    deliberately routes through that boundary so monkeypatches and contract tests
+    observe the same public API used by strategy adapters.
+    """
+    from .backtest_kernel import run_decision_event_backtest as _run_decision_event_backtest
+
+    return _run_decision_event_backtest(
+        dataset=dataset,
+        strategy_name=strategy_name,
+        parameter_values=parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        decision_events=decision_events,
+        parameter_stability_score=parameter_stability_score,
+        execution_model=execution_model,
+        execution_timing_policy=execution_timing_policy,
+        portfolio_policy=portfolio_policy,
+        context=context,
     )
 
 
