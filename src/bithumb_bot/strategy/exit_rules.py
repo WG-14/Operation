@@ -198,20 +198,28 @@ def merge_exit_rules(
     strategy_exit_rules: list[ExitRule],
 ) -> list[ExitRule]:
     """Preserve common risk exits while allowing plugin-owned strategy exits."""
+    if not strategy_exit_rules:
+        return list(common_exit_rules)
+
+    common_by_name = {rule.name: rule for rule in common_exit_rules}
+    strategy_names = {rule.name for rule in strategy_exit_rules}
+
+    if not any(name in common_by_name for name in strategy_names):
+        return [*common_exit_rules, *strategy_exit_rules]
+
     merged: list[ExitRule] = []
     seen: set[str] = set()
-    common_names = {rule.name for rule in common_exit_rules}
-    strategy_names = {rule.name for rule in strategy_exit_rules}
-    if strategy_exit_rules and common_names <= strategy_names:
-        ordered_sources = (strategy_exit_rules, common_exit_rules)
-    else:
-        ordered_sources = (common_exit_rules, strategy_exit_rules)
-    for source in ordered_sources:
-        for rule in source:
-            if rule.name in seen:
-                continue
-            merged.append(rule)
-            seen.add(rule.name)
+    for rule in strategy_exit_rules:
+        authoritative_rule = common_by_name.get(rule.name, rule)
+        if authoritative_rule.name in seen:
+            continue
+        merged.append(authoritative_rule)
+        seen.add(authoritative_rule.name)
+    for rule in common_exit_rules:
+        if rule.name in seen:
+            continue
+        merged.append(rule)
+        seen.add(rule.name)
     return merged
 
 

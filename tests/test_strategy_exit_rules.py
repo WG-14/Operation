@@ -9,10 +9,12 @@ from bithumb_bot.db_core import ensure_db
 from bithumb_bot.strategy.base import PositionContext
 
 from bithumb_bot.strategy.exit_rules import (
+    MaxHoldingTimeExitRule,
     OppositeCrossExitRule,
     StopLossExitRule,
     create_exit_rules,
     create_sma_exit_rules,
+    merge_exit_rules,
 )
 from bithumb_bot.strategy.sma import create_sma_strategy, create_sma_with_filter_strategy
 
@@ -188,6 +190,97 @@ def test_positive_stop_loss_ratio_requires_stop_loss_rule() -> None:
             live_fee_rate_estimate=0.0,
             small_loss_tolerance_ratio=0.0,
         )
+
+
+def test_common_exit_factory_rejects_sma_owned_opposite_cross() -> None:
+    with pytest.raises(ValueError, match="unknown exit rule='opposite_cross'"):
+        create_exit_rules(
+            rule_names=["stop_loss", "opposite_cross"],
+            stop_loss_ratio=0.01,
+            max_holding_sec=60.0,
+        )
+
+
+def test_sma_exit_factory_still_supports_plugin_owned_opposite_cross() -> None:
+    rules = create_sma_exit_rules(
+        rule_names=["stop_loss", "opposite_cross", "max_holding_time"],
+        stop_loss_ratio=0.01,
+        max_holding_sec=60.0,
+        min_take_profit_ratio=0.0,
+        live_fee_rate_estimate=0.0,
+        small_loss_tolerance_ratio=0.0,
+    )
+
+    assert [rule.name for rule in rules] == ["stop_loss", "opposite_cross", "max_holding_time"]
+
+
+def test_merge_exit_rules_preserves_common_stop_loss_when_plugin_returns_empty_list() -> None:
+    common = [
+        StopLossExitRule(stop_loss_ratio=0.05),
+        MaxHoldingTimeExitRule(max_holding_sec=60.0),
+    ]
+
+    merged = merge_exit_rules(common_exit_rules=common, strategy_exit_rules=[])
+
+    assert merged == common
+    decision = merged[0].evaluate(
+        position=PositionContext(in_position=True, entry_price=100.0, qty_open=1.0, unrealized_pnl_ratio=-0.06),
+        candle_ts=1_700_000_000_000,
+        market_price=94.0,
+        signal_context={"base_signal": "HOLD"},
+    )
+    assert decision.should_exit is True
+    assert decision.context["threshold_ratio"] == 0.05
+
+
+def test_merge_exit_rules_preserves_common_max_holding_when_plugin_returns_custom_rule() -> None:
+    class CustomExitRule:
+        name = "custom_strategy_exit"
+
+        def evaluate(self, *, position, candle_ts, market_price, signal_context):
+            return StopLossExitRule(stop_loss_ratio=1.0).evaluate(
+                position=position,
+                candle_ts=candle_ts,
+                market_price=market_price,
+                signal_context=signal_context,
+            )
+
+    common = [MaxHoldingTimeExitRule(max_holding_sec=60.0)]
+    custom = CustomExitRule()
+
+    merged = merge_exit_rules(common_exit_rules=common, strategy_exit_rules=[custom])
+
+    assert [rule.name for rule in merged] == ["max_holding_time", "custom_strategy_exit"]
+    decision = merged[0].evaluate(
+        position=PositionContext(
+            in_position=True,
+            entry_price=100.0,
+            qty_open=1.0,
+            holding_time_sec=60.0,
+        ),
+        candle_ts=1_700_000_000_000,
+        market_price=100.0,
+        signal_context={"base_signal": "HOLD"},
+    )
+    assert decision.should_exit is True
+
+
+def test_merge_exit_rules_uses_common_rule_for_duplicate_common_name_while_preserving_sma_order() -> None:
+    common_stop = StopLossExitRule(stop_loss_ratio=0.05)
+    common_max_hold = MaxHoldingTimeExitRule(max_holding_sec=60.0)
+    plugin_stop = StopLossExitRule(stop_loss_ratio=0.50)
+    plugin_opposite = OppositeCrossExitRule()
+    plugin_max_hold = MaxHoldingTimeExitRule(max_holding_sec=3600.0)
+
+    merged = merge_exit_rules(
+        common_exit_rules=[common_stop, common_max_hold],
+        strategy_exit_rules=[plugin_stop, plugin_opposite, plugin_max_hold],
+    )
+
+    assert [rule.name for rule in merged] == ["stop_loss", "opposite_cross", "max_holding_time"]
+    assert merged[0] is common_stop
+    assert merged[1] is plugin_opposite
+    assert merged[2] is common_max_hold
 
 
 def test_runtime_raw_buy_open_position_checks_stop_loss_before_entry_gate(

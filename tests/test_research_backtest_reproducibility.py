@@ -12,7 +12,7 @@ import pytest
 from bithumb_bot.paths import PathManager
 from bithumb_bot.canonical_decision import export_research_decisions, export_runtime_replay_decisions
 from bithumb_bot.decision_equivalence import compare_decision_equivalence
-from bithumb_bot.research import backtest_engine, backtest_kernel
+from bithumb_bot.research import backtest_engine, backtest_kernel, strategy_registry
 from bithumb_bot.research.backtest_engine import (
     BacktestHeartbeatPolicy,
     BacktestResourceLimitExceeded,
@@ -2735,6 +2735,38 @@ def test_sma_common_kernel_preserves_stop_loss_exit_policy() -> None:
         },
         expected_exit_rule="stop_loss",
     )
+
+
+def test_common_kernel_preserves_stop_loss_when_plugin_exit_factory_returns_empty_list(monkeypatch) -> None:
+    plugin = strategy_registry.resolve_research_strategy_plugin("sma_with_filter")
+    patched = replace(plugin, exit_rule_factory=lambda _policy, _params, _fee: [])
+    monkeypatch.setitem(strategy_registry._RESEARCH_STRATEGY_PLUGINS, "sma_with_filter", patched)
+
+    result = backtest_engine.run_sma_backtest_via_kernel(
+        dataset=_stop_loss_dataset(),
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "STRATEGY_EXIT_RULES": "stop_loss",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.05,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        portfolio_policy=legacy_research_portfolio_policy(),
+        context=BacktestRunContext(report_detail="full"),
+    )
+
+    stop_loss_decision = next(item for item in result.decisions if item["exit_rule"] == "stop_loss")
+    assert stop_loss_decision["exit_evaluations"][0]["rule_source"] == "common_risk"
+    assert any(trade.exit_rule == "stop_loss" for trade in result.closed_trades)
 
 
 def test_sma_common_kernel_preserves_max_holding_exit_policy() -> None:
