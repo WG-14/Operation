@@ -2641,6 +2641,90 @@ def test_sma_common_kernel_matches_legacy_sma_execution_accounting_and_metrics()
     assert all(decision["strategy_plugin_contract"]["name"] == "sma_with_filter" for decision in via_kernel.decisions)
 
 
+def _assert_sma_kernel_matches_legacy_for_exit_policy(
+    *,
+    dataset: DatasetSnapshot,
+    parameter_values: dict[str, object],
+    expected_exit_rule: str,
+) -> None:
+    kwargs = {
+        "dataset": dataset,
+        "parameter_values": parameter_values,
+        "fee_rate": 0.0,
+        "slippage_bps": 0.0,
+        "portfolio_policy": legacy_research_portfolio_policy(),
+        "context": BacktestRunContext(report_detail="full"),
+    }
+
+    legacy = backtest_engine._run_sma_backtest_legacy(**kwargs)
+    via_kernel = backtest_engine.run_sma_backtest_via_kernel(**kwargs)
+
+    assert [trade["side"] for trade in via_kernel.trades] == [trade["side"] for trade in legacy.trades]
+    assert len(via_kernel.trades) == len(legacy.trades)
+    assert len(via_kernel.closed_trades) == len(legacy.closed_trades)
+    assert via_kernel.metrics.as_dict() == legacy.metrics.as_dict()
+    assert via_kernel.metrics_v2.as_dict() == legacy.metrics_v2.as_dict()
+    assert via_kernel.execution_event_summary == legacy.execution_event_summary
+    assert via_kernel.resource_usage["trade_ledger_hash"] == legacy.resource_usage["trade_ledger_hash"]
+    assert via_kernel.resource_usage["equity_curve_hash"] == legacy.resource_usage["equity_curve_hash"]
+    assert via_kernel.resource_usage["decision_hash"] == legacy.resource_usage["decision_hash"]
+    assert via_kernel.resource_usage["behavior_hash"] == legacy.resource_usage["behavior_hash"]
+    # The v2 composite includes decision-event adapter provenance. The legacy
+    # loop never emitted that metadata, so equality here would mask the boundary
+    # that the common kernel is meant to make visible.
+    assert via_kernel.resource_usage["composite_behavior_hash_v2"] != legacy.resource_usage[
+        "composite_behavior_hash_v2"
+    ]
+    assert via_kernel.resource_usage["common_decision_behavior_hash"].startswith("sha256:")
+    assert via_kernel.resource_usage["strategy_behavior_hash"].startswith("sha256:")
+    assert via_kernel.resource_usage["composite_behavior_hash_v2"].startswith("sha256:")
+    assert via_kernel.strategy_diagnostics == legacy.strategy_diagnostics
+    assert any(decision["exit_rule"] == expected_exit_rule for decision in via_kernel.decisions)
+    assert any(trade.exit_rule == expected_exit_rule for trade in via_kernel.closed_trades)
+
+
+def test_sma_common_kernel_matches_legacy_stop_loss_exit_policy() -> None:
+    _assert_sma_kernel_matches_legacy_for_exit_policy(
+        dataset=_stop_loss_dataset(),
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "STRATEGY_EXIT_RULES": "stop_loss,opposite_cross,max_holding_time",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.05,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+        expected_exit_rule="stop_loss",
+    )
+
+
+def test_sma_common_kernel_matches_legacy_max_holding_exit_policy() -> None:
+    _assert_sma_kernel_matches_legacy_for_exit_policy(
+        dataset=_max_holding_dataset(),
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "STRATEGY_EXIT_RULES": "opposite_cross,max_holding_time",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.0,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 2,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+        expected_exit_rule="max_holding_time",
+    )
+
+
 def test_sma_common_kernel_insufficient_data_does_not_call_legacy(monkeypatch) -> None:
     snapshot = _snapshot_from_closes([100, 101, 102])
 

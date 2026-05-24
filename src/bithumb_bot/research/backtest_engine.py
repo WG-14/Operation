@@ -779,6 +779,11 @@ def _run_sma_backtest_legacy(
     portfolio_policy: PortfolioPolicy | None = None,
     context: BacktestRunContext | None = None,
 ) -> BacktestRun:
+    """Transitional golden-reference path for SMA/kernel compatibility tests.
+
+    Production and validation callers must use ``run_sma_backtest()``, which
+    delegates to the common decision-event kernel.
+    """
     from .strategy_registry import resolve_research_strategy_plugin
 
     strategy_plugin = resolve_research_strategy_plugin("sma_with_filter")
