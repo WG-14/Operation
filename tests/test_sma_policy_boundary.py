@@ -27,8 +27,10 @@ from bithumb_bot.research.experiment_manifest import (
     PositionSizingPolicy,
 )
 from bithumb_bot import engine
-from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
-from bithumb_bot.strategy import sma as runtime_sma
+from bithumb_bot import runtime_position_state_normalizer
+from bithumb_bot import runtime_sma_snapshot
+from bithumb_bot import runtime_sma_snapshot_builder as runtime_sma
+from bithumb_bot.strategy.sma import SmaWithFilterStrategy, create_sma_with_filter_strategy
 from bithumb_bot.strategy.exit_rules import ExitPolicyConfig, evaluate_sma_exit_policy
 from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
 
@@ -580,11 +582,13 @@ def test_research_kernel_open_snapshot_matches_live_open_exit_policy_fields() ->
 
 def test_runtime_decide_is_read_only_and_normalization_boundary_is_explicit() -> None:
     load_position_source = inspect.getsource(runtime_sma._load_position_context)
-    normalizer_source = inspect.getsource(runtime_sma.PositionStateNormalizer.normalize_and_persist)
-    decide_source = inspect.getsource(runtime_sma.SmaWithFilterStrategy.decide)
-    normalized_db_source = inspect.getsource(runtime_sma.SmaWithFilterStrategy._decide_from_normalized_db)
+    normalizer_source = inspect.getsource(
+        runtime_position_state_normalizer.PositionStateNormalizer.normalize_and_persist
+    )
     builder_source = inspect.getsource(runtime_sma.build_sma_with_filter_decision_from_normalized_db)
     orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_snapshot_from_db)
+    runtime_boundary_source = inspect.getsource(runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db)
+    runtime_boundary_module_source = inspect.getsource(runtime_sma_snapshot)
 
     assert "mark_harmless_dust_positions" not in load_position_source
     assert "reclassify_non_executable_open_exposure" not in load_position_source
@@ -592,15 +596,14 @@ def test_runtime_decide_is_read_only_and_normalization_boundary_is_explicit() ->
     assert "mark_harmless_dust_positions" in normalizer_source
     assert "reclassify_non_executable_open_exposure" in normalizer_source
     assert "conn.commit()" in normalizer_source
-    assert "normalize_and_persist(" not in decide_source
-    assert "build_sma_with_filter_decision_from_normalized_db(" in decide_source
-    assert "build_sma_with_filter_decision_from_normalized_db(" in normalized_db_source
     assert "_load_position_context(" in builder_source
     assert "evaluate_sma_final_decision(" in builder_source
     assert "normalize_and_persist(" in orchestration_source
     assert "strategy.decide(" not in orchestration_source
     assert "_decide_from_normalized_db(" not in orchestration_source
     assert "build_sma_with_filter_decision_from_normalized_db(" in orchestration_source
+    assert "_runtime_snapshot_from_db(" in runtime_boundary_source
+    assert "decide_sma_with_filter_snapshot_from_db as _strategy_snapshot_from_db" not in runtime_boundary_module_source
 
 
 class _CommitCountingConnection:
@@ -674,15 +677,19 @@ def test_load_position_context_does_not_commit() -> None:
 
 def test_position_state_normalizer_is_the_commit_boundary(monkeypatch) -> None:
     wrapped = _CommitCountingConnection(_build_candle_db([10.0, 10.0, 10.0, 10.0, 11.0]))
-    monkeypatch.setattr(runtime_sma, "mark_harmless_dust_positions", lambda *args, **kwargs: 1)
     monkeypatch.setattr(
-        runtime_sma,
+        runtime_position_state_normalizer,
+        "mark_harmless_dust_positions",
+        lambda *args, **kwargs: 1,
+    )
+    monkeypatch.setattr(
+        runtime_position_state_normalizer,
         "reclassify_non_executable_open_exposure",
         lambda *args, **kwargs: 0,
     )
 
     try:
-        updated = runtime_sma.PositionStateNormalizer().normalize_and_persist(
+        updated = runtime_position_state_normalizer.PositionStateNormalizer().normalize_and_persist(
             wrapped,
             pair="BTC_KRW",
             market_price=11.0,
@@ -767,9 +774,9 @@ def test_snapshot_orchestration_does_not_call_legacy_decide_facade(monkeypatch) 
     def _raise_legacy_normalized_db_decide(*args, **kwargs):
         raise AssertionError("legacy normalized DB strategy method was called")
 
-    monkeypatch.setattr(runtime_sma.SmaWithFilterStrategy, "decide", _raise_legacy_decide)
+    monkeypatch.setattr(SmaWithFilterStrategy, "decide", _raise_legacy_decide)
     monkeypatch.setattr(
-        runtime_sma.SmaWithFilterStrategy,
+        SmaWithFilterStrategy,
         "_decide_from_normalized_db",
         _raise_legacy_normalized_db_decide,
     )
@@ -808,9 +815,9 @@ def test_compute_signal_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -
         events.append("builder")
         return original_builder(conn, strategy, through_ts_ms=through_ts_ms)
 
-    monkeypatch.setattr(runtime_sma.SmaWithFilterStrategy, "decide", _raise_legacy_decide)
+    monkeypatch.setattr(SmaWithFilterStrategy, "decide", _raise_legacy_decide)
     monkeypatch.setattr(
-        runtime_sma.SmaWithFilterStrategy,
+        SmaWithFilterStrategy,
         "_decide_from_normalized_db",
         _raise_legacy_normalized_db_decide,
     )
@@ -863,9 +870,9 @@ def test_runtime_replay_export_uses_direct_sma_with_filter_snapshot_path(monkeyp
         events.append("builder")
         return original_builder(conn, strategy, through_ts_ms=through_ts_ms)
 
-    monkeypatch.setattr(runtime_sma.SmaWithFilterStrategy, "decide", _raise_legacy_decide)
+    monkeypatch.setattr(SmaWithFilterStrategy, "decide", _raise_legacy_decide)
     monkeypatch.setattr(
-        runtime_sma.SmaWithFilterStrategy,
+        SmaWithFilterStrategy,
         "_decide_from_normalized_db",
         _raise_legacy_normalized_db_decide,
     )

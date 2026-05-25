@@ -13,10 +13,8 @@ from bithumb_bot.research.backtest_kernel import run_decision_event_backtest
 from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
 from bithumb_bot.research.decision_event import ResearchDecisionEvent
 from bithumb_bot.research.experiment_manifest import DateRange
-from bithumb_bot.strategy.sma import (
-    build_sma_with_filter_decision_from_normalized_db,
-    create_sma_with_filter_strategy,
-)
+from bithumb_bot.runtime_sma_snapshot_builder import build_sma_with_filter_decision_from_normalized_db
+from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
 
 
 class CountingConnection(sqlite3.Connection):

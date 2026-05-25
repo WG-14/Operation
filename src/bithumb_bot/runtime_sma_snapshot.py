@@ -4,12 +4,12 @@ import sqlite3
 from typing import Any
 
 from .execution_service import build_execution_decision_summary
-from .strategy.base import StrategyDecision
-from .strategy.sma import (
-    PositionStateNormalizer,
-    SmaWithFilterStrategy,
-    decide_sma_with_filter_snapshot_from_db as _strategy_snapshot_from_db,
+from .runtime_position_state_normalizer import PositionStateNormalizer
+from .runtime_sma_snapshot_builder import (
+    decide_sma_with_filter_snapshot_from_db as _runtime_snapshot_from_db,
 )
+from .strategy.base import StrategyDecision
+from .strategy.sma import SmaWithFilterStrategy
 
 SMA_RUNTIME_BOUNDARY_STAGES = {
     "snapshot_builder": "runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db",
@@ -40,7 +40,7 @@ def decide_sma_with_filter_snapshot_from_db(
     callers, but live/replay orchestration should bind here so the mutable DB
     normalization boundary is explicit and separately testable.
     """
-    decision = _strategy_snapshot_from_db(
+    decision = _runtime_snapshot_from_db(
         conn,
         strategy,
         through_ts_ms=through_ts_ms,
