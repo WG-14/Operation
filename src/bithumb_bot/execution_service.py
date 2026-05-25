@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
@@ -9,6 +10,7 @@ from .db_core import ensure_db
 from .decision_contract import apply_decision_contract
 from .decision_context import resolve_canonical_position_exposure_snapshot
 from .execution_order_rules import resolve_execution_order_rules
+from .observability import format_log_kv
 from .oms import build_order_intent_key
 from .order_sizing import build_target_delta_execution_sizing
 from .pre_trade_economics import build_pre_trade_economics_snapshot
@@ -16,6 +18,8 @@ from .target_position import TargetPositionSettings, build_target_position_decis
 
 if False:  # pragma: no cover
     from .broker.base import Broker
+
+RUN_LOG = logging.getLogger("bithumb_bot.run")
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,43 @@ def validate_execution_submit_plan_payload(
     block_reason = str(plan.get("block_reason") or "")
     if not block_reason:
         raise ValueError(f"{field_name}_schema_missing_block_reason")
+
+
+def _log_live_submit_plan_block(
+    *,
+    reason: str,
+    field_name: str,
+    source: object | None = None,
+    side: object | None = None,
+) -> None:
+    RUN_LOG.warning(
+        format_log_kv(
+            "[ORDER_SKIP] invalid execution submit plan",
+            reason=str(reason),
+            field_name=str(field_name),
+            source=str(source or "-"),
+            side=str(side or "-"),
+            execution_engine=_execution_engine(),
+        )
+    )
+
+
+def _live_submit_plan_schema_valid(
+    plan: dict[str, object],
+    *,
+    field_name: str,
+) -> bool:
+    try:
+        validate_execution_submit_plan_payload(plan, field_name=field_name)
+    except ValueError as exc:
+        _log_live_submit_plan_block(
+            reason=str(exc),
+            field_name=field_name,
+            source=plan.get("source"),
+            side=plan.get("side"),
+        )
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -1157,12 +1198,41 @@ class LiveSignalExecutionService:
     harmless_dust_recorder: Callable[..., bool]
 
     def execute(self, request: SignalExecutionRequest) -> dict | None:
-        execution_decision = (
-            dict(request.decision_context.get("execution_decision"))
-            if isinstance(request.decision_context, dict)
-            and isinstance(request.decision_context.get("execution_decision"), dict)
-            else {}
-        )
+        if request.decision_context is not None and not isinstance(request.decision_context, dict):
+            _log_live_submit_plan_block(
+                reason="decision_context_schema_not_object",
+                field_name="decision_context",
+            )
+            return None
+        decision_context = dict(request.decision_context or {})
+        raw_execution_decision = decision_context.get("execution_decision")
+        if raw_execution_decision is not None and not isinstance(raw_execution_decision, dict):
+            _log_live_submit_plan_block(
+                reason="execution_decision_schema_not_object",
+                field_name="execution_decision",
+            )
+            return None
+        execution_decision = dict(raw_execution_decision) if isinstance(raw_execution_decision, dict) else {}
+        if (
+            "target_submit_plan" in execution_decision
+            and execution_decision.get("target_submit_plan") is not None
+            and not isinstance(execution_decision.get("target_submit_plan"), dict)
+        ):
+            _log_live_submit_plan_block(
+                reason="target_submit_plan_schema_not_object",
+                field_name="target_submit_plan",
+            )
+            return None
+        if (
+            "residual_submit_plan" in execution_decision
+            and execution_decision.get("residual_submit_plan") is not None
+            and not isinstance(execution_decision.get("residual_submit_plan"), dict)
+        ):
+            _log_live_submit_plan_block(
+                reason="residual_submit_plan_schema_not_object",
+                field_name="residual_submit_plan",
+            )
+            return None
         residual_plan = (
             dict(execution_decision.get("residual_submit_plan"))
             if isinstance(execution_decision.get("residual_submit_plan"), dict)
@@ -1173,6 +1243,16 @@ class LiveSignalExecutionService:
             if isinstance(execution_decision.get("target_submit_plan"), dict)
             else {}
         )
+        if target_plan and not _live_submit_plan_schema_valid(
+            target_plan,
+            field_name="target_submit_plan",
+        ):
+            return None
+        if residual_plan and not _live_submit_plan_schema_valid(
+            residual_plan,
+            field_name="residual_submit_plan",
+        ):
+            return None
         if _execution_engine() == "target_delta":
             if not target_plan:
                 return None
@@ -1197,6 +1277,11 @@ class LiveSignalExecutionService:
             if plan_qty <= 0.0:
                 return None
             try:
+                if not _live_submit_plan_schema_valid(
+                    target_plan,
+                    field_name="target_submit_plan",
+                ):
+                    return None
                 return self.executor(
                     self.broker,
                     plan_side,
@@ -1232,6 +1317,11 @@ class LiveSignalExecutionService:
             if bool(settings.LIVE_DRY_RUN) or not bool(settings.LIVE_REAL_ORDER_ARMED):
                 return None
             try:
+                if not _live_submit_plan_schema_valid(
+                    residual_plan,
+                    field_name="residual_submit_plan",
+                ):
+                    return None
                 return self.executor(
                     self.broker,
                     request.signal,
@@ -1253,6 +1343,14 @@ class LiveSignalExecutionService:
                     "source": "residual_inventory",
                     "authority": "residual_inventory_policy",
                 }
+        if target_plan or residual_plan:
+            _log_live_submit_plan_block(
+                reason="explicit_submit_plan_not_consumed",
+                field_name="execution_decision",
+                source=(target_plan or residual_plan).get("source"),
+                side=(target_plan or residual_plan).get("side"),
+            )
+            return None
         harmless_dust_preview = None
         if request.signal == "SELL":
             harmless_dust_preview = _canonical_harmless_dust_sell_preview(request.decision_context)
@@ -1281,6 +1379,9 @@ class LiveSignalExecutionService:
                     return None
             finally:
                 suppression_conn.close()
+        # Legacy lot-native live execution path. This branch is intentionally
+        # allowed only when no explicit submit plan was supplied; malformed
+        # explicit plans are blocked above and must not fall through here.
         try:
             return self.executor(
                 self.broker,

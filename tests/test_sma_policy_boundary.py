@@ -13,6 +13,7 @@ from bithumb_bot.core.sma_policy import (
     SmaPolicyConfig,
     evaluate_sma_policy,
 )
+from bithumb_bot.canonical_decision import export_runtime_replay_decisions
 from bithumb_bot.market_regime import MARKET_REGIME_VERSION
 from bithumb_bot.research.backtest_engine import SmaWithFilterDecisionAdapter
 from bithumb_bot.research.backtest_engine import run_sma_backtest
@@ -827,6 +828,62 @@ def test_compute_signal_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -
     assert payload is not None
     assert payload["strategy"] == "sma_with_filter"
     assert payload["policy_decision_hash"].startswith("sha256:")
+    assert events == ["builder"]
+
+
+def test_runtime_replay_export_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -> None:
+    conn = _build_candle_db([10.0] * 11 + [11.0])
+    events: list[str] = []
+    original_builder = runtime_sma.build_sma_with_filter_decision_from_normalized_db
+    strategy = create_sma_with_filter_strategy(
+        short_n=2,
+        long_n=3,
+        pair="BTC_KRW",
+        interval="1m",
+        min_gap_ratio=0.0,
+        volatility_window=3,
+        min_volatility_ratio=0.0,
+        overextended_lookback=1,
+        overextended_max_return_ratio=0.0,
+        slippage_bps=0.0,
+        live_fee_rate_estimate=0.0,
+        entry_edge_buffer_ratio=0.0,
+        cost_edge_enabled=False,
+        market_regime_enabled=False,
+        candidate_regime_policy=_allowing_policy(),
+    )
+
+    def _raise_legacy_decide(*args, **kwargs):
+        raise AssertionError("legacy decide facade was called")
+
+    def _raise_legacy_normalized_db_decide(*args, **kwargs):
+        raise AssertionError("legacy normalized DB strategy method was called")
+
+    def _builder(conn, strategy, *, through_ts_ms=None):
+        events.append("builder")
+        return original_builder(conn, strategy, through_ts_ms=through_ts_ms)
+
+    monkeypatch.setattr(runtime_sma.SmaWithFilterStrategy, "decide", _raise_legacy_decide)
+    monkeypatch.setattr(
+        runtime_sma.SmaWithFilterStrategy,
+        "_decide_from_normalized_db",
+        _raise_legacy_normalized_db_decide,
+    )
+    monkeypatch.setattr(runtime_sma, "build_sma_with_filter_decision_from_normalized_db", _builder)
+
+    try:
+        events_out = export_runtime_replay_decisions(
+            conn=conn,
+            strategy=strategy,
+            through_ts_list=[1_700_000_000_000 + 11 * 60_000],
+            market="BTC_KRW",
+            interval="1m",
+        )
+    finally:
+        conn.close()
+
+    assert len(events_out) == 1
+    assert events_out[0]["strategy_name"] == "sma_with_filter"
     assert events == ["builder"]
 
 

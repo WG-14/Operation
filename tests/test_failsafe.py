@@ -1364,6 +1364,280 @@ def test_target_delta_live_service_blocks_invalid_target_plan_without_fallback(t
     assert recorder_calls == []
 
 
+def _valid_target_submit_plan() -> dict[str, object]:
+    return {
+        "side": "SELL",
+        "source": "target_delta",
+        "authority": "canonical_target_delta_sizing",
+        "final_action": "REBALANCE_TO_TARGET",
+        "qty": 0.0004,
+        "notional_krw": 46_000.0,
+        "target_exposure_krw": 0.0,
+        "current_effective_exposure_krw": 57_500.0,
+        "delta_krw": -46_000.0,
+        "submit_expected": True,
+        "pre_submit_proof_status": "passed",
+        "block_reason": "none",
+        "idempotency_key": "target-delta-test-key",
+    }
+
+
+def _valid_residual_submit_plan() -> dict[str, object]:
+    return {
+        "side": "SELL",
+        "source": "residual_inventory",
+        "authority": "residual_inventory_policy",
+        "final_action": "CLOSE_RESIDUAL_CANDIDATE",
+        "qty": 0.0004998,
+        "notional_krw": 57_816.0,
+        "target_exposure_krw": None,
+        "current_effective_exposure_krw": None,
+        "delta_krw": None,
+        "submit_expected": True,
+        "pre_submit_proof_status": "passed",
+        "block_reason": "none",
+        "idempotency_key": "residual-close-test-key",
+    }
+
+
+@pytest.mark.parametrize(
+    ("case_id", "mutate", "expected_reason"),
+    [
+        (
+            "missing_required_field",
+            lambda plan: plan.pop("notional_krw"),
+            "target_submit_plan_schema_missing_fields:notional_krw",
+        ),
+        (
+            "missing_block_reason",
+            lambda plan: plan.update({"block_reason": ""}),
+            "target_submit_plan_schema_missing_block_reason",
+        ),
+        (
+            "invalid_side",
+            lambda plan: plan.update({"side": "CANCEL"}),
+            "target_submit_plan_schema_invalid_side:CANCEL",
+        ),
+        (
+            "submit_expected_failed_proof",
+            lambda plan: plan.update({"pre_submit_proof_status": "failed"}),
+            "target_submit_plan_schema_submit_expected_with_failed_proof",
+        ),
+    ],
+)
+def test_target_submit_plan_schema_failure_blocks_broker_submit_without_fallback(
+    caplog,
+    case_id,
+    mutate,
+    expected_reason,
+) -> None:
+    object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    target_plan = _valid_target_submit_plan()
+    mutate(target_plan)
+    executor_calls: list[dict[str, object]] = []
+
+    service = LiveSignalExecutionService(
+        broker=_ResidualFakeBroker(),
+        executor=lambda *_args, **kwargs: executor_calls.append(dict(kwargs)) or {"status": "unexpected"},
+        harmless_dust_recorder=lambda **_k: False,
+    )
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="SELL",
+            ts=123,
+            market_price=115_000_000.0,
+            decision_context={
+                "execution_decision": {
+                    "target_submit_plan": target_plan,
+                    "residual_submit_plan": _valid_residual_submit_plan(),
+                }
+            },
+        )
+    )
+
+    assert case_id
+    assert result is None
+    assert executor_calls == []
+    assert expected_reason in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("case_id", "mutate", "expected_reason"),
+    [
+        (
+            "missing_required_field",
+            lambda plan: plan.pop("current_effective_exposure_krw"),
+            "residual_submit_plan_schema_missing_fields:current_effective_exposure_krw",
+        ),
+        (
+            "missing_block_reason",
+            lambda plan: plan.update({"block_reason": ""}),
+            "residual_submit_plan_schema_missing_block_reason",
+        ),
+        (
+            "invalid_side",
+            lambda plan: plan.update({"side": "CANCEL"}),
+            "residual_submit_plan_schema_invalid_side:CANCEL",
+        ),
+        (
+            "submit_expected_failed_proof",
+            lambda plan: plan.update({"pre_submit_proof_status": "failed"}),
+            "residual_submit_plan_schema_submit_expected_with_failed_proof",
+        ),
+    ],
+)
+def test_residual_submit_plan_schema_failure_blocks_broker_submit_without_fallback(
+    caplog,
+    case_id,
+    mutate,
+    expected_reason,
+) -> None:
+    object.__setattr__(settings, "EXECUTION_ENGINE", "lot_native")
+    object.__setattr__(settings, "RESIDUAL_LIVE_SELL_MODE", "enabled")
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    residual_plan = _valid_residual_submit_plan()
+    mutate(residual_plan)
+    executor_calls: list[dict[str, object]] = []
+
+    service = LiveSignalExecutionService(
+        broker=_ResidualFakeBroker(),
+        executor=lambda *_args, **kwargs: executor_calls.append(dict(kwargs)) or {"status": "unexpected"},
+        harmless_dust_recorder=lambda **_k: False,
+    )
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="SELL",
+            ts=123,
+            market_price=115_000_000.0,
+            decision_context={"execution_decision": {"residual_submit_plan": residual_plan}},
+        )
+    )
+
+    assert case_id
+    assert result is None
+    assert executor_calls == []
+    assert expected_reason in caplog.text
+
+
+def test_live_legacy_signal_fallback_is_only_used_without_explicit_submit_plan() -> None:
+    object.__setattr__(settings, "EXECUTION_ENGINE", "lot_native")
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    executor_calls: list[dict[str, object]] = []
+
+    def _legacy_lot_native_executor(_broker, signal, ts, market_price, **kwargs):
+        executor_calls.append(
+            {
+                "signal": signal,
+                "ts": ts,
+                "market_price": market_price,
+                "execution_submit_plan": kwargs.get("execution_submit_plan"),
+            }
+        )
+        return {"status": "submitted"}
+
+    service = LiveSignalExecutionService(
+        broker=_ResidualFakeBroker(),
+        executor=_legacy_lot_native_executor,
+        harmless_dust_recorder=lambda **_k: False,
+    )
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=115_000_000.0,
+            decision_context={"execution_decision": {}},
+        )
+    )
+
+    assert result == {"status": "submitted"}
+    assert executor_calls == [
+        {
+            "signal": "BUY",
+            "ts": 123,
+            "market_price": 115_000_000.0,
+            "execution_submit_plan": None,
+        }
+    ]
+
+
+def test_valid_unconsumed_explicit_submit_plan_does_not_fall_through_to_legacy_signal(
+    caplog,
+) -> None:
+    object.__setattr__(settings, "EXECUTION_ENGINE", "lot_native")
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    executor_calls: list[dict[str, object]] = []
+
+    service = LiveSignalExecutionService(
+        broker=_ResidualFakeBroker(),
+        executor=lambda *_args, **kwargs: executor_calls.append(dict(kwargs)) or {"status": "unexpected"},
+        harmless_dust_recorder=lambda **_k: False,
+    )
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=115_000_000.0,
+            decision_context={"execution_decision": {"target_submit_plan": _valid_target_submit_plan()}},
+        )
+    )
+
+    assert result is None
+    assert executor_calls == []
+    assert "explicit_submit_plan_not_consumed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("decision_context", "expected_reason"),
+    [
+        ("not-a-context", "decision_context_schema_not_object"),
+        ({"execution_decision": "not-a-decision"}, "execution_decision_schema_not_object"),
+        (
+            {"execution_decision": {"target_submit_plan": "not-a-plan"}},
+            "target_submit_plan_schema_not_object",
+        ),
+        (
+            {"execution_decision": {"residual_submit_plan": "not-a-plan"}},
+            "residual_submit_plan_schema_not_object",
+        ),
+    ],
+)
+def test_malformed_execution_context_blocks_legacy_signal_fallback(
+    caplog,
+    decision_context,
+    expected_reason,
+) -> None:
+    object.__setattr__(settings, "EXECUTION_ENGINE", "lot_native")
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    executor_calls: list[dict[str, object]] = []
+
+    service = LiveSignalExecutionService(
+        broker=_ResidualFakeBroker(),
+        executor=lambda *_args, **kwargs: executor_calls.append(dict(kwargs)) or {"status": "unexpected"},
+        harmless_dust_recorder=lambda **_k: False,
+    )
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=115_000_000.0,
+            decision_context=decision_context,
+        )
+    )
+
+    assert result is None
+    assert executor_calls == []
+    assert expected_reason in caplog.text
+
+
 def _target_state(*, exposure_krw: float) -> TargetPositionState:
     return TargetPositionState(
         pair=settings.PAIR,
