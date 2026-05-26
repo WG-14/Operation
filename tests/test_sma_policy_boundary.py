@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from bithumb_bot.core import sma_policy
 from bithumb_bot.core.sma_policy import (
+    EntryExecutionIntent,
     ExecutionConstraintSnapshot,
     MarketWindow,
     PositionSnapshot,
@@ -214,7 +215,10 @@ def test_final_sma_decision_assembler_is_deterministic_and_hashes_policy_materia
 
     assert first == second
     assert first.final_signal == "BUY"
-    assert first.execution_intent == {
+    assert isinstance(first.execution_intent, EntryExecutionIntent)
+    assert first.execution_intent.as_dict() == {
+        "schema_version": 1,
+        "intent_version": 1,
         "side": "BUY",
         "intent": "enter_open_exposure",
         "pair": "BTC_KRW",
@@ -227,6 +231,29 @@ def test_final_sma_decision_assembler_is_deterministic_and_hashes_policy_materia
     assert first.policy_input_hash == second.policy_input_hash
     assert first.policy_decision_hash == second.policy_decision_hash
     assert changed.policy_input_hash != first.policy_input_hash
+
+
+def test_execution_intent_v1_serialization_is_stable() -> None:
+    first = evaluate_sma_final_decision(
+        market=_market_window(),
+        position=_flat_position(),
+        config=_policy_config(),
+        execution_context=ExecutionConstraintSnapshot(fee_rate_for_decision=0.0),
+        exit_policy_config=_exit_policy_config(),
+    )
+    second = evaluate_sma_final_decision(
+        market=_market_window(),
+        position=_flat_position(),
+        config=_policy_config(),
+        execution_context=ExecutionConstraintSnapshot(fee_rate_for_decision=0.0),
+        exit_policy_config=_exit_policy_config(),
+    )
+
+    assert first.execution_intent is not None
+    assert second.execution_intent is not None
+    assert first.execution_intent.as_dict() == second.execution_intent.as_dict()
+    assert first.policy_decision_hash == second.policy_decision_hash
+    assert first.as_trace()["execution_intent"] == first.execution_intent.as_dict()
 
 
 def test_policy_hashes_ignore_transient_fee_authority_timestamps() -> None:
@@ -988,6 +1015,10 @@ def test_replay_bundle_uses_read_only_noop_normalizer(monkeypatch) -> None:
     assert bundle["boundary_stages"]["snapshot_builder"] == (
         "runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db"
     )
+    assert bundle["decision_context_schema_version"] == 1
+    assert bundle["code_provenance"] == {"source": "unavailable"}
+    assert bundle["final_typed_strategy_decision"]["policy_input_hash"] == bundle["policy_input_hash"]
+    assert bundle["execution_decision_summary"]["final_signal"] == bundle["final_typed_strategy_decision"]["final_signal"]
 
 
 def test_compute_signal_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -> None:
@@ -1031,6 +1062,44 @@ def test_compute_signal_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -
     assert events == ["builder"]
 
 
+def test_live_sma_handoff_does_not_serialize_legacy_dict_before_execution_summary(
+    monkeypatch,
+) -> None:
+    conn = _build_candle_db([10.0] * 11 + [11.0])
+    old_pair = engine.settings.PAIR
+    old_interval = engine.settings.INTERVAL
+
+    def _raise_legacy_dict(self):
+        raise AssertionError("legacy dict serialization should not be the runtime handoff")
+
+    monkeypatch.setattr(runtime_sma.RuntimeSmaDecisionResult, "as_legacy_dict", _raise_legacy_dict)
+    try:
+        object.__setattr__(engine.settings, "PAIR", "BTC_KRW")
+        object.__setattr__(engine.settings, "INTERVAL", "1m")
+        handoff = engine.compute_signal_runtime_handoff(
+            conn,
+            2,
+            3,
+            through_ts_ms=1_700_000_000_000 + 11 * 60_000,
+            strategy_name="sma_with_filter",
+        )
+    finally:
+        object.__setattr__(engine.settings, "PAIR", old_pair)
+        object.__setattr__(engine.settings, "INTERVAL", old_interval)
+        conn.close()
+
+    assert isinstance(handoff, runtime_sma.RuntimeSmaDecisionResult)
+    summary = engine.build_execution_decision_summary(
+        decision_context=handoff.legacy_strategy_decision().context,
+        readiness_payload={},
+        raw_signal=handoff.decision.raw_signal,
+        final_signal=handoff.decision.final_signal,
+        final_reason=handoff.decision.final_reason,
+    )
+    assert summary.raw_signal == handoff.decision.raw_signal
+    assert summary.final_signal == handoff.decision.final_signal
+
+
 def test_typed_runtime_sma_result_preserves_policy_hashes_until_legacy_serialization() -> None:
     conn = _build_candle_db([10.0] * 11 + [11.0])
     strategy = create_sma_with_filter_strategy(
@@ -1070,6 +1139,56 @@ def test_typed_runtime_sma_result_preserves_policy_hashes_until_legacy_serializa
     assert result.policy_observability["policy_decision_hash"] == original_policy_decision_hash
     assert legacy_payload["policy_decision_hash"] == original_policy_decision_hash
     assert legacy_payload["pure_policy_trace"]["policy_decision_hash"] == original_policy_decision_hash
+
+
+def test_persistence_context_serializes_typed_policy_and_execution_summary_fields() -> None:
+    conn = _build_candle_db([10.0] * 11 + [11.0])
+    strategy = create_sma_with_filter_strategy(
+        short_n=2,
+        long_n=3,
+        pair="BTC_KRW",
+        interval="1m",
+        min_gap_ratio=0.0,
+        volatility_window=3,
+        min_volatility_ratio=0.0,
+        overextended_lookback=1,
+        overextended_max_return_ratio=0.0,
+        slippage_bps=0.0,
+        live_fee_rate_estimate=0.0,
+        entry_edge_buffer_ratio=0.0,
+        cost_edge_enabled=False,
+        market_regime_enabled=False,
+        candidate_regime_policy=_allowing_policy(),
+    )
+    try:
+        result = runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db(
+            conn,
+            strategy,
+            through_ts_ms=1_700_000_000_000 + 11 * 60_000,
+        )
+    finally:
+        conn.close()
+
+    assert result is not None
+    decision_context = result.legacy_strategy_decision().context
+    summary = engine.build_execution_decision_summary(
+        decision_context=decision_context,
+        readiness_payload={},
+        raw_signal=result.decision.raw_signal,
+        final_signal=result.decision.final_signal,
+        final_reason=result.decision.final_reason,
+    )
+    persisted = engine.prepare_strategy_decision_persistence_context(
+        decision_context=decision_context,
+        execution_decision_summary=summary,
+        readiness_payload={},
+    )
+
+    assert persisted["policy_contract_hash"] == result.decision.policy_contract_hash
+    assert persisted["policy_input_hash"] == result.decision.policy_input_hash
+    assert persisted["policy_decision_hash"] == result.decision.policy_decision_hash
+    assert persisted["execution_decision"]["final_signal"] == summary.final_signal  # type: ignore[index]
+    assert persisted["execution_decision"]["final_action"] == summary.final_action  # type: ignore[index]
 
 
 def test_runtime_replay_export_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -> None:

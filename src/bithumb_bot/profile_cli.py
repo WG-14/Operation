@@ -49,6 +49,7 @@ from .research.parameter_space import candidate_id, iter_parameter_candidates
 from .research.promotion_gate import PromotionGateError, build_candidate_profile
 from .research.strategy_registry import resolve_research_strategy_plugin
 from .research.strategy_spec import materialize_strategy_parameters
+from .research.strategy_spec import strategy_spec_for_name
 from .storage_io import write_json_atomic
 from .broker.order_rules import get_effective_order_rules
 
@@ -447,6 +448,11 @@ def cmd_research_export_decisions(
         params = _candidate_params_from_manifest(manifest, candidate_id_value)
         profile = load_approved_profile(profile_path) if profile_path else None
         promotion_grade_export = profile is not None
+        if promotion_grade_export:
+            _require_explicit_runtime_bound_strategy_parameters(
+                strategy_name=str(manifest.strategy_name),
+                parameter_values=params,
+            )
         profile_hash = _research_export_profile_hash(
             manifest=manifest,
             snapshot=snapshot,
@@ -656,6 +662,23 @@ def cmd_replay_decision(
     else:
         _print_json(payload)
     return 0
+
+
+def _require_explicit_runtime_bound_strategy_parameters(
+    *,
+    strategy_name: str,
+    parameter_values: dict[str, object],
+) -> None:
+    spec = strategy_spec_for_name(strategy_name)
+    explicit = set(parameter_values)
+    required = sorted(
+        set(spec.behavior_affecting_parameter_names) - set(spec.research_only_parameter_names)
+    )
+    missing = [key for key in required if key not in explicit]
+    if missing:
+        raise ValueError(
+            "promotion_runtime_bound_parameter_missing:" + ",".join(missing)
+        )
 
 
 def _candidate_params_from_manifest(manifest: object, wanted_candidate_id: str) -> dict[str, object]:

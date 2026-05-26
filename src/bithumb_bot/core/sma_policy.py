@@ -168,6 +168,50 @@ class ExecutionConstraintSnapshot:
 
 
 @dataclass(frozen=True)
+class ExecutionIntentV1:
+    side: str
+    intent: str
+    pair: str
+    requires_execution_sizing: bool
+    schema_version: int = 1
+    intent_version: int = 1
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": int(self.schema_version),
+            "intent_version": int(self.intent_version),
+            "side": self.side,
+            "intent": self.intent,
+            "pair": self.pair,
+            "requires_execution_sizing": bool(self.requires_execution_sizing),
+        }
+
+
+@dataclass(frozen=True)
+class EntryExecutionIntent(ExecutionIntentV1):
+    budget_model: str = "cash_fraction_capped_by_max_order_krw"
+    budget_fraction_of_cash: float = 0.0
+    max_budget_krw: float = 0.0
+
+    def as_dict(self) -> dict[str, object]:
+        payload = super().as_dict()
+        payload.update(
+            {
+                "budget_model": self.budget_model,
+                "budget_fraction_of_cash": float(self.budget_fraction_of_cash),
+                "max_budget_krw": float(self.max_budget_krw),
+            }
+        )
+        return payload
+
+
+@dataclass(frozen=True)
+class ExitExecutionIntent(ExecutionIntentV1):
+    def as_dict(self) -> dict[str, object]:
+        return super().as_dict()
+
+
+@dataclass(frozen=True)
 class StrategyDecisionV2:
     strategy_name: str
     raw_signal: Signal
@@ -186,7 +230,7 @@ class StrategyDecisionV2:
     protective_exit_overrode_entry: bool
     exit_filter_suppression_prevented: bool
     position_snapshot: PositionSnapshot
-    execution_intent: dict[str, object] | None
+    execution_intent: ExecutionIntentV1 | None
     entry_decision: SmaEntryDecision
     trace: dict[str, object]
     policy_hash: str

@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 
 from bithumb_bot.core.sma_policy import (
+    EntryExecutionIntent,
     ExecutionConstraintSnapshot,
+    ExecutionIntentV1,
+    ExitExecutionIntent,
     MarketWindow,
     PositionSnapshot,
     SmaPolicyConfig,
@@ -100,7 +103,16 @@ def evaluate_sma_final_decision(
         and resolved_exit_signal == "SELL"
         and bool(exit_evaluations)
     )
-    execution_intent = _execution_intent(final_signal=final_signal, market=market, config=config)
+    typed_execution_intent = _execution_intent(
+        final_signal=final_signal,
+        market=market,
+        config=config,
+    )
+    execution_intent = (
+        typed_execution_intent.as_dict()
+        if typed_execution_intent is not None
+        else None
+    )
     trace = dict(entry_decision.trace)
     trace.update(
         {
@@ -156,7 +168,7 @@ def evaluate_sma_final_decision(
         protective_exit_overrode_entry=protective_exit_overrode_entry,
         exit_filter_suppression_prevented=exit_filter_suppression_prevented,
         position_snapshot=position,
-        execution_intent=execution_intent,
+        execution_intent=typed_execution_intent,
         trace=trace,
         policy_hash=policy_hash,
         policy_decision_hash=policy_decision_hash,
@@ -168,22 +180,21 @@ def _execution_intent(
     final_signal: str,
     market: MarketWindow,
     config: SmaPolicyConfig,
-) -> dict[str, object] | None:
+) -> ExecutionIntentV1 | None:
     if final_signal == "BUY":
-        return {
-            "side": "BUY",
-            "intent": "enter_open_exposure",
-            "pair": market.pair,
-            "budget_model": "cash_fraction_capped_by_max_order_krw",
-            "budget_fraction_of_cash": float(config.buy_fraction),
-            "max_budget_krw": float(config.max_order_krw),
-            "requires_execution_sizing": True,
-        }
+        return EntryExecutionIntent(
+            side="BUY",
+            intent="enter_open_exposure",
+            pair=market.pair,
+            requires_execution_sizing=True,
+            budget_fraction_of_cash=float(config.buy_fraction),
+            max_budget_krw=float(config.max_order_krw),
+        )
     if final_signal == "SELL":
-        return {
-            "side": "SELL",
-            "intent": "exit_open_exposure",
-            "pair": market.pair,
-            "requires_execution_sizing": True,
-        }
+        return ExitExecutionIntent(
+            side="SELL",
+            intent="exit_open_exposure",
+            pair=market.pair,
+            requires_execution_sizing=True,
+        )
     return None

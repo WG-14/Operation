@@ -11,6 +11,7 @@ import pytest
 
 from bithumb_bot import config
 from bithumb_bot import engine as engine_module
+from bithumb_bot import profile_cli
 from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.engine import compute_signal
@@ -381,6 +382,9 @@ def test_replay_decision_cli_outputs_single_read_only_replay_bundle(tmp_path, ca
     assert str(bundle["policy_decision_hash"]).startswith("sha256:")
     assert str(bundle["pure_policy_hash"]).startswith("sha256:")
     assert bundle["final_strategy_decision"]["strategy"] == "sma_with_filter"
+    assert bundle["decision_context_schema_version"] == 1
+    assert bundle["code_provenance"] == {"source": "unavailable"}
+    assert bundle["final_typed_strategy_decision"]["policy_decision_hash"] == bundle["policy_decision_hash"]
     assert "execution_decision_summary" in bundle
     assert changes_after_replay == 0
     assert changes_before_replay > 0
@@ -589,3 +593,69 @@ def test_engine_prepares_persistence_context_and_execution_request() -> None:
 def test_engine_no_direct_sma_import() -> None:
     engine_source = Path("src/bithumb_bot/engine.py").read_text()
     assert "from .strategy.sma import" not in engine_source
+
+
+def test_promotion_live_runtime_modules_do_not_import_strategy_sma_facade() -> None:
+    guarded_paths = [
+        Path("src/bithumb_bot/app.py"),
+        Path("src/bithumb_bot/engine.py"),
+        Path("src/bithumb_bot/execution_service.py"),
+        Path("src/bithumb_bot/runtime_sma_snapshot.py"),
+        Path("src/bithumb_bot/runtime_sma_snapshot_builder.py"),
+        Path("src/bithumb_bot/profile_cli.py"),
+        Path("src/bithumb_bot/research/backtest_engine.py"),
+        Path("src/bithumb_bot/research/backtest_kernel.py"),
+        Path("src/bithumb_bot/research/strategy_registry.py"),
+    ]
+    forbidden = {
+        "bithumb_bot.strategy.sma",
+        "strategy.sma",
+    }
+    for path in guarded_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if node.level:
+                    package_parts = path.with_suffix("").parts
+                    rel_base = ".".join(package_parts[1 : len(package_parts) - node.level + 1])
+                    module = f"{rel_base}.{module}" if module else rel_base
+                assert module not in forbidden and not module.endswith(".strategy.sma"), str(path)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name not in forbidden, str(path)
+
+
+def test_promotion_research_export_requires_explicit_runtime_bound_parameters() -> None:
+    with pytest.raises(ValueError, match="promotion_runtime_bound_parameter_missing:"):
+        profile_cli._require_explicit_runtime_bound_strategy_parameters(
+            strategy_name="sma_with_filter",
+            parameter_values={"SMA_SHORT": 2, "SMA_LONG": 3},
+        )
+
+
+def test_promotion_research_export_accepts_explicit_runtime_bound_parameters() -> None:
+    profile_cli._require_explicit_runtime_bound_strategy_parameters(
+        strategy_name="sma_with_filter",
+        parameter_values={
+            "SMA_SHORT": 2,
+            "SMA_LONG": 3,
+            "SMA_FILTER_GAP_MIN_RATIO": 0.0,
+            "SMA_FILTER_VOL_WINDOW": 3,
+            "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.0,
+            "SMA_MARKET_REGIME_ENABLED": False,
+            "SMA_FILTER_OVEREXT_LOOKBACK": 1,
+            "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.0,
+            "SMA_COST_EDGE_ENABLED": False,
+            "SMA_COST_EDGE_MIN_RATIO": 0.0,
+            "ENTRY_EDGE_BUFFER_RATIO": 0.0,
+            "STRATEGY_MIN_EXPECTED_EDGE_RATIO": 0.0,
+            "STRATEGY_ENTRY_SLIPPAGE_BPS": 0.0,
+            "LIVE_FEE_RATE_ESTIMATE": 0.0,
+            "STRATEGY_EXIT_RULES": "opposite_cross",
+            "STRATEGY_EXIT_STOP_LOSS_RATIO": 0.0,
+            "STRATEGY_EXIT_MAX_HOLDING_MIN": 0,
+            "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0,
+            "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0,
+        },
+    )

@@ -11,7 +11,7 @@ from .runtime_sma_snapshot_builder import (
     RuntimeSmaDecisionResult,
 )
 from .strategy.base import StrategyDecision
-from .strategy.sma import SmaWithFilterStrategy
+from .strategy.sma_policy_strategy import SmaWithFilterStrategy
 
 SMA_RUNTIME_BOUNDARY_STAGES = {
     "snapshot_builder": "runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db",
@@ -20,6 +20,42 @@ SMA_RUNTIME_BOUNDARY_STAGES = {
     "execution_planner": "execution_service.build_execution_decision_summary",
     "broker_submit_path": "engine.submit_or_suppress",
 }
+
+
+def _code_provenance() -> dict[str, object]:
+    return {"source": "unavailable"}
+
+
+def _typed_strategy_decision_payload(result: RuntimeSmaDecisionResult) -> dict[str, object]:
+    decision = result.decision
+    return {
+        "strategy_name": decision.strategy_name,
+        "raw_signal": decision.raw_signal,
+        "raw_reason": decision.raw_reason,
+        "entry_signal": decision.entry_signal,
+        "entry_reason": decision.entry_reason,
+        "exit_signal": decision.exit_signal,
+        "exit_reason": decision.exit_reason,
+        "final_signal": decision.final_signal,
+        "final_reason": decision.final_reason,
+        "blocked_filters": list(decision.blocked_filters),
+        "entry_blocked": bool(decision.entry_blocked),
+        "entry_block_reason": decision.entry_block_reason,
+        "exit_rule": decision.exit_rule,
+        "exit_evaluations": [dict(item) for item in decision.exit_evaluations],
+        "protective_exit_overrode_entry": bool(decision.protective_exit_overrode_entry),
+        "exit_filter_suppression_prevented": bool(decision.exit_filter_suppression_prevented),
+        "execution_intent": (
+            decision.execution_intent.as_dict()
+            if decision.execution_intent is not None
+            else None
+        ),
+        "policy_hash": decision.policy_hash,
+        "policy_contract_hash": decision.policy_contract_hash,
+        "policy_input_hash": decision.policy_input_hash,
+        "policy_decision_hash": decision.policy_decision_hash,
+        "trace": decision.as_trace(),
+    }
 
 
 class ReadOnlyPositionStateNormalizer:
@@ -102,9 +138,11 @@ def build_sma_with_filter_replay_bundle(
     )
     return {
         "schema_version": 1,
+        "decision_context_schema_version": 1,
         "strategy": strategy.name,
         "through_ts_ms": int(through_ts_ms),
         "boundary_stages": dict(SMA_RUNTIME_BOUNDARY_STAGES),
+        "code_provenance": _code_provenance(),
         "market_snapshot": {
             "pair": context.get("pair"),
             "interval": context.get("interval"),
@@ -135,5 +173,6 @@ def build_sma_with_filter_replay_bundle(
         "replay_fingerprint": context.get("replay_fingerprint"),
         "pure_policy_trace": pure_policy_trace,
         "final_strategy_decision": strategy_payload,
+        "final_typed_strategy_decision": _typed_strategy_decision_payload(typed_result),
         "execution_decision_summary": execution_summary.as_dict(),
     }

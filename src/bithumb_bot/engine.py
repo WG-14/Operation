@@ -428,7 +428,7 @@ def compute_signal(
     through_ts_ms: int | None = None,
     strategy_name: str | None = None,
 ):
-    result = compute_strategy_decision_snapshot(
+    result = compute_signal_runtime_handoff(
         conn,
         short_n,
         long_n,
@@ -441,10 +441,41 @@ def compute_signal(
         payload = result.as_legacy_dict()
         payload.setdefault("strategy", result.decision.strategy_name)
         return payload
+    return result
+
+
+def compute_signal_runtime_handoff(
+    conn,
+    short_n: int,
+    long_n: int,
+    *,
+    through_ts_ms: int | None = None,
+    strategy_name: str | None = None,
+) -> RuntimeSmaDecisionResult | dict[str, object] | None:
+    """Return typed SMA runtime decisions before compatibility serialization.
+
+    ``compute_signal`` remains the legacy dict API. The live run loop binds here
+    so ``sma_with_filter`` can carry ``RuntimeSmaDecisionResult`` until the
+    explicit persistence/logging boundary.
+    """
+    result = compute_strategy_decision_snapshot(
+        conn,
+        short_n,
+        long_n,
+        through_ts_ms=through_ts_ms,
+        strategy_name=strategy_name,
+    )
+    if result is None:
+        return None
+    if isinstance(result, RuntimeSmaDecisionResult):
+        return result
     decision, strategy = result
     payload = decision.as_dict()
     payload.setdefault("strategy", strategy.name)
     return payload
+
+
+_ORIGINAL_COMPUTE_SIGNAL = compute_signal
 
 
 def _legacy_db_strategy_fallback_allowed(*, selected_strategy_name: str) -> bool:
@@ -3269,9 +3300,15 @@ def run_loop(short_n: int, long_n: int) -> None:
                     continue
 
             conn = ensure_db()
+            typed_runtime_decision: RuntimeSmaDecisionResult | None = None
+            signal_handoff_fn = (
+                compute_signal_runtime_handoff
+                if compute_signal is _ORIGINAL_COMPUTE_SIGNAL
+                else compute_signal
+            )
             try:
                 try:
-                    r = compute_signal(
+                    signal_handoff = signal_handoff_fn(
                         conn,
                         short_n,
                         long_n,
@@ -3283,7 +3320,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                     if ("through_ts_ms" not in err) and ("strategy_name" not in err):
                         raise
                     try:
-                        r = compute_signal(
+                        signal_handoff = signal_handoff_fn(
                             conn,
                             short_n,
                             long_n,
@@ -3295,11 +3332,11 @@ def run_loop(short_n: int, long_n: int) -> None:
                             raise
                         # Compatibility path for tests/mocks still patching the older
                         # compute_signal(conn, short_n, long_n) signature.
-                        r = compute_signal(conn, short_n, long_n)
+                        signal_handoff = compute_signal(conn, short_n, long_n)
             finally:
                 conn.close()
 
-            if r is None:
+            if signal_handoff is None:
                 _log_loop_event(
                     logging.INFO,
                     "[RUN] signal_skipped",
@@ -3310,6 +3347,19 @@ def run_loop(short_n: int, long_n: int) -> None:
                     reason="insufficient candle history; signal will be recalculated after more syncs",
                 )
                 continue
+            if isinstance(signal_handoff, RuntimeSmaDecisionResult):
+                typed_runtime_decision = signal_handoff
+                r = {
+                    "ts": typed_runtime_decision.candle_ts,
+                    "last_close": typed_runtime_decision.market_price,
+                    "signal": typed_runtime_decision.decision.final_signal,
+                    "reason": typed_runtime_decision.decision.final_reason,
+                    "strategy": typed_runtime_decision.decision.strategy_name,
+                    "curr_s": typed_runtime_decision.base_context.get("curr_s"),
+                    "curr_l": typed_runtime_decision.base_context.get("curr_l"),
+                }
+            else:
+                r = signal_handoff
 
             _log_loop_event(
                 logging.INFO,
@@ -3333,7 +3383,14 @@ def run_loop(short_n: int, long_n: int) -> None:
             decision_context_for_trade: dict[str, object] | None = None
             execution_decision_summary_for_trade = None
             try:
-                context = dict(r)
+                if typed_runtime_decision is not None:
+                    context = typed_runtime_decision.legacy_strategy_decision().context
+                    context = dict(context)
+                    context["strategy"] = typed_runtime_decision.decision.strategy_name
+                    context["signal"] = typed_runtime_decision.decision.final_signal
+                    context["reason"] = typed_runtime_decision.decision.final_reason
+                else:
+                    context = dict(r)
                 decision_context_for_trade = context
                 strategy_name = str(context.pop("strategy", settings.STRATEGY_NAME))
                 signal = str(context.pop("signal", "HOLD"))

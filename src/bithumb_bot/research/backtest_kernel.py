@@ -857,7 +857,7 @@ def _run_decision_event_backtest_impl(
             decision_payload["policy_decision_hash"] = policy_decision.policy_decision_hash
             decision_payload["pure_policy_trace"] = policy_decision.as_trace()
             decision_payload["execution_intent_v2"] = (
-                dict(policy_decision.execution_intent)
+                policy_decision.execution_intent.as_dict()
                 if policy_decision.execution_intent is not None
                 else None
             )

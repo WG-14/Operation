@@ -198,7 +198,9 @@ def legacy_strategy_decision_from_sma_final_decision(
     context["protective_exit_overrode_entry"] = bool(decision.protective_exit_overrode_entry)
     context["exit_filter_suppression_prevented"] = bool(decision.exit_filter_suppression_prevented)
     context["execution_intent_v2"] = (
-        dict(decision.execution_intent) if decision.execution_intent is not None else None
+        decision.execution_intent.as_dict()
+        if decision.execution_intent is not None
+        else None
     )
     context["policy_contract_hash"] = decision.policy_contract_hash
     context["policy_input_hash"] = decision.policy_input_hash

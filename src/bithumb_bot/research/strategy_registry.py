@@ -295,7 +295,7 @@ def _build_sma_runtime_replay_strategy(
     candidate_regime_policy: dict[str, Any] | None = None,
 ) -> Any:
     from bithumb_bot.config import settings
-    from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
+    from bithumb_bot.strategy.sma_policy_strategy import create_sma_with_filter_strategy
 
     params = profile.get("strategy_parameters") if isinstance(profile.get("strategy_parameters"), dict) else {}
     cost = profile.get("cost_model") if isinstance(profile.get("cost_model"), dict) else {}
