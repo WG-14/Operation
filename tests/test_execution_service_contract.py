@@ -622,7 +622,7 @@ def test_valid_residual_plan_reaches_executor_only_when_residual_live_submit_is_
 @pytest.mark.parametrize(
     ("decision_context", "expected_reason"),
     [
-        (None, "live_real_order_missing_decision_context"),
+        (None, "live_real_order_missing_typed_execution_summary"),
         ({}, "live_real_order_missing_typed_execution_summary"),
         ({"execution_decision": {}}, "live_real_order_missing_typed_execution_summary"),
     ],
@@ -667,6 +667,25 @@ def test_live_real_order_blocks_dict_only_execution_decision_even_with_submit_pl
     assert result is None
     assert calls == []
     assert "live_real_order_missing_typed_execution_summary" in caplog.text
+
+
+def test_live_real_order_executes_with_typed_authority_and_empty_observability_context() -> None:
+    _arm_live_real_orders(engine="lot_native")
+    calls: list[dict[str, object]] = []
+
+    submitted = _service(calls).execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=_typed_buy_execution_summary(),
+            observability_context={},
+        )
+    )
+
+    assert submitted == {"status": "submitted", "signal": "BUY"}
+    assert len(calls) == 1
+    assert calls[0]["kwargs"]["execution_submit_plan"]["source"] == "strategy_position"  # type: ignore[index]
 
 
 def test_live_real_order_blocks_typed_summary_without_submit_plan(

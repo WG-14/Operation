@@ -25,7 +25,7 @@ from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decis
 
 from . import backtest_engine as _engine
 from .decision_event import ResearchDecisionEvent
-from .execution_model import ExecutionRequest, FixedBpsExecutionModel
+from .execution_model import ExecutionFill, ExecutionModel, ExecutionRequest, FixedBpsExecutionModel
 from .execution_timing import build_signal_event, candle_close_ts, resolve_execution_reference
 from .experiment_manifest import ExecutionTimingPolicy, legacy_research_portfolio_policy
 from .metrics_contract import EquityPoint, build_metrics_v2
@@ -123,6 +123,39 @@ def execution_submit_plan_to_research_request(
     )
 
 
+@dataclass(frozen=True)
+class ResearchVirtualExecutionService:
+    """Research execution adapter whose public authority input is ExecutionSubmitPlan."""
+
+    execution_model: ExecutionModel
+    fee_rate: float
+
+    def simulate_submit_plan(
+        self,
+        *,
+        submit_plan: ExecutionSubmitPlan,
+        signal_ts: int,
+        decision_ts: int,
+        reference_price: float,
+        timing_fields: dict[str, object],
+        depth_fields: dict[str, object],
+    ) -> ExecutionFill | None:
+        if not isinstance(submit_plan, ExecutionSubmitPlan):
+            raise ValueError("research_submit_plan_not_typed")
+        request = execution_submit_plan_to_research_request(
+            submit_plan=submit_plan,
+            signal_ts=signal_ts,
+            decision_ts=decision_ts,
+            reference_price=reference_price,
+            fee_rate=float(self.fee_rate),
+            timing_fields=timing_fields,
+            depth_fields=depth_fields,
+        )
+        if request is None:
+            return None
+        return self.execution_model.simulate(request)
+
+
 def _positive_float_or_none(value: object) -> float | None:
     try:
         parsed = float(value)  # type: ignore[arg-type]
@@ -141,6 +174,8 @@ class ResearchExecutionPlanBundle:
     reason_code: str
     summary: ExecutionDecisionSummary | None = None
     compatibility_fallback: bool = False
+    promotion_grade: bool = True
+    recommended_next_action: str = "none"
 
     @property
     def submit_expected(self) -> bool:
@@ -310,6 +345,8 @@ def _research_execution_plan_bundle(
         status="PLANNED" if submit_plan.submit_expected else "BLOCKED",
         reason_code="none" if submit_plan.submit_expected else submit_plan.block_reason,
         compatibility_fallback=True,
+        promotion_grade=False,
+        recommended_next_action="regenerate_research_decisions_with_typed_execution_submit_plan",
     )
 
 
@@ -346,6 +383,11 @@ def _execution_plan_evidence(
             "research_compatibility_execution_fallback": (
                 False if plan_bundle is None else bool(plan_bundle.compatibility_fallback)
             ),
+            "compatibility_fallback": False if plan_bundle is None else bool(plan_bundle.compatibility_fallback),
+            "promotion_grade": False if plan_bundle is not None and plan_bundle.compatibility_fallback else True,
+            "recommended_next_action": (
+                "none" if plan_bundle is None else plan_bundle.recommended_next_action
+            ),
         }
     from bithumb_bot.canonical_decision import canonical_payload_hash
 
@@ -378,6 +420,9 @@ def _execution_plan_evidence(
         "execution_plan_status": "PLANNED" if submit_plan.submit_expected else "BLOCKED",
         "execution_plan_reason_code": "none" if submit_plan.submit_expected else submit_plan.block_reason,
         "research_compatibility_execution_fallback": bool(plan_bundle.compatibility_fallback),
+        "compatibility_fallback": bool(plan_bundle.compatibility_fallback),
+        "promotion_grade": bool(plan_bundle.promotion_grade and not plan_bundle.compatibility_fallback),
+        "recommended_next_action": plan_bundle.recommended_next_action,
     }
 
 
@@ -1270,7 +1315,25 @@ def _run_decision_event_backtest_impl(
                     requested_notional=request.requested_notional,
                 )
             else:
-                fill = model.simulate(request)
+                fill = ResearchVirtualExecutionService(
+                    execution_model=model,
+                    fee_rate=fee_rate,
+                ).simulate_submit_plan(
+                    submit_plan=submit_plan,
+                    signal_ts=signal.signal_candle_start_ts,
+                    decision_ts=signal.decision_ts,
+                    reference_price=float(reference.fill_reference_price or signal.signal_reference_price),
+                    timing_fields=_timing_request_fields(signal, reference, timing_policy),
+                    depth_fields=_depth_request_fields(
+                        dataset=dataset,
+                        reference=reference,
+                        model=model,
+                        timing_policy=timing_policy,
+                    ),
+                )
+                if fill is None:
+                    warnings.append("research_submit_plan_not_expected")
+                    continue
             warnings.extend(_execution_reference_warnings(fill))
             if fill.fill_status == "failed" or fill.avg_fill_price is None or fill.filled_qty <= 0.0:
                 trades.append(_trade_from_fill(fill, cash=cash, asset_qty=qty, pnl=None))

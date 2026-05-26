@@ -946,7 +946,9 @@ def _reason_for_field(field: str) -> str:
         return "execution_pre_submit_proof_status_mismatch"
     if field == "execution_block_reason":
         return "execution_block_reason_mismatch"
-    if field in {"submit_plan_source", "submit_plan_authority"}:
+    if field == "submit_plan_source":
+        return "execution_submit_plan_source_mismatch"
+    if field == "submit_plan_authority":
         return "execution_submit_plan_authority_mismatch"
     if field == "execution_engine":
         return "execution_engine_mismatch"

@@ -254,11 +254,14 @@ def evaluate_sma_policy(
     config: SmaPolicyConfig,
     execution_context: ExecutionConstraintSnapshot,
 ) -> StrategyDecisionV2:
-    """Evaluate the pure SMA policy from immutable snapshots.
+    """Evaluate the entry SMA policy from immutable snapshots.
 
     This function is intentionally free of database, runtime config, clock, broker,
     notifier, and persistence dependencies. Runtime callers must perform state
-    normalization before building ``PositionSnapshot``.
+    normalization before building ``PositionSnapshot``. This entry-policy result
+    is not execution authority; execution planning must consume the final
+    decision assembled by ``evaluate_sma_final_decision`` or an equivalent
+    ``StrategyPolicy.decide_snapshot`` implementation.
     """
     if market.entry_decision is not None:
         entry_decision = market.entry_decision

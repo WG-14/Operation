@@ -688,6 +688,7 @@ def build_signal_execution_request(
     exit_rule_name: str | None,
     execution_decision_summary: object | None,
     decision_context: dict[str, object] | None,
+    execution_plan_bundle: object | None = None,
 ) -> SignalExecutionRequest:
     return SignalExecutionRequest(
         signal=signal,
@@ -698,7 +699,8 @@ def build_signal_execution_request(
         decision_reason=decision_reason,
         exit_rule_name=exit_rule_name,
         execution_decision_summary=execution_decision_summary,
-        decision_context=decision_context,
+        observability_context=decision_context,
+        execution_plan_bundle=execution_plan_bundle,
     )
 
 
@@ -3497,6 +3499,7 @@ def run_loop(short_n: int, long_n: int) -> None:
             decision_strategy_name_for_trade: str | None = None
             decision_context_for_trade: dict[str, object] | None = None
             execution_decision_summary_for_trade = None
+            execution_plan_bundle_for_trade = None
             try:
                 if typed_runtime_decision is not None:
                     decision_envelope = DecisionEnvelope.from_runtime_result(
@@ -3519,6 +3522,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                     context = planning_bundle.persistence_context
                     decision_context_for_trade = context
                     execution_decision_summary_for_trade = planning_bundle.summary
+                    execution_plan_bundle_for_trade = planning_bundle
                     execution_decision = dict(context["execution_decision"])  # type: ignore[arg-type]
                 else:
                     context = dict(r)
@@ -3538,6 +3542,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                         signal=signal,
                         reason=reason,
                         updated_ts=int(now * 1000),
+                        allow_legacy_context_planning=True,
                     )
                     context = planning.context
                     decision_context_for_trade = context
@@ -3672,6 +3677,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                             exit_rule_name=decision_exit_rule_name,
                             execution_decision_summary=execution_decision_summary_for_trade,
                             decision_context=decision_context_for_trade,
+                            execution_plan_bundle=execution_plan_bundle_for_trade,
                         )
                     )
                 except BrokerError as e:

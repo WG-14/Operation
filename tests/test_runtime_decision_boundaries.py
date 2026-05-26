@@ -11,10 +11,16 @@ from bithumb_bot.core.sma_policy import PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.db_core import ensure_schema
 from bithumb_bot.decision_envelope import DecisionEnvelope
 from bithumb_bot.execution_service import (
+    ExecutionTargetPlanningInput,
+    TypedExecutionPlanningInput,
     build_execution_decision_summary,
     validate_execution_submit_plan_payload,
 )
-from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+from bithumb_bot.run_loop_execution_planner import (
+    ExecutionAuthorityEnvelope,
+    ExecutionPlanner,
+    ExecutionPlanningInput,
+)
 from bithumb_bot.research.backtest_kernel import run_decision_event_backtest
 from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
 from bithumb_bot.research.decision_event import ResearchDecisionEvent
@@ -229,6 +235,7 @@ def test_execution_planner_plan_envelope_matches_legacy_context_summary_semantic
         signal=result.decision.final_signal,
         reason=result.decision.final_reason,
         updated_ts=1_700_003_060_000,
+        allow_legacy_context_planning=True,
     )
 
     assert bundle.summary is not None
@@ -239,6 +246,55 @@ def test_execution_planner_plan_envelope_matches_legacy_context_summary_semantic
     assert bundle.persistence_context["persistence_context_authoritative"] == 0
     assert bundle.status is not None
     assert bundle.status.status == "BLOCKED"
+
+
+def test_legacy_plan_strategy_decision_fails_closed_by_default() -> None:
+    result = _runtime_result()
+    envelope = DecisionEnvelope.from_runtime_result(result)
+
+    planning = _planner().plan_strategy_decision(
+        None,
+        decision_context=envelope.as_persistence_context(),
+        signal="BUY",
+        reason="legacy context only",
+        updated_ts=1_700_003_060_000,
+    )
+
+    assert planning.execution_decision_summary is None
+    assert planning.planning_error == "legacy_context_planning_disabled"
+    assert planning.context["final_action"] == "BLOCK_RECOVERY"
+    assert planning.context["submit_expected"] is False
+    assert planning.context["persistence_context_authoritative"] == 0
+
+
+def test_legacy_plan_strategy_decision_fails_closed_for_live_real_order_even_when_opted_in() -> None:
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+    }
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", False)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+        result = _runtime_result()
+        envelope = DecisionEnvelope.from_runtime_result(result)
+
+        planning = _planner().plan_strategy_decision(
+            None,
+            decision_context=envelope.as_persistence_context(),
+            signal="BUY",
+            reason="legacy context only",
+            updated_ts=1_700_003_060_000,
+            allow_legacy_context_planning=True,
+        )
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+    assert planning.execution_decision_summary is None
+    assert planning.planning_error == "legacy_context_planning_live_real_order_disabled"
+    assert planning.context["submit_expected"] is False
 
 
 def test_mutating_persistence_context_does_not_change_typed_submit_authority() -> None:
@@ -298,6 +354,70 @@ def test_plan_envelope_uses_typed_decision_over_conflicting_base_context() -> No
     assert bundle.summary.block_reason != "legacy context must not win"
     assert bundle.submit_plan is not None
     assert bundle.submit_plan.side == "BUY"
+
+
+def test_mutating_original_readiness_and_target_dicts_after_planning_does_not_change_output() -> None:
+    readiness_payload: dict[str, object] = {
+        "cash_available": 500_000.0,
+        "total_effective_exposure_notional_krw": 0.0,
+    }
+    target_metadata: dict[str, object] = {"target_policy_action": "use_existing_target"}
+    decision = _typed_decision(final_signal="BUY", final_reason="typed unit buy")
+    envelope = DecisionEnvelope(
+        strategy_decision=decision,
+        candle_ts=1_700_003_000_000,
+        market_price=10.0,
+        base_context={"last_close": 10.0},
+        policy_hashes=None,
+        replay_fingerprint={"schema_version": 1},
+        boundary={},
+    )
+    planner = ExecutionPlanner(
+        readiness_snapshot_builder=lambda _conn: type(
+            "Readiness",
+            (),
+            {"as_dict": lambda _self: dict(readiness_payload)},
+        )(),
+        summary_builder=build_execution_decision_summary,
+        target_state_resolver=lambda _conn, **_kwargs: {
+            "previous_target_exposure_krw": None,
+            "target_policy_metadata": dict(target_metadata),
+            "target_state": None,
+        },
+    )
+
+    bundle = planner.plan_envelope(None, envelope, updated_ts=1_700_003_060_000)
+    assert bundle.summary is not None
+    before = bundle.summary.as_dict()
+
+    readiness_payload["cash_available"] = 1.0
+    target_metadata["target_policy_action"] = "mutated"
+
+    assert bundle.summary.as_dict() == before
+    assert bundle.readiness_payload["cash_available"] == 500_000.0
+    assert bundle.target_policy_metadata["target_policy_action"] == "use_existing_target"
+
+
+def test_execution_authority_envelope_requires_typed_readiness_and_target() -> None:
+    planning_input = ExecutionPlanningInput.from_envelope(DecisionEnvelope.from_runtime_result(_runtime_result()))
+
+    with pytest.raises(TypeError, match="typed_execution_readiness_missing"):
+        ExecutionAuthorityEnvelope(
+            planning_input=planning_input,
+            readiness={},  # type: ignore[arg-type]
+            target=ExecutionTargetPlanningInput(),
+        )
+
+    with pytest.raises(TypeError, match="typed_execution_target_missing"):
+        ExecutionAuthorityEnvelope(
+            planning_input=planning_input,
+            readiness=TypedExecutionPlanningInput(
+                strategy_decision=planning_input.strategy_decision,
+                candle_ts=planning_input.candle_ts,
+                market_price=planning_input.market_price,
+            ).readiness,
+            target={},  # type: ignore[arg-type]
+        )
 
 
 def test_research_kernel_marks_missing_sma_policy_metadata_non_comparable() -> None:

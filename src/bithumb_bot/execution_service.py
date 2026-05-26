@@ -78,7 +78,9 @@ class SignalExecutionRequest:
     decision_reason: str | None = None
     exit_rule_name: str | None = None
     decision_context: dict[str, object] | None = None
+    observability_context: dict[str, object] | None = None
     execution_decision_summary: "ExecutionDecisionSummary | None" = None
+    execution_plan_bundle: object | None = None
 
 
 @dataclass(frozen=True)
@@ -498,9 +500,14 @@ def _live_real_order_typed_submit_plan_error(
 def _request_execution_decision_payload(
     request: SignalExecutionRequest,
 ) -> tuple[dict[str, object] | None, str | None]:
+    observability_context = (
+        request.observability_context
+        if request.observability_context is not None
+        else request.decision_context
+    )
     raw_execution_decision = (
-        request.decision_context.get("execution_decision")
-        if isinstance(request.decision_context, dict)
+        observability_context.get("execution_decision")
+        if isinstance(observability_context, dict)
         else None
     )
     if raw_execution_decision is not None and not isinstance(raw_execution_decision, dict):
@@ -612,16 +619,18 @@ def _live_real_order_submit_plan_required() -> bool:
 def require_typed_execution_decision_summary_for_live_real_order(
     request: SignalExecutionRequest,
 ) -> tuple[ExecutionDecisionSummary | None, str | None]:
+    bundle_summary = getattr(request.execution_plan_bundle, "summary", None)
+    typed_summary = request.execution_decision_summary or bundle_summary
     if not _live_real_order_submit_plan_required():
-        return request.execution_decision_summary, None
-    if request.execution_decision_summary is None:
+        return typed_summary, None
+    if typed_summary is None:
         return None, "live_real_order_missing_typed_execution_summary"
-    if not isinstance(request.execution_decision_summary, ExecutionDecisionSummary):
+    if not isinstance(typed_summary, ExecutionDecisionSummary):
         return None, "live_real_order_invalid_typed_execution_summary"
-    submit_plan_error = _live_real_order_typed_submit_plan_error(request.execution_decision_summary)
+    submit_plan_error = _live_real_order_typed_submit_plan_error(typed_summary)
     if submit_plan_error is not None:
         return None, submit_plan_error
-    return request.execution_decision_summary, None
+    return typed_summary, None
 
 
 def _strategy_performance_gate_payload(raw_gate: object | None) -> dict[str, object] | None:
@@ -1522,19 +1531,18 @@ class LiveSignalExecutionService:
 
     def execute(self, request: SignalExecutionRequest) -> dict | None:
         submit_plan_required = _live_real_order_submit_plan_required()
-        if submit_plan_required and request.decision_context is None:
+        observability_context = (
+            request.observability_context
+            if request.observability_context is not None
+            else request.decision_context
+        )
+        if observability_context is not None and not isinstance(observability_context, dict):
             _log_live_submit_plan_block(
-                reason="live_real_order_missing_decision_context",
-                field_name="decision_context",
+                reason="observability_context_schema_not_object",
+                field_name="observability_context",
             )
             return None
-        if request.decision_context is not None and not isinstance(request.decision_context, dict):
-            _log_live_submit_plan_block(
-                reason="decision_context_schema_not_object",
-                field_name="decision_context",
-            )
-            return None
-        decision_context = dict(request.decision_context or {})
+        decision_context = dict(observability_context or {})
         execution_decision, execution_decision_error = _request_execution_decision_payload(request)
         if execution_decision_error is not None:
             _log_live_submit_plan_block(
@@ -1549,6 +1557,15 @@ class LiveSignalExecutionService:
             )
             return None
         execution_decision = dict(execution_decision or {})
+        typed_summary, typed_summary_error = require_typed_execution_decision_summary_for_live_real_order(
+            request
+        )
+        if typed_summary_error is not None:
+            _log_live_submit_plan_block(
+                reason=typed_summary_error,
+                field_name="execution_summary",
+            )
+            return None
         if (
             "target_submit_plan" in execution_decision
             and execution_decision.get("target_submit_plan") is not None
@@ -1594,6 +1611,16 @@ class LiveSignalExecutionService:
             if isinstance(execution_decision.get("buy_submit_plan"), dict)
             else {}
         )
+        if typed_summary is not None:
+            typed_target_plan = typed_summary.typed_target_submit_plan()
+            typed_residual_plan = typed_summary.typed_residual_submit_plan()
+            typed_buy_plan = typed_summary.typed_buy_submit_plan()
+            if typed_target_plan is not None:
+                target_plan = typed_target_plan.as_final_payload()
+            if typed_residual_plan is not None:
+                residual_plan = typed_residual_plan.as_final_payload()
+            if typed_buy_plan is not None:
+                buy_plan = typed_buy_plan.as_final_payload()
         if submit_plan_required and not target_plan and not residual_plan and not buy_plan:
             _log_live_submit_plan_block(
                 reason="live_real_order_missing_typed_submit_plan",

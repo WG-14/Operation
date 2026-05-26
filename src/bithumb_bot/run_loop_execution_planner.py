@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
 from .config import settings
@@ -121,6 +121,48 @@ class ExecutionPlanningInput:
         return str(self.strategy_decision.final_reason or "")
 
 
+@dataclass(frozen=True)
+class ExecutionAuthorityEnvelope:
+    """Typed execution-planning authority derived before persistence context exists."""
+
+    planning_input: ExecutionPlanningInput
+    readiness: ExecutionReadinessPlanningInput
+    target: ExecutionTargetPlanningInput
+    target_policy_metadata: Mapping[str, object] = field(default_factory=dict)
+    performance_gate_result: object | None = None
+    observability_context: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.readiness, ExecutionReadinessPlanningInput):
+            raise TypeError("typed_execution_readiness_missing")
+        if not isinstance(self.target, ExecutionTargetPlanningInput):
+            raise TypeError("typed_execution_target_missing")
+        object.__setattr__(
+            self,
+            "target_policy_metadata",
+            {str(key): value for key, value in dict(self.target_policy_metadata).items()},
+        )
+        object.__setattr__(
+            self,
+            "observability_context",
+            {str(key): value for key, value in dict(self.observability_context).items()},
+        )
+
+    @property
+    def strategy_decision(self) -> StrategyDecisionV2:
+        return self.planning_input.strategy_decision
+
+    def typed_planning_input(self) -> TypedExecutionPlanningInput:
+        return TypedExecutionPlanningInput(
+            strategy_decision=self.planning_input.strategy_decision,
+            candle_ts=self.planning_input.candle_ts,
+            market_price=self.planning_input.market_price,
+            readiness=self.readiness,
+            target=self.target,
+            observability_context=self.observability_context,
+        )
+
+
 def run_loop_uses_target_delta() -> bool:
     return (
         str(getattr(settings, "EXECUTION_ENGINE", "lot_native") or "lot_native").strip().lower()
@@ -235,6 +277,14 @@ def _live_real_target_delta_performance_gate_applies() -> bool:
     )
 
 
+def _live_real_order_submit_plan_required() -> bool:
+    return bool(
+        str(settings.MODE).strip().lower() == "live"
+        and bool(settings.LIVE_REAL_ORDER_ARMED)
+        and not bool(settings.LIVE_DRY_RUN)
+    )
+
+
 @dataclass(frozen=True)
 class ExecutionPlanner:
     readiness_snapshot_builder: Callable[..., object] = compute_runtime_readiness_snapshot
@@ -242,6 +292,7 @@ class ExecutionPlanner:
     summary_builder: Callable[..., ExecutionDecisionSummary] = build_typed_execution_decision_summary
     target_state_resolver: Callable[..., dict[str, object]] = resolve_target_position_state_for_run_loop
     persistence_context_builder: Callable[..., dict[str, object]] = prepare_strategy_decision_persistence_context
+    strict_promotion_mode: bool = True
 
     def plan_envelope(
         self,
@@ -325,15 +376,53 @@ class ExecutionPlanner:
         updated_ts: int,
     ) -> ExecutionPlanningResult:
         context = self._planning_context_from_envelope_input(planning_input)
-        return self._plan_context(
-            conn,
-            decision_context=context,
-            signal=planning_input.final_signal,
-            reason=planning_input.final_reason,
-            raw_signal=planning_input.raw_signal,
-            updated_ts=updated_ts,
-            typed_planning_input=planning_input,
-        )
+        try:
+            readiness_payload = self.readiness_snapshot_builder(conn).as_dict()
+            strategy_performance_gate = None
+            if _live_real_target_delta_performance_gate_applies():
+                strategy_performance_gate = self.performance_gate_evaluator(
+                    conn,
+                    strategy_name=str(settings.STRATEGY_NAME),
+                    pair=str(settings.PAIR),
+                )
+            reference_price = context.get("market_price", context.get("last_close", context.get("close")))
+            target_resolution = self.target_state_resolver(
+                conn,
+                readiness_payload=readiness_payload,
+                reference_price=reference_price,
+                raw_signal=planning_input.raw_signal,
+                updated_ts=int(updated_ts),
+            )
+            previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
+            target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
+            readiness_payload = {**readiness_payload, **target_policy_metadata}
+            authority = ExecutionAuthorityEnvelope(
+                planning_input=planning_input,
+                readiness=ExecutionReadinessPlanningInput.from_payload(
+                    readiness_payload,
+                    target_policy_metadata=target_policy_metadata,
+                ),
+                target=ExecutionTargetPlanningInput(
+                    previous_target_exposure_krw=(
+                        None
+                        if previous_target_exposure_krw is None
+                        else float(previous_target_exposure_krw)
+                    ),
+                ),
+                target_policy_metadata=target_policy_metadata,
+                performance_gate_result=strategy_performance_gate,
+                observability_context=context,
+            )
+            return self._plan_authority_envelope(
+                authority=authority,
+                readiness_payload=readiness_payload,
+            )
+        except Exception as exc:
+            return self._fail_closed_context(
+                decision_context=context,
+                reason_code="execution_decision_unavailable",
+                exc=exc,
+            )
 
     def plan_strategy_decision(
         self,
@@ -343,7 +432,18 @@ class ExecutionPlanner:
         signal: str,
         reason: str,
         updated_ts: int,
+        allow_legacy_context_planning: bool = False,
     ) -> ExecutionPlanningResult:
+        if self.strict_promotion_mode and not allow_legacy_context_planning:
+            return self._fail_closed_context(
+                decision_context=decision_context,
+                reason_code="legacy_context_planning_disabled",
+            )
+        if _live_real_order_submit_plan_required() and allow_legacy_context_planning:
+            return self._fail_closed_context(
+                decision_context=decision_context,
+                reason_code="legacy_context_planning_live_real_order_disabled",
+            )
         return self._plan_context(
             conn,
             decision_context=decision_context,
@@ -351,6 +451,65 @@ class ExecutionPlanner:
             reason=reason,
             raw_signal=None,
             updated_ts=updated_ts,
+        )
+
+    def _plan_authority_envelope(
+        self,
+        *,
+        authority: ExecutionAuthorityEnvelope,
+        readiness_payload: dict[str, object],
+    ) -> ExecutionPlanningResult:
+        from .execution_service import build_execution_decision_summary
+
+        context = dict(authority.observability_context)
+        typed_builder = (
+            build_typed_execution_decision_summary
+            if self.summary_builder is build_execution_decision_summary
+            else self.summary_builder
+        )
+        execution_decision_summary = typed_builder(
+            typed_input=authority.typed_planning_input(),
+            strategy_performance_gate=authority.performance_gate_result,
+        )
+        context = self.persistence_context_builder(
+            decision_context=context,
+            execution_decision_summary=execution_decision_summary,
+            readiness_payload=readiness_payload,
+            target_policy_metadata=dict(authority.target_policy_metadata),
+        )
+        execution_decision = dict(context["execution_decision"])  # type: ignore[arg-type]
+        return ExecutionPlanningResult(
+            context=context,
+            execution_decision=execution_decision,
+            execution_decision_summary=execution_decision_summary,
+            readiness_payload=readiness_payload,
+            target_policy_metadata=dict(authority.target_policy_metadata),
+        )
+
+    def _fail_closed_context(
+        self,
+        *,
+        decision_context: dict[str, object],
+        reason_code: str,
+        exc: Exception | None = None,
+    ) -> ExecutionPlanningResult:
+        context = dict(decision_context)
+        execution_decision: dict[str, object] = {}
+        context["execution_decision"] = execution_decision
+        context["final_action"] = "BLOCK_RECOVERY"
+        context["submit_expected"] = False
+        context["pre_submit_proof_status"] = "failed"
+        context["execution_block_reason"] = reason_code
+        context["execution_decision_authoritative"] = 0
+        context["persistence_context_authoritative"] = 0
+        planning_error = reason_code if exc is None else f"{type(exc).__name__}: {exc}"
+        return ExecutionPlanningResult(
+            context=context,
+            execution_decision=execution_decision,
+            execution_decision_summary=None,
+            readiness_payload={},
+            target_policy_metadata={},
+            planning_error=planning_error,
         )
 
     def _plan_context(
@@ -455,20 +614,10 @@ class ExecutionPlanner:
                 target_policy_metadata=target_policy_metadata,
             )
         except Exception as exc:
-            execution_decision = {}
-            context["execution_decision"] = execution_decision
-            context["final_action"] = "BLOCK_RECOVERY"
-            context["submit_expected"] = False
-            context["pre_submit_proof_status"] = "failed"
-            context["execution_block_reason"] = f"execution_decision_unavailable:{type(exc).__name__}"
-            context["execution_decision_authoritative"] = 0
-            return ExecutionPlanningResult(
-                context=context,
-                execution_decision=execution_decision,
-                execution_decision_summary=None,
-                readiness_payload={},
-                target_policy_metadata={},
-                planning_error=f"{type(exc).__name__}: {exc}",
+            return self._fail_closed_context(
+                decision_context=context,
+                reason_code="execution_decision_unavailable",
+                exc=exc,
             )
 
 

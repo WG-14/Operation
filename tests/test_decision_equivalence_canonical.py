@@ -308,7 +308,11 @@ def test_canonical_v2_policy_hash_mismatches_have_explicit_reasons(
         ("execution_submit_plan_hash", "sha256:other_plan", "execution_submit_plan_hash_mismatch"),
         ("final_action", "BLOCK_ORDER_RULE", "execution_final_action_mismatch"),
         ("submit_expected", False, "execution_submit_expected_mismatch"),
+        ("pre_submit_proof_status", "failed", "execution_pre_submit_proof_status_mismatch"),
+        ("execution_block_reason", "order_rule_blocked", "execution_block_reason_mismatch"),
+        ("submit_plan_source", "runtime_replay", "execution_submit_plan_source_mismatch"),
         ("submit_plan_authority", "other_authority", "execution_submit_plan_authority_mismatch"),
+        ("execution_engine", "lot_native", "execution_engine_mismatch"),
     ],
 )
 def test_canonical_v2_execution_plan_mismatches_have_execution_reasons(
