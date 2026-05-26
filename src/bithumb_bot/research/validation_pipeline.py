@@ -615,6 +615,11 @@ def _stage_backtest(
         progress_callback=progress_callback,
     )
     _record_report_stage(stage, report, "backtest_report")
+    evidence_reasons = _report_evidence_rejection_reasons(report, label="backtest")
+    if evidence_reasons:
+        stage.status = FAIL_CLOSED
+        stage.reasons.extend(evidence_reasons)
+        return report
     if report.get("promotion_eligibility_gate_result") != PASS:
         reasons = [str(item) for item in report.get("promotion_blocking_reasons") or ["backtest_promotion_gate_failed"]]
         if reasons != ["walk_forward_required_but_not_executed_in_this_run"]:
@@ -814,6 +819,9 @@ def _project_promotion_eligibility_stage(
             stage.artifact_hashes["walk_forward_report_hash"] = final_hash
     gate = final_report.get("promotion_eligibility_gate_result")
     reasons = [str(item) for item in final_report.get("promotion_blocking_reasons") or []]
+    reasons.extend(_report_evidence_rejection_reasons(backtest_report, label="backtest"))
+    if walk_forward_report is not None:
+        reasons.extend(_report_evidence_rejection_reasons(walk_forward_report, label="walk_forward"))
     backtest_reasons = [str(item) for item in backtest_report.get("promotion_blocking_reasons") or []]
     for reason in backtest_reasons:
         if reason == "walk_forward_required_but_not_executed_in_this_run" and walk_forward_report is not None:
@@ -858,10 +866,24 @@ def _stage_walk_forward(
         progress_callback=progress_callback,
     )
     _record_report_stage(stage, report, "walk_forward_report")
+    evidence_reasons = _report_evidence_rejection_reasons(report, label="walk_forward")
+    if evidence_reasons:
+        stage.status = FAIL_CLOSED
+        stage.reasons.extend(evidence_reasons)
+        return report
     if report.get("promotion_eligibility_gate_result") != PASS:
         stage.status = FAIL_CLOSED
         stage.reasons.extend(str(item) for item in report.get("promotion_blocking_reasons") or ["walk_forward_promotion_gate_failed"])
     return report
+
+
+def _report_evidence_rejection_reasons(report: dict[str, Any], *, label: str) -> list[str]:
+    reasons = [f"{label}_{reason}" for reason in smoke_only_evidence_rejection_reasons(report)]
+    if report.get("compatibility_fallback") is True or report.get("research_compatibility_execution_fallback") is True:
+        reasons.append(f"{label}_compatibility_fallback_not_promotion_grade")
+    if reasons:
+        reasons.append("regenerate_via_research_validate")
+    return sorted(set(reasons))
 
 
 def _stage_promotion(

@@ -526,7 +526,7 @@ def test_production_policy_requires_walk_forward_even_if_manifest_flag_is_weaker
     assert payload["end_to_end_validation_result"] == "FAIL_CLOSED"
 
 
-def test_research_validate_does_not_fail_before_walk_forward_for_standalone_backtest_marker(tmp_path, monkeypatch):
+def test_research_validate_fails_closed_for_standalone_backtest_marker(tmp_path, monkeypatch):
     manager = _manager(tmp_path, monkeypatch)
     manifest = _manifest(walk_forward_required=True)
     calls = {"walk_forward": 0}
@@ -570,11 +570,103 @@ def test_research_validate_does_not_fail_before_walk_forward_for_standalone_back
     )
 
     stages = {stage["name"]: stage for stage in payload["stages"]}
-    assert calls["walk_forward"] == 1
+    assert calls["walk_forward"] == 0
+    assert stages["backtest"]["status"] == "FAIL_CLOSED"
+    assert "backtest_standalone_backtest_not_full_validation" in stages["backtest"]["reasons"]
+    assert "regenerate_via_research_validate" in stages["backtest"]["reasons"]
+    assert payload["end_to_end_validation_result"] == "FAIL_CLOSED"
+    assert "backtest_standalone_backtest_not_full_validation" in payload["fail_closed_reasons"]
+    assert "regenerate_via_research_validate" in payload["fail_closed_reasons"]
+
+
+def test_research_validate_fails_closed_for_standalone_walk_forward_marker(tmp_path, monkeypatch):
+    manager = _manager(tmp_path, monkeypatch)
+    manifest = _manifest(walk_forward_required=True)
+
+    monkeypatch.setattr(
+        pipeline,
+        "build_research_readiness_report",
+        lambda **kwargs: {"status": "PASS", "next_actions": []},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_research_backtest",
+        lambda **kwargs: _report(manager, kind="backtest"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_research_walk_forward",
+        lambda **kwargs: _report(manager, kind="walk_forward", standalone_backtest_marker=True),
+    )
+
+    payload = pipeline.run_research_validation(
+        manifest=manifest,
+        db_path=tmp_path / "paper.sqlite",
+        manager=manager,
+        manifest_path=str(tmp_path / "manifest.json"),
+    )
+
+    stages = {stage["name"]: stage for stage in payload["stages"]}
     assert stages["backtest"]["status"] == "PASS"
-    assert stages["walk_forward"]["status"] == "PASS"
-    assert stages["promotion_eligibility"]["status"] == "PASS"
-    assert payload["end_to_end_validation_result"] == "PASS"
+    assert stages["walk_forward"]["status"] == "FAIL_CLOSED"
+    assert "walk_forward_standalone_backtest_not_full_validation" in stages["walk_forward"]["reasons"]
+    assert "regenerate_via_research_validate" in stages["walk_forward"]["reasons"]
+    assert payload["end_to_end_validation_result"] == "FAIL_CLOSED"
+    assert "walk_forward_standalone_backtest_not_full_validation" in payload["fail_closed_reasons"]
+
+
+def test_promotion_eligibility_rechecks_backtest_and_walk_forward_report_markers(tmp_path, monkeypatch):
+    manager = _manager(tmp_path, monkeypatch)
+    run = pipeline.ValidationRun(
+        validation_run_id="sha256:validation",
+        experiment_id="validation_exp",
+        manifest_path=str(tmp_path / "manifest.json"),
+        manifest_hash="sha256:manifest",
+        repository_version=None,
+        deployment_tier="paper_candidate",
+        mode="strict",
+        command_args_hash="sha256:args",
+        validation_policy_source="test_policy",
+        validation_policy_required_stage_names=["promotion_eligibility"],
+        effective_walk_forward_required=True,
+        effective_final_holdout_required=False,
+        effective_stress_suite_required=False,
+        effective_statistical_validation_required=False,
+        effective_final_selection_required=False,
+        stages=[
+            pipeline.ValidationStage("backtest", True, status="PASS"),
+            pipeline.ValidationStage("walk_forward", True, status="PASS"),
+            pipeline.ValidationStage("promotion_eligibility", True),
+        ],
+        required_stage_names=["promotion_eligibility"],
+    )
+    backtest_report = _report(manager, kind="backtest", standalone_backtest_marker=True)
+    walk_forward_report = _report(manager, kind="walk_forward")
+    walk_forward_report.update(
+        {
+            "promotion_eligibility_gate_result": "PASS",
+            "promotion_blocking_reasons": [],
+            "evidence_scope": "smoke_only_not_manifest_backed",
+            "non_promotable": True,
+            "promotion_grade": False,
+            "research_compatibility_execution_fallback": True,
+        }
+    )
+
+    pipeline._project_promotion_eligibility_stage(
+        run=run,
+        backtest_report=backtest_report,
+        walk_forward_report=walk_forward_report,
+    )
+
+    stage = {stage.name: stage for stage in run.stages}["promotion_eligibility"]
+    assert stage.status == "FAIL_CLOSED"
+    assert "backtest_standalone_backtest_not_full_validation" in stage.reasons
+    assert "walk_forward_smoke_backtest_artifact_not_promotable" in stage.reasons
+    assert "walk_forward_non_promotable_evidence_artifact" in stage.reasons
+    assert "walk_forward_compatibility_fallback_not_promotion_grade" in stage.reasons
+    assert "regenerate_via_research_validate" in stage.reasons
+    assert "walk_forward_required_but_not_executed_in_this_run" not in stage.reasons
 
 
 def test_statistical_screening_only_fails_production_validation_stage(tmp_path, monkeypatch):
