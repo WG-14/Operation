@@ -50,6 +50,7 @@ class ResearchWorkResult:
         payload = dict(self.observability or {})
         payload.setdefault("work_unit", self.work_unit.as_dict())
         payload.setdefault("status", self.status)
+        payload.setdefault("worker_process_evidence", _worker_process_evidence(self))
         if self.failure_reason is not None:
             payload.setdefault("failure_reason", self.failure_reason)
         if self.failure_evidence is not None:
@@ -59,6 +60,35 @@ class ResearchWorkResult:
 
 
 ResearchWorker = Callable[[Any], ResearchWorkResult]
+
+
+def _worker_process_evidence(result: ResearchWorkResult) -> dict[str, Any]:
+    observability = dict(result.observability or {})
+    work_unit = result.work_unit.as_dict()
+    worker_pid = observability.get("worker_pid")
+    input_hash = result.work_unit.work_result_input_hash or result.work_unit_hash
+    output_hash = result.content_hash
+    exit_status = 0 if result.status == "completed" else 1
+    resource_guard = result.failure_evidence if result.failure_evidence is not None else {}
+    return {
+        "schema_version": 1,
+        "worker_pid": worker_pid,
+        "callable_identity": "bithumb_bot.research.validation_protocol._candidate_scenario_worker",
+        "command_or_callable_identity": "bithumb_bot.research.validation_protocol._candidate_scenario_worker",
+        "input_hash": input_hash,
+        "output_hash": output_hash,
+        "exit_status": exit_status,
+        "status": result.status,
+        "timeout_status": resource_guard.get("timeout_status", "not_reported"),
+        "resource_status": resource_guard.get("status", result.status),
+        "terminal_audit_trace_status": (
+            "present"
+            if any(str(key).endswith("audit_trace_index") for key in work_unit)
+            else "not_applicable"
+        ),
+        "work_unit_hash": result.work_unit_hash,
+        "work_result_input_hash": result.work_unit.work_result_input_hash,
+    }
 
 
 def execute_research_work_units_serial(

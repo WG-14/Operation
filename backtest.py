@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         for line in root_backtest_refusal_lines():
             print(line, file=sys.stderr)
         return 2
-    from bithumb_bot.smoke_backtest import main as smoke_main
+    from tools.diagnostic_smoke_backtest import main as smoke_main
 
     return smoke_main(remaining)
 

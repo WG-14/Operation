@@ -11,6 +11,7 @@ from bithumb_bot.core.sma_policy import (
     SmaPolicyConfig,
     StrategyDecisionV2,
 )
+from bithumb_bot.lot_model import quantize_to_lot_count
 from bithumb_bot.execution_service import (
     ExecutionReadinessPlanningInput,
     ExecutionDecisionSummary,
@@ -526,18 +527,32 @@ def _research_position_snapshot(
     market_price: float,
 ) -> PositionSnapshot:
     if pending_buy_qty > 1e-12 or pending_sell_qty > 1e-12:
+        open_lots = _research_lot_count(qty)
+        reserved_lots = open_lots if pending_sell_qty > 1e-12 and open_lots > 0 else 0
+        terminal_state = (
+            "reserved_exit_pending"
+            if reserved_lots > 0
+            else "research_pending_fill_not_policy_comparable"
+        )
         return PositionSnapshot(
             in_position=bool(qty > 1e-12),
             entry_allowed=False,
             exit_allowed=False,
             entry_block_reason="research_pending_fill_not_policy_comparable",
             exit_block_reason="research_pending_fill_not_policy_comparable",
-            terminal_state="research_pending_fill_not_policy_comparable",
+            terminal_state=terminal_state,
             entry_ts=entry_ts,
             entry_price=entry_price,
             qty_open=float(qty),
             raw_qty_open=float(qty),
             raw_total_asset_qty=float(qty),
+            open_lot_count=open_lots,
+            reserved_exit_lot_count=reserved_lots,
+            sellable_executable_lot_count=0,
+            dust_classification="no_dust",
+            dust_state="no_dust",
+            effective_flat=False,
+            has_executable_exposure=bool(qty > 1e-12),
             has_any_position_residue=bool(qty > 1e-12),
         )
     if sellable_qty > 1e-12:
@@ -562,7 +577,7 @@ def _research_position_snapshot(
             exit_allowed=True,
             entry_block_reason="position_has_executable_exposure",
             exit_block_reason="none",
-            terminal_state="research_simulated_open_exposure",
+            terminal_state="open_exposure",
             entry_ts=entry_ts,
             entry_price=entry_price,
             qty_open=float(sellable_qty),
@@ -571,8 +586,8 @@ def _research_position_snapshot(
             unrealized_pnl_ratio=unrealized_pnl_ratio,
             raw_qty_open=float(qty),
             raw_total_asset_qty=float(qty),
-            open_lot_count=1,
-            sellable_executable_lot_count=1,
+            open_lot_count=_research_lot_count(sellable_qty),
+            sellable_executable_lot_count=_research_lot_count(sellable_qty),
             dust_classification="no_dust",
             dust_state="no_dust",
             effective_flat=False,
@@ -585,10 +600,14 @@ def _research_position_snapshot(
         exit_allowed=False,
         entry_block_reason="none",
         exit_block_reason="no_position",
-        terminal_state="research_simulated_flat",
+        terminal_state="flat",
         dust_classification="no_dust",
         dust_state="no_dust",
     )
+
+
+def _research_lot_count(qty: float) -> int:
+    return quantize_to_lot_count(qty=max(0.0, float(qty)), lot_size=0.0001)
 
 
 def _sma_policy_config_from_research_parameters(

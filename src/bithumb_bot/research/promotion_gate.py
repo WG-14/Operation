@@ -1132,6 +1132,36 @@ def _verify_report_content_hash(report: dict[str, Any], *, label: str) -> str:
     return actual
 
 
+def _subprocess_candidate_isolation_reasons(report: dict[str, Any]) -> list[str]:
+    observability = report.get("execution_observability")
+    if not isinstance(observability, dict):
+        return ["subprocess_candidate_isolation_missing"]
+    work_units = observability.get("work_units")
+    if not isinstance(work_units, list) or not work_units:
+        return ["subprocess_candidate_isolation_missing"]
+    reasons: list[str] = []
+    for item in work_units:
+        if not isinstance(item, dict):
+            reasons.append("subprocess_candidate_isolation_missing")
+            continue
+        evidence = item.get("worker_process_evidence")
+        if not isinstance(evidence, dict):
+            reasons.append("subprocess_candidate_isolation_missing")
+            continue
+        for field in (
+            "worker_pid",
+            "command_or_callable_identity",
+            "input_hash",
+            "output_hash",
+            "exit_status",
+            "resource_status",
+            "terminal_audit_trace_status",
+        ):
+            if evidence.get(field) in (None, ""):
+                reasons.append(f"subprocess_candidate_isolation_{field}_missing")
+    return sorted(set(reasons))
+
+
 def _load_statistical_evidence(*, report: dict[str, Any], report_dir: Path) -> dict[str, Any] | None:
     path_value = str(report.get("statistical_evidence_path") or "").strip()
     path = Path(path_value).expanduser() if path_value else report_dir / "statistical_selection_evidence.json"
@@ -1245,6 +1275,10 @@ def promote_candidate(
     production_bound_report = is_production_bound_target(
         backtest.candidate.get("deployment_tier") or report.get("deployment_tier")
     )
+    if production_bound_report:
+        isolation_reasons = _subprocess_candidate_isolation_reasons(report)
+        if isolation_reasons:
+            raise PromotionGateError(f"promotion refused: {','.join(isolation_reasons)}")
     final_selection_reasons = validate_final_selection_report(report)
     if production_bound_report or policy["effective_final_selection_required"]:
         if final_selection_reasons:

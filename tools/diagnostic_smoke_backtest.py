@@ -6,6 +6,11 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from time import monotonic
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from bithumb_bot.paths import PathManager
 from bithumb_bot.notifier import AlertSeverity, format_event, notify
 
@@ -14,13 +19,12 @@ SMOKE_BACKTEST_WARNING = (
     "approved profiles, live readiness, or capital allocation."
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 path_manager = PathManager.from_env(PROJECT_ROOT)
 _db_path_env = os.getenv("DB_PATH", "")
 if _db_path_env.strip():
     _db_candidate = Path(_db_path_env).expanduser()
     if not _db_candidate.is_absolute():
-        raise ValueError(f"DB_PATH must be absolute for smoke_backtest.py (got relative path: {_db_path_env!r})")
+        raise ValueError(f"DB_PATH must be absolute for diagnostic_smoke_backtest.py (got relative path: {_db_path_env!r})")
     DB_PATH = str(_db_candidate.resolve())
 else:
     DB_PATH = str(path_manager.primary_db_path())
@@ -225,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         notify(
             format_event(
                 "smoke_backtest_finished",
-                command="smoke_backtest.py",
+                command="diagnostic_smoke_backtest.py",
                 status=status,
                 exit_code=rc,
                 elapsed_sec=f"{monotonic() - started_at:.1f}",

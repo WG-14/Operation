@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import backtest
-from bithumb_bot import smoke_backtest
+from tools import diagnostic_smoke_backtest as smoke_backtest
 
 
 def test_root_backtest_is_explicitly_marked_smoke_only() -> None:
@@ -26,3 +26,4 @@ def test_docs_say_smoke_backtests_cannot_justify_promotion_or_live_readiness() -
     assert "smoke backtest" in docs.lower()
     assert "must not be used as evidence for strategy promotion" in docs
     assert "live readiness" in docs
+    assert "tools/diagnostic_smoke_backtest.py" in docs

@@ -3444,7 +3444,7 @@ def test_summary_zero_retention_writes_complete_external_audit_traces(tmp_path, 
     assert sum(1 for _ in equity_path.open("r", encoding="utf-8")) == validation_index["equity_row_count"]
 
 
-def test_research_report_keeps_subprocess_candidate_isolation_pending_visible(tmp_path, monkeypatch) -> None:
+def test_research_report_exposes_candidate_isolation_status(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
     for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
@@ -3459,7 +3459,10 @@ def test_research_report_keeps_subprocess_candidate_isolation_pending_visible(tm
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
-    assert report["data_limitations"]["subprocess_candidate_isolation"] == "subprocess_candidate_isolation_pending"
+    assert report["data_limitations"]["subprocess_candidate_isolation"] in {
+        "subprocess_candidate_isolation_missing",
+        "worker_process_evidence_present",
+    }
 
 
 def test_audit_trace_verification_detects_tamper_and_missing_stream(tmp_path, monkeypatch) -> None:

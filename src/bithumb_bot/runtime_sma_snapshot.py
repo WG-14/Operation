@@ -5,7 +5,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .execution_service import build_execution_decision_summary
+from .execution_service import (
+    ExecutionReadinessPlanningInput,
+    ExecutionTargetPlanningInput,
+    TypedExecutionPlanningInput,
+    build_typed_execution_decision_summary,
+)
 from .runtime_sma_snapshot_builder import (
     build_sma_with_filter_runtime_decision_from_normalized_db,
     decide_sma_with_filter_snapshot_from_db as _runtime_snapshot_from_db,
@@ -161,13 +166,16 @@ def build_sma_with_filter_replay_bundle(
     decision = typed_result.legacy_strategy_decision()
     strategy_payload = decision.as_dict()
     context = dict(decision.context)
-    execution_summary = build_execution_decision_summary(
-        decision_context=context,
-        readiness_payload=readiness_payload,
-        raw_signal=strategy_payload.get("raw_signal"),
-        final_signal=strategy_payload.get("final_signal", strategy_payload.get("signal")),
-        final_reason=strategy_payload.get("reason"),
-        previous_target_exposure_krw=previous_target_exposure_krw,
+    execution_summary = build_typed_execution_decision_summary(
+        typed_input=TypedExecutionPlanningInput(
+            strategy_decision=typed_result.decision,
+            candle_ts=typed_result.candle_ts,
+            market_price=typed_result.market_price,
+            readiness=ExecutionReadinessPlanningInput.from_payload(readiness_payload),
+            target=ExecutionTargetPlanningInput(
+                previous_target_exposure_krw=previous_target_exposure_krw
+            ),
+        )
     )
     execution_decision_reconstructable = readiness_payload is not None
     execution_decision_reconstruction_reason = (

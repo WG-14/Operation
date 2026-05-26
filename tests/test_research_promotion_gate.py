@@ -962,6 +962,22 @@ def _write_report_with_lineage(
         "candidate_count": 1,
         "lineage": lineage,
         "lineage_hash": lineage["lineage_hash"],
+        "execution_observability": {
+            "work_units": [
+                {
+                    "worker_process_evidence": {
+                        "schema_version": 1,
+                        "worker_pid": 12345,
+                        "command_or_callable_identity": "test.worker",
+                        "input_hash": "sha256:worker-input",
+                        "output_hash": "sha256:worker-output",
+                        "exit_status": 0,
+                        "resource_status": "completed",
+                        "terminal_audit_trace_status": "not_applicable",
+                    }
+                }
+            ]
+        },
         "candidates": [candidate],
     }
     if report_overrides:
@@ -2131,6 +2147,23 @@ def test_promotion_refuses_top_level_unknown_evidence_tier_even_if_reality_contr
 
     assert allowed is False
     assert "execution_evidence_tier_unsupported" in reasons
+
+
+def test_production_promotion_refuses_missing_worker_process_evidence(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = _production_candidate()
+    _write_report_with_lineage(
+        manager,
+        candidate,
+        report_overrides={"execution_observability": {"work_units": []}},
+    )
+
+    with pytest.raises(PromotionGateError, match="subprocess_candidate_isolation_missing"):
+        promote_candidate(
+            experiment_id="promo_exp",
+            candidate_id="candidate_001",
+            manager=manager,
+        )
 
 
 def test_promotion_refuses_top_level_capability_unavailable_required_mismatch() -> None:

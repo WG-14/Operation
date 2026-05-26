@@ -7,9 +7,9 @@ import pytest
 import backtest
 from bithumb_bot.approved_profile import ApprovedProfileError, verify_promotion_artifact
 from bithumb_bot.execution_service import build_execution_decision_summary
-from bithumb_bot import smoke_backtest
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.promotion_gate import validate_backtest_candidate_for_promotion
+from tools import diagnostic_smoke_backtest as smoke_backtest
 
 
 def test_root_backtest_output_is_diagnostic_only_and_non_promotable(monkeypatch) -> None:
@@ -116,6 +116,12 @@ def test_promotion_and_live_paths_do_not_import_legacy_or_smoke_boundaries() -> 
         source = (repo / relative_path).read_text(encoding="utf-8")
         for marker in forbidden:
             assert marker not in source, f"{relative_path} imports or names {marker}"
+
+
+def test_package_level_smoke_backtest_module_is_not_available() -> None:
+    import importlib.util
+
+    assert importlib.util.find_spec("bithumb_bot.smoke_backtest") is None
 
 
 def test_legacy_execution_decision_summary_wrapper_is_non_promotion_grade() -> None:

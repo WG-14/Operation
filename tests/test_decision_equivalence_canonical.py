@@ -19,6 +19,7 @@ from bithumb_bot.decision_equivalence import (
     promotion_grade_decision_equivalence_fail_reasons,
     require_promotion_grade_decision_equivalence,
 )
+from bithumb_bot.position_authority import classify_decision_position_state
 from bithumb_bot.lifecycle_evidence import (
     AccountingReplayEvidence,
     CanonicalLifecycleEvidenceBundle,
@@ -1207,6 +1208,67 @@ def test_state_coverage_matrix_fixtures_classify_expected_outcomes(
         assert result.report["outcome"] != "PASS_POSITIVE_EQUIVALENCE"
 
 
+@pytest.mark.parametrize(
+    ("fixture_name", "state_class", "dust_state", "positive_supported"),
+    [
+        ("flat_no_dust_no_position", "flat_no_dust_no_position", "flat", True),
+        ("open_exposure", "open_exposure", "no_dust", True),
+        ("reserved_exit_pending", "reserved_exit_pending", "no_dust", False),
+        ("harmless_dust_effective_flat", "dust_only", "harmless_dust", False),
+        ("blocking_dust", "dust_only", "blocking_dust", False),
+        ("non_executable_position", "non_executable_position", "flat", False),
+        ("recovery_blocked", "recovery_blocked", "flat", False),
+    ],
+)
+def test_explicit_research_runtime_state_fixtures_are_classified_and_fail_closed_honestly(
+    fixture_name: str,
+    state_class: str,
+    dust_state: str,
+    positive_supported: bool,
+) -> None:
+    if positive_supported and state_class == "open_exposure":
+        decision = _lot_native_decision_for_state("open_exposure")
+    else:
+        effective_flat = fixture_name == "harmless_dust_effective_flat"
+        decision = _decision(
+            final_signal="HOLD",
+            side="HOLD",
+            position_state_hash=f"sha256:{fixture_name}",
+            entry_allowed=state_class == "flat_no_dust_no_position" or effective_flat,
+            exit_allowed=state_class == "open_exposure",
+            dust_state=dust_state,
+            effective_flat=state_class == "flat_no_dust_no_position" or effective_flat,
+            normalized_exposure_active=state_class in {"open_exposure", "reserved_exit_pending", "recovery_blocked"},
+            position_authority={
+                "state_class": state_class,
+                "unsupported_reason": "" if state_class == "flat_no_dust_no_position" else "research_model_lacks_lot_native_authority",
+                "position_state_hash": f"sha256:{fixture_name}",
+                "order_rules_hash": "sha256:order_rules",
+                "fee_authority_hash": "sha256:fee_authority",
+                "research_position_model": "lot_native_simulation_v1" if positive_supported else "lot_native_simulation_v1_partial",
+            },
+        )
+
+    assert classify_decision_position_state(decision, source="research")[0] == state_class
+    assert classify_decision_position_state(decision, source="runtime")[0] == state_class
+
+    result = _compare(decision, decision)
+    matrix_entry = result.report["state_coverage_matrix"][state_class]
+
+    if positive_supported:
+        assert result.report["outcome"] == "PASS_POSITIVE_EQUIVALENCE"
+        assert matrix_entry["positive_equivalence_supported"] is True
+        assert matrix_entry["fail_closed_expected"] is False
+    else:
+        assert result.report["outcome"] == "FAIL_CLOSED_UNMODELED_STATE"
+        assert result.report["full_lifecycle_equivalence_supported"] is False
+        assert matrix_entry["positive_equivalence_supported"] is False
+        assert matrix_entry["fail_closed_expected"] is True
+        assert result.report["recommended_next_action"] == (
+            "extend_research_lot_native_position_model_before_claiming_lifecycle_equivalence"
+        )
+
+
 def _fixture_dust_state(*, fixture_name: str, state_class: str) -> str:
     if fixture_name == "harmless_dust_effective_flat":
         return "harmless_dust"
@@ -1236,6 +1298,56 @@ def test_decision_export_loader_rejects_decision_count_mismatch(tmp_path) -> Non
 
     with pytest.raises(ValueError, match="decision_export_decision_count_mismatch"):
         load_decision_export_artifact(path, expected_source="research")
+
+
+def test_lifecycle_evidence_comparison_key_mismatch_stays_submit_plan_scoped() -> None:
+    evidence = _complete_lifecycle_evidence()
+    mismatched = CanonicalLifecycleEvidenceBundle(
+        research_simulated_fills=evidence.research_simulated_fills,
+        paper_submit_fills=evidence.paper_submit_fills,
+        live_submit_responses=(
+            LiveSubmitResponseEvidence(
+                comparison_key="different-decision",
+                client_order_id="client-1",
+                exchange_order_id="live-1",
+                side="BUY",
+                accepted=True,
+                submit_request_hash="sha256:live-request",
+                response_hash="sha256:live-response",
+            ),
+        ),
+        accounting_replays=evidence.accounting_replays,
+        position_lifecycle_snapshots=evidence.position_lifecycle_snapshots,
+    )
+
+    report = compare_decision_equivalence(
+        research_decisions=[_decision_v2()],
+        runtime_decisions=[_decision_v2()],
+        profile_hash="sha256:profile",
+        market="KRW-BTC",
+        interval="1m",
+        data_fingerprint="sha256:data",
+        lifecycle_evidence=mismatched,
+    ).report
+
+    assert report["full_lifecycle_equivalence_supported"] is False
+    assert report["claim_scope"] == "submit_plan_equivalence_only"
+    assert "lifecycle_evidence_comparison_keys_mismatch" in report["unsupported_lifecycle_reasons"]
+
+
+def test_promotion_grade_gate_accepts_complete_typed_lifecycle_evidence_when_other_gates_pass() -> None:
+    report = compare_decision_equivalence(
+        research_decisions=[_decision_v2()],
+        runtime_decisions=[_decision_v2()],
+        profile_hash="sha256:profile",
+        market="KRW-BTC",
+        interval="1m",
+        data_fingerprint="sha256:data",
+        lifecycle_evidence=_complete_lifecycle_evidence(),
+    ).report
+    report["repo_owned_export_artifacts"] = True
+
+    require_promotion_grade_decision_equivalence(report)
 
 
 def test_decision_export_loader_rejects_source_mismatch(tmp_path) -> None:

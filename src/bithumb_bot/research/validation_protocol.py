@@ -3400,7 +3400,9 @@ def _report_payload(
             "execution_reference_price": manifest.execution_timing.fill_reference_policy,
             "intra_candle_policy": _policy_intra_candle_limitation(manifest.execution_timing.fill_reference_policy),
             "portfolio_event_time_policy": "fills_apply_when_fill_reference_ts_reaches_mark_or_decision_boundary",
-            "subprocess_candidate_isolation": "subprocess_candidate_isolation_pending",
+            "subprocess_candidate_isolation": _subprocess_candidate_isolation_status(
+                execution_observability
+            ),
             "top_of_book_join_tolerance_ms": (
                 manifest.dataset.top_of_book.join_tolerance_ms if manifest.dataset.top_of_book else None
             ),
@@ -3626,6 +3628,34 @@ def _report_payload(
             payload["promotion_eligibility_gate_result"] = "FAIL"
             payload["gate_result"] = "FAIL"
     return payload
+
+
+def _subprocess_candidate_isolation_status(
+    execution_observability: dict[str, Any] | None,
+) -> str:
+    if not isinstance(execution_observability, dict):
+        return "subprocess_candidate_isolation_missing"
+    work_units = execution_observability.get("work_units")
+    if not isinstance(work_units, list) or not work_units:
+        return "subprocess_candidate_isolation_missing"
+    for item in work_units:
+        if not isinstance(item, dict):
+            return "subprocess_candidate_isolation_missing"
+        evidence = item.get("worker_process_evidence")
+        if not isinstance(evidence, dict):
+            return "subprocess_candidate_isolation_missing"
+        required = (
+            "worker_pid",
+            "command_or_callable_identity",
+            "input_hash",
+            "output_hash",
+            "exit_status",
+            "resource_status",
+            "terminal_audit_trace_status",
+        )
+        if any(evidence.get(field) in (None, "") for field in required):
+            return "subprocess_candidate_isolation_missing"
+    return "worker_process_evidence_present"
 
 
 def _primary_base_cost_assumption(candidate: dict[str, Any]) -> dict[str, Any] | None:

@@ -3,7 +3,7 @@
 This repository separates research-stage candidate variables from runtime env values.
 Research manifests define hypotheses, data splits, parameter spaces, cost models, and acceptance gates.
 
-Root `backtest.py` and any simple close-price SMA script are smoke backtests only. Root `backtest.py` is fail-closed by default and requires `--diagnostic-smoke-only` before it delegates to the smoke implementation. Smoke output must not be used as evidence for strategy promotion, approved profiles, live readiness, or capital allocation. For production-bound targets, the normal custody path is `research-validate`. It runs the policy-required lifecycle stages, creates the promotion artifact, reproduces it, and writes the hash-bound `validation_run.json` operator record. `research-backtest` and `research-walk-forward` remain diagnostic/development commands unless a specific runbook says otherwise; process success from a diagnostic command must not be interpreted as promotion-grade validation success. A standalone `research-backtest` may correctly report `validation_run_complete=false`, `diagnostic_only=true`, `standalone_backtest_not_full_validation=true`, and `walk_forward_required_but_not_executed_in_this_run` when walk-forward is required. That marker is a diagnostic truth about the standalone command, not a reason for `research-validate` to stop before running the policy-required walk-forward stage.
+Root `backtest.py` and any simple close-price SMA script are smoke backtests only. Root `backtest.py` is fail-closed by default and requires `--diagnostic-smoke-only` before it delegates to `tools/diagnostic_smoke_backtest.py`, which is intentionally outside the `bithumb_bot` package runtime namespace. Smoke output must not be used as evidence for strategy promotion, approved profiles, live readiness, or capital allocation. For production-bound targets, the normal custody path is `uv run bithumb-bot research-validate --manifest <path>`. It runs the policy-required lifecycle stages, creates the promotion artifact, reproduces it, and writes the hash-bound `validation_run.json` operator record. `research-backtest` and `research-walk-forward` remain diagnostic/development commands unless a specific runbook says otherwise; process success from a diagnostic command must not be interpreted as promotion-grade validation success. A standalone `research-backtest` may correctly report `validation_run_complete=false`, `diagnostic_only=true`, `standalone_backtest_not_full_validation=true`, and `walk_forward_required_but_not_executed_in_this_run` when walk-forward is required. That marker is a diagnostic truth about the standalone command, not a reason for `research-validate` to stop before running the policy-required walk-forward stage.
 Runtime env/profile values should be treated as verified outputs of that process, not mutable knobs to tune until a backtest looks good.
 
 ## Validation Run Stages
@@ -108,10 +108,11 @@ research command from the manifest and dataset so fresh traces, report hashes,
 statistical evidence, and registry bindings are generated together; do not patch
 hashes or edit trace files by hand.
 
-Candidate subprocess isolation remains explicitly pending unless a report shows
-real worker-process evidence. The current in-process evaluator reports
-`subprocess_candidate_isolation_pending`; operators must not treat that field as
-implemented process isolation until each candidate/scenario/split has worker PID,
+Candidate subprocess isolation is implemented only when the report shows real
+`worker_process_evidence` for each candidate work unit. Production-bound promotion
+fails closed with `subprocess_candidate_isolation_missing` if required worker
+evidence is absent. Operators must not treat a completed in-process diagnostic
+run as implemented process isolation until each candidate/scenario/split has worker PID,
 exit, timeout/resource, seed, and terminal trace-status evidence.
 
 ## Cost Assumption Contract
