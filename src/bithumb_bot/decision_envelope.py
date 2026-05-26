@@ -91,6 +91,7 @@ class DecisionEnvelope:
                 "decision_authority_source": "DecisionEnvelope.strategy_decision",
                 "decision_envelope_present": True,
                 "persistence_context_authoritative": 0,
+                "non_authoritative_observability_payload": True,
             }
         )
         if self.policy_hashes is not None:
@@ -107,6 +108,7 @@ class DecisionEnvelope:
             "decision_authority_source": "DecisionEnvelope.strategy_decision",
             "decision_envelope_present": True,
             "persistence_context_authoritative": 0,
+            "non_authoritative_observability_payload": True,
             "replay_fingerprint_hash": sha256_prefixed(_thaw_mapping(self.replay_fingerprint)),
             **policy_hashes,
         }

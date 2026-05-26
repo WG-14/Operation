@@ -134,6 +134,10 @@ def test_run_loop_execution_planner_materializes_context_with_policy_hashes() ->
     assert result.context["policy_input_hash"] == "sha256:policy-input"
     assert result.context["policy_decision_hash"] == "sha256:policy-decision"
     assert result.context["target_origin"] == "runtime_state"
+    assert result.context["legacy_context_planning_used"] is True
+    assert result.context["compatibility_fallback"] is True
+    assert result.context["promotion_grade"] is False
+    assert result.context["recommended_next_action"] == "regenerate_decision_with_typed_execution_authority"
 
 
 def test_run_loop_execution_planner_failure_returns_block_recovery_payload() -> None:
@@ -158,6 +162,7 @@ def test_run_loop_execution_planner_failure_returns_block_recovery_payload() -> 
     assert result.context["pre_submit_proof_status"] == "failed"
     assert result.context["execution_block_reason"] == "execution_decision_unavailable"
     assert result.context["execution_decision_authoritative"] == 0
+    assert result.context["promotion_grade"] is False
     assert result.planning_error == "RuntimeError: boom"
 
 

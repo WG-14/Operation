@@ -9,6 +9,7 @@ from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db, get_portfolio, set_portfolio
 from bithumb_bot.broker import paper
 from bithumb_bot import runtime_state
+from bithumb_bot.execution_service import ExecutionSubmitPlan
 from bithumb_bot.public_api_orderbook import BestQuote
 
 
@@ -59,6 +60,78 @@ def test_paper_execute_uses_orderbook_price_for_buy(tmp_path: Path, monkeypatch,
         _set("SLIPPAGE_BPS", old_slip)
         _set("MAX_ORDER_KRW", old_max_order)
         _set("PAPER_FEE_RATE", old_paper_fee)
+
+
+def test_paper_execute_typed_submit_plan_not_cash_fraction_is_buy_authority(tmp_path: Path, monkeypatch):
+    old_db = _set("DB_PATH", str(tmp_path / "paper_typed_plan.sqlite"))
+    old_slip = _set("SLIPPAGE_BPS", 0.0)
+    old_max_order = _set("MAX_ORDER_KRW", 0.0)
+    old_paper_fee = _set("PAPER_FEE_RATE", 0.0)
+    old_buy_fraction = _set("BUY_FRACTION", 1.0)
+    try:
+        conn = ensure_db()
+        set_portfolio(conn, cash_krw=1_000_000, asset_qty=0.0)
+        conn.close()
+        monkeypatch.setattr(
+            paper,
+            "fetch_orderbook_top",
+            lambda _pair: BestQuote(market="KRW-BTC", bid_price=100.0, ask_price=100.0),
+        )
+        plan = ExecutionSubmitPlan(
+            side="BUY",
+            source="strategy_position",
+            authority="configured_strategy_order_size",
+            final_action="ENTER_STRATEGY_POSITION",
+            qty=100.0,
+            notional_krw=10_000.0,
+            target_exposure_krw=10_000.0,
+            current_effective_exposure_krw=0.0,
+            delta_krw=10_000.0,
+            submit_expected=True,
+            pre_submit_proof_status="not_required",
+            block_reason="none",
+            idempotency_key="paper-buy-plan",
+        )
+
+        trade = paper.paper_execute("BUY", ts=1, price=100.0, execution_submit_plan=plan)
+
+        assert trade is not None
+        assert trade["qty"] == pytest.approx(100.0)
+        assert trade["qty"] != pytest.approx(10_000.0)
+    finally:
+        _set("DB_PATH", old_db)
+        _set("SLIPPAGE_BPS", old_slip)
+        _set("MAX_ORDER_KRW", old_max_order)
+        _set("PAPER_FEE_RATE", old_paper_fee)
+        _set("BUY_FRACTION", old_buy_fraction)
+
+
+def test_paper_execute_rejects_dict_only_submit_plan(tmp_path: Path, monkeypatch):
+    old_db = _set("DB_PATH", str(tmp_path / "paper_forged_plan.sqlite"))
+    try:
+        conn = ensure_db()
+        set_portfolio(conn, cash_krw=1_000_000, asset_qty=0.0)
+        conn.close()
+        monkeypatch.setattr(
+            paper,
+            "fetch_orderbook_top",
+            lambda _pair: BestQuote(market="KRW-BTC", bid_price=100.0, ask_price=100.0),
+        )
+
+        trade = paper.paper_execute(
+            "BUY",
+            ts=1,
+            price=100.0,
+            execution_submit_plan={
+                "side": "BUY",
+                "source": "strategy_position",
+                "authority": "configured_strategy_order_size",
+            },
+        )
+
+        assert trade is None
+    finally:
+        _set("DB_PATH", old_db)
 
 
 def test_paper_execute_buy_with_full_cash_budget_survives_float_dust(tmp_path: Path, monkeypatch):

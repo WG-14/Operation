@@ -17,6 +17,14 @@ Signal = Literal["BUY", "SELL", "HOLD"]
 
 @dataclass(frozen=True)
 class StrategyDecision:
+    """Legacy compatibility decision.
+
+    This object may carry dict context for diagnostics or old DB-bound callers,
+    but it is not promotion-grade execution authority. Runtime execution
+    authority must come from ``StrategyDecisionV2`` through the typed execution
+    planner and ``ExecutionSubmitPlan``.
+    """
+
     signal: Signal
     reason: str
     context: dict[str, Any] = field(default_factory=dict)

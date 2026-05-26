@@ -10,6 +10,7 @@ from bithumb_bot.execution_service import (
     ExecutionDecisionSummary,
     ExecutionSubmitPlan,
     LiveSignalExecutionService,
+    PaperSignalExecutionService,
     SignalExecutionRequest,
 )
 
@@ -52,6 +53,21 @@ def _service(calls: list[dict[str, object]]) -> LiveSignalExecutionService:
         executor=_executor,
         harmless_dust_recorder=lambda **_kwargs: False,
     )
+
+
+def _paper_service(calls: list[dict[str, object]]) -> PaperSignalExecutionService:
+    def _executor(signal, ts, market_price, **kwargs):
+        calls.append(
+            {
+                "signal": signal,
+                "ts": ts,
+                "market_price": market_price,
+                "kwargs": dict(kwargs),
+            }
+        )
+        return {"status": "submitted", "signal": signal}
+
+    return PaperSignalExecutionService(executor=_executor)
 
 
 def _valid_target_submit_plan() -> dict[str, object]:
@@ -718,6 +734,89 @@ def test_live_real_order_executes_with_typed_authority_and_empty_observability_c
     assert submitted == {"status": "submitted", "signal": "BUY"}
     assert len(calls) == 1
     assert calls[0]["kwargs"]["execution_submit_plan"]["source"] == "strategy_position"  # type: ignore[index]
+
+
+def test_paper_typed_path_rejects_missing_typed_submit_plan(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    object.__setattr__(settings, "MODE", "paper")
+    calls: list[dict[str, object]] = []
+    summary = ExecutionDecisionSummary(
+        raw_signal="BUY",
+        final_signal="BUY",
+        final_action="ENTER_STRATEGY_POSITION",
+        submit_expected=True,
+        pre_submit_proof_status="passed",
+        block_reason="none",
+        strategy_sell_candidate=None,
+        residual_sell_candidate=None,
+        target_exposure_krw=100_000.0,
+        current_effective_exposure_krw=0.0,
+        tracked_residual_exposure_krw=None,
+        buy_delta_krw=100_000.0,
+        residual_live_sell_mode="block",
+        residual_buy_sizing_mode="block",
+        residual_submit_plan=None,
+        buy_submit_plan=None,
+        target_shadow_decision=None,
+        target_submit_plan=None,
+    )
+
+    result = _paper_service(calls).execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+            observability_payload={"promotion_grade": True},
+            execution_decision_summary=summary,
+        )
+    )
+
+    assert result is None
+    assert calls == []
+    assert "paper_missing_typed_submit_plan" in caplog.text
+
+
+def test_paper_consumes_typed_submit_plan_and_passes_authority_to_executor() -> None:
+    object.__setattr__(settings, "MODE", "paper")
+    calls: list[dict[str, object]] = []
+    summary = _typed_buy_execution_summary()
+
+    result = _paper_service(calls).execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=summary,
+            observability_payload={"cash_available": 1_000_000_000.0},
+        )
+    )
+
+    assert result == {"status": "submitted", "signal": "BUY"}
+    assert len(calls) == 1
+    assert calls[0]["signal"] == "BUY"
+    assert calls[0]["kwargs"]["execution_submit_plan"] is summary.buy_submit_plan  # type: ignore[index]
+
+
+def test_paper_rejects_forged_dict_submit_plan() -> None:
+    object.__setattr__(settings, "MODE", "paper")
+    calls: list[dict[str, object]] = []
+    summary = _forged_summary_with_raw_plan(
+        field_name="buy_submit_plan",
+        plan=_valid_buy_submit_plan(),
+    )
+
+    result = _paper_service(calls).execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=summary,
+        )
+    )
+
+    assert result is None
+    assert calls == []
 
 
 def test_live_real_order_blocks_typed_summary_without_submit_plan(

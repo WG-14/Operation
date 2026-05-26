@@ -399,6 +399,14 @@ def test_promotion_grade_equivalence_gate_rejects_missing_execution_plan_binding
 def test_execution_equivalence_report_does_not_overclaim_lifecycle_scope() -> None:
     report = _compare(_decision_v2(), _decision_v2()).report
 
+    assert report["claim_scope"] == "submit_plan_equivalence_only"
+    assert report["submit_plan_equivalence_supported"] is True
+    assert report["full_lifecycle_equivalence_supported"] is False
+    assert report["simulated_fill_equivalence_supported"] is False
+    assert report["live_submit_equivalence_supported"] is False
+    assert report["accounting_replay_equivalence_supported"] is False
+    assert "execution_lifecycle_scope_not_supported" in report["unsupported_lifecycle_reasons"]
+
     execution = report["execution_equivalence"]
     assert execution["ok"] is True
     assert execution["submit_plan_equivalence_supported"] is True
@@ -410,6 +418,18 @@ def test_execution_equivalence_report_does_not_overclaim_lifecycle_scope() -> No
     assert "execution_lifecycle_scope_not_supported" in execution["unsupported_lifecycle_reasons"]
     assert "fill_equivalence_evidence_missing" in execution["unsupported_lifecycle_reasons"]
     assert "accounting_replay_equivalence_missing" in execution["unsupported_lifecycle_reasons"]
+
+
+def test_promotion_grade_gate_rejects_full_lifecycle_claim_without_lifecycle_evidence() -> None:
+    report = _compare(_decision_v2(), _decision_v2()).report
+    report["claims_scope"] = {
+        **report["claims_scope"],
+        "full_lifecycle_equivalence_supported": True,
+    }
+
+    reasons = promotion_grade_decision_equivalence_fail_reasons(report)
+
+    assert "decision_equivalence_full_lifecycle_claim_without_evidence" in reasons
 
 
 def test_policy_hashes_are_canonical_diagnostics_not_promotion_required() -> None:

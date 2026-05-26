@@ -322,6 +322,13 @@ def compare_decision_equivalence(
         "binding_validation": binding_items,
         "actual_semantic_drift_count": drift_counts["actual_semantic_drift_count"],
         "lifecycle_unmodeled_mismatch_count": drift_counts["lifecycle_unmodeled_mismatch_count"],
+        "claim_scope": execution_equivalence["claim_scope"],
+        "submit_plan_equivalence_supported": execution_equivalence["submit_plan_equivalence_supported"],
+        "full_lifecycle_equivalence_supported": execution_equivalence["full_lifecycle_equivalence_supported"],
+        "simulated_fill_equivalence_supported": execution_equivalence["simulated_fill_equivalence_supported"],
+        "live_submit_equivalence_supported": execution_equivalence["live_submit_equivalence_supported"],
+        "accounting_replay_equivalence_supported": execution_equivalence["accounting_replay_equivalence_supported"],
+        "unsupported_lifecycle_reasons": execution_equivalence["unsupported_lifecycle_reasons"],
         "claims_scope": _claims_scope(state_coverage_matrix=state_coverage_matrix),
         "execution_equivalence": execution_equivalence,
         "state_coverage_matrix": state_coverage_matrix,
@@ -473,6 +480,16 @@ def promotion_grade_decision_equivalence_fail_reasons(report: dict[str, Any]) ->
     else:
         if claims_scope.get("signal_equivalence_supported") is not True:
             reasons.append("decision_equivalence_signal_scope_not_supported")
+        if claims_scope.get("full_lifecycle_equivalence_supported") is True:
+            execution_equivalence = report.get("execution_equivalence")
+            execution_scope = execution_equivalence if isinstance(execution_equivalence, dict) else {}
+            lifecycle_evidence_ok = bool(
+                execution_scope.get("simulated_fill_equivalence_supported")
+                and execution_scope.get("live_submit_equivalence_supported")
+                and execution_scope.get("accounting_replay_equivalence_supported")
+            )
+            if not lifecycle_evidence_ok:
+                reasons.append("decision_equivalence_full_lifecycle_claim_without_evidence")
         if claims_scope.get("unsupported_state_classes"):
             reasons.append("decision_equivalence_unsupported_state_present")
         if int(claims_scope.get("fail_closed_unmodeled_state_count") or 0) > 0:
@@ -1112,14 +1129,25 @@ def _claims_scope(*, state_coverage_matrix: dict[str, dict[str, object]]) -> dic
         if bool(entry.get("fail_closed_expected"))
     )
     return {
+        "claim_scope": "submit_plan_equivalence_only",
         "positive_equivalence_state_classes": positive_classes,
         "unsupported_state_classes": unsupported_classes,
         "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
         "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
+        "simulated_fill_equivalence_supported": False,
+        "live_submit_equivalence_supported": False,
+        "accounting_replay_equivalence_supported": False,
         "signal_equivalence_supported": bool(positive_classes),
         "execution_plan_equivalence_supported": True,
         "position_lifecycle_equivalence_supported": False,
         "fail_closed_unmodeled_state_count": fail_closed_count,
+        "unsupported_lifecycle_reasons": [
+            "execution_lifecycle_scope_not_supported",
+            "fill_equivalence_evidence_missing",
+            "live_submit_equivalence_evidence_missing",
+            "accounting_replay_equivalence_missing",
+        ],
         "limitations": [
             "research_position_model_cash_qty_simulation_v1_is_not_lot_native_authority",
             "non_flat_dust_reserved_exit_residue_and_recovery_states_fail_closed_until_explicitly_modeled",

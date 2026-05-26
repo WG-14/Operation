@@ -345,6 +345,7 @@ class ExecutionPlanner:
                 "submit_plan_source": None if submit_plan is None else submit_plan.source,
                 "submit_plan_authority": None if submit_plan is None else submit_plan.authority,
                 "persistence_context_authoritative": 0,
+                "non_authoritative_observability_payload": True,
             }
         )
         bundle = ExecutionPlanBundle(
@@ -391,6 +392,7 @@ class ExecutionPlanner:
                 "decision_authority_source": "DecisionEnvelope.strategy_decision",
                 "decision_envelope_present": True,
                 "persistence_context_authoritative": 0,
+                "non_authoritative_observability_payload": True,
             }
         )
         context.update(dict(planning_input.policy_hashes))
@@ -533,6 +535,14 @@ class ExecutionPlanner:
         context["execution_block_reason"] = reason_code
         context["execution_decision_authoritative"] = 0
         context["persistence_context_authoritative"] = 0
+        context["legacy_context_planning_used"] = False
+        context["compatibility_fallback"] = False
+        context["promotion_grade"] = False
+        context["recommended_next_action"] = (
+            "regenerate_decision_with_typed_execution_authority"
+            if reason_code == "legacy_context_planning_disabled"
+            else "inspect_execution_planning_failure"
+        )
         planning_error = reason_code if exc is None else f"{type(exc).__name__}: {exc}"
         return ExecutionPlanningResult(
             context=context,
@@ -630,6 +640,12 @@ class ExecutionPlanner:
                     else self.summary_builder
                 )
                 execution_decision_summary = legacy_builder(**legacy_summary_kwargs)
+                summary_context["legacy_context_planning_used"] = True
+                summary_context["compatibility_fallback"] = True
+                summary_context["promotion_grade"] = False
+                summary_context["recommended_next_action"] = (
+                    "regenerate_decision_with_typed_execution_authority"
+                )
             context = self.persistence_context_builder(
                 decision_context=summary_context,
                 execution_decision_summary=execution_decision_summary,

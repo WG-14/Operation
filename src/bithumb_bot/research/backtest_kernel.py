@@ -1131,6 +1131,14 @@ def _run_decision_event_backtest_impl(
             block_reason = "sell_blocked_no_sellable_qty"
         elif action not in {"BUY", "SELL", "HOLD"}:
             raise ValueError(f"unsupported_decision_event_final_signal:{event.final_signal}")
+        allow_execution_compatibility_fallback = bool(
+            policy_decision is None
+            and not sma_policy_unsupported_reason
+            and (
+                strategy_plugin.name != "sma_with_filter"
+                or _allows_legacy_sma_event_first_exit_policy(event)
+            )
+        )
         execution_plan_bundle = _research_execution_plan_bundle(
             side=action,
             cash=float(cash),
@@ -1139,15 +1147,8 @@ def _run_decision_event_backtest_impl(
             reference_price=float(candle.close),
             policy_decision=policy_decision,
             candle_ts=int(candle.ts),
-            allow_compatibility_fallback=bool(
-                policy_decision is None
-                and not sma_policy_unsupported_reason
-                and (
-                    strategy_plugin.name != "sma_with_filter"
-                    or _allows_legacy_sma_event_first_exit_policy(event)
-                )
-            ),
-            promotion_grade_required=True,
+            allow_compatibility_fallback=allow_execution_compatibility_fallback,
+            promotion_grade_required=not allow_execution_compatibility_fallback,
             block_reason=block_reason,
         )
         submit_plan = execution_plan_bundle.submit_plan

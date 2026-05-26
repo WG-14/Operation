@@ -1538,24 +1538,99 @@ def _canonical_harmless_dust_sell_preview(decision_context: dict[str, object] | 
     }
 
 
+def _paper_typed_submit_plan(
+    request: SignalExecutionRequest,
+) -> tuple[ExecutionSubmitPlan | None, str | None]:
+    bundle = request.execution_plan_bundle
+    bundle_present = bundle is not None
+    bundle_plan = getattr(bundle, "submit_plan", None)
+    bundle_summary = getattr(bundle, "summary", None)
+    summary = request.execution_decision_summary or bundle_summary
+    observability = _request_observability_payload(request)
+    typed_or_promotion_path = bool(
+        bundle_present
+        or request.execution_decision_summary is not None
+        or (isinstance(observability, dict) and bool(observability.get("execution_plan_bundle_present")))
+        or (isinstance(observability, dict) and bool(observability.get("promotion_grade")))
+    )
+    if not typed_or_promotion_path:
+        return None, None
+    if bundle_present and bundle_plan is not None and not isinstance(bundle_plan, ExecutionSubmitPlan):
+        return None, "paper_dict_only_submit_plan_not_authority"
+    if summary is None:
+        return None, "paper_missing_typed_execution_summary"
+    if not isinstance(summary, ExecutionDecisionSummary):
+        return None, "paper_invalid_typed_execution_summary"
+    for field_name, candidate in (
+        ("target_submit_plan", summary.target_submit_plan),
+        ("residual_submit_plan", summary.residual_submit_plan),
+        ("buy_submit_plan", summary.buy_submit_plan),
+    ):
+        if candidate is not None and not isinstance(candidate, ExecutionSubmitPlan):
+            return None, f"paper_dict_only_submit_plan_not_authority:{field_name}"
+    plan = bundle_plan if isinstance(bundle_plan, ExecutionSubmitPlan) else (
+        summary.typed_target_submit_plan()
+        or summary.typed_residual_submit_plan()
+        or summary.typed_buy_submit_plan()
+    )
+    if plan is None:
+        return None, "paper_missing_typed_submit_plan"
+    if not bool(plan.submit_expected):
+        return None, str(plan.block_reason or "paper_submit_plan_submit_not_expected")
+    if str(plan.block_reason or "none") != "none":
+        return None, str(plan.block_reason or "paper_submit_plan_blocked")
+    if str(plan.side or "").upper() not in {"BUY", "SELL"}:
+        return None, "paper_submit_plan_non_submittable_side"
+    if plan.qty is None or float(plan.qty or 0.0) <= 0.0:
+        return None, "paper_submit_plan_non_positive_qty"
+    try:
+        validate_execution_submit_plan_payload(plan.as_dict(), field_name="paper_submit_plan")
+    except ValueError as exc:
+        return None, str(exc)
+    return plan, None
+
+
 @dataclass(frozen=True)
 class PaperSignalExecutionService:
     executor: Callable[..., dict | None]
 
     def execute(self, request: SignalExecutionRequest) -> dict | None:
+        submit_plan, submit_plan_error = _paper_typed_submit_plan(request)
+        if submit_plan_error is not None:
+            RUN_LOG.warning(
+                format_log_kv(
+                    "[ORDER_SKIP] invalid paper execution submit plan",
+                    reason=submit_plan_error,
+                    signal=str(request.signal).upper(),
+                    execution_engine=_execution_engine(),
+                )
+            )
+            return None
         try:
             return self.executor(
-                request.signal,
+                submit_plan.side if submit_plan is not None else request.signal,
                 request.ts,
                 request.market_price,
                 strategy_name=request.strategy_name,
                 decision_id=request.decision_id,
                 decision_reason=request.decision_reason,
                 exit_rule_name=request.exit_rule_name,
+                execution_submit_plan=submit_plan,
             )
         except TypeError as exc:
             if "unexpected keyword argument" not in str(exc):
                 raise
+            if submit_plan is not None:
+                RUN_LOG.warning(
+                    format_log_kv(
+                        "[ORDER_SKIP] paper executor missing typed submit plan support",
+                        reason="paper_executor_missing_execution_submit_plan_support",
+                        submit_plan_source=submit_plan.source,
+                        submit_plan_authority=submit_plan.authority,
+                        side=submit_plan.side,
+                    )
+                )
+                return None
             return self.executor(request.signal, request.ts, request.market_price)
 
 

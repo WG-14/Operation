@@ -384,10 +384,58 @@ def paper_execute(
     decision_id: int | None = None,
     decision_reason: str | None = None,
     exit_rule_name: str | None = None,
+    execution_submit_plan: object | None = None,
 ) -> dict[str, Any] | None:
     _validate_paper_execution_config()
     market = _resolve_orderbook_market()
     fee_rate = max(0.0, float(settings.PAPER_FEE_RATE))
+    plan_payload: dict[str, object] | None = None
+    plan_hash: str | None = None
+    plan_side = str(signal).upper()
+    if execution_submit_plan is not None:
+        from ..decision_equivalence import sha256_prefixed
+        from ..execution_service import ExecutionSubmitPlan, validate_execution_submit_plan_payload
+
+        if not isinstance(execution_submit_plan, ExecutionSubmitPlan):
+            RUN_LOG.warning(
+                format_log_kv(
+                    "[ORDER_SKIP] paper submit plan rejected",
+                    reason="paper_dict_only_submit_plan_not_authority",
+                    signal=str(signal).upper(),
+                )
+            )
+            return None
+        plan_payload = execution_submit_plan.as_final_payload(
+            extra={
+                "paper_submit_plan_consumed": True,
+                "paper_submit_plan_adjustment_reason": "none",
+            }
+        )
+        validate_execution_submit_plan_payload(plan_payload, field_name="paper_submit_plan")
+        plan_hash = sha256_prefixed(execution_submit_plan.as_dict())
+        plan_side = str(execution_submit_plan.side or "").upper()
+        if plan_side not in {"BUY", "SELL"}:
+            RUN_LOG.warning(
+                format_log_kv(
+                    "[ORDER_SKIP] paper submit plan rejected",
+                    reason="paper_submit_plan_non_submittable_side",
+                    signal=str(signal).upper(),
+                    submit_plan_side=plan_side,
+                )
+            )
+            return None
+        if not bool(execution_submit_plan.submit_expected) or str(execution_submit_plan.block_reason or "none") != "none":
+            RUN_LOG.warning(
+                format_log_kv(
+                    "[ORDER_SKIP] paper submit plan blocked",
+                    reason=str(execution_submit_plan.block_reason or "paper_submit_plan_submit_not_expected"),
+                    signal=str(signal).upper(),
+                    submit_plan_side=plan_side,
+                    submit_plan_source=execution_submit_plan.source,
+                    submit_plan_authority=execution_submit_plan.authority,
+                )
+            )
+            return None
 
     conn = ensure_db()
     client_order_id = ""
@@ -421,14 +469,14 @@ def paper_execute(
             return None
         quote_context: _PaperQuoteContext | None = None
         if _get_fill_price.__module__ == __name__ and _get_fill_price.__name__ == "_get_fill_price":
-            quote_context = _get_paper_quote_context(signal, market=market)
+            quote_context = _get_paper_quote_context(plan_side, market=market)
             fill_price = quote_context.fill_price if quote_context is not None else None
         elif "market" in inspect.signature(_get_fill_price).parameters:
-            fill_price = _get_fill_price(signal, market=market)
+            fill_price = _get_fill_price(plan_side, market=market)
         else:
             # Preserve compatibility with tests or callers that still patch the
             # older single-argument helper.
-            fill_price = _get_fill_price(signal)
+            fill_price = _get_fill_price(plan_side)
         if fill_price is None:
             return None
         cash, qty = get_portfolio(conn)
@@ -512,8 +560,128 @@ def paper_execute(
 
         fee = 0.0
         trade_qty = 0.0
+        intended_lot_count = 0
+        executable_lot_count = 0
 
-        if signal == "BUY" and effective_flat:
+        paper_submit_plan_consumed = plan_payload is not None
+        paper_submit_plan_adjustment_reason = "none"
+
+        if plan_payload is not None:
+            side = plan_side
+            try:
+                requested_plan_qty = float(plan_payload.get("qty") or 0.0)
+            except (TypeError, ValueError):
+                RUN_LOG.warning(
+                    format_log_kv(
+                        "[ORDER_SKIP] paper submit plan rejected",
+                        reason="paper_submit_plan_invalid_qty",
+                        submit_plan_source=str(plan_payload.get("source") or "-"),
+                        submit_plan_authority=str(plan_payload.get("authority") or "-"),
+                    )
+                )
+                return None
+            if requested_plan_qty <= 0.0:
+                return None
+            if side == "BUY":
+                if str(plan_payload.get("source") or "") != "target_delta" and (
+                    not bool(effective_flat) or not bool(entry_allowed)
+                ):
+                    RUN_LOG.warning(
+                        format_log_kv(
+                            "[ORDER_SKIP] paper submit plan rejected",
+                            reason="paper_submit_plan_entry_not_allowed",
+                            effective_flat=1 if bool(effective_flat) else 0,
+                            entry_allowed=1 if bool(entry_allowed) else 0,
+                            submit_plan_source=str(plan_payload.get("source") or "-"),
+                            submit_plan_authority=str(plan_payload.get("authority") or "-"),
+                        )
+                    )
+                    return None
+                blocked, _ = evaluate_buy_guardrails(
+                    conn=conn,
+                    ts_ms=int(ts),
+                    cash=cash,
+                    qty=0.0,
+                    price=float(fill_price),
+                )
+                if blocked:
+                    return None
+                trade_qty = _adjust_buy_qty_for_paper_cash_safety(
+                    qty=requested_plan_qty,
+                    market_price=float(fill_price),
+                    cash_available=float(cash),
+                    fee_rate=fee_rate,
+                    qty_step=float(rules.qty_step),
+                    max_qty_decimals=int(rules.max_qty_decimals),
+                )
+                if trade_qty <= 0:
+                    return None
+                if (
+                    trade_qty + 1e-12 < float(rules.min_qty)
+                    or (trade_qty * float(fill_price)) + 1e-9 < float(rules.min_notional_krw)
+                ):
+                    RUN_LOG.warning(
+                        format_log_kv(
+                            "[ORDER_SKIP] paper submit plan rejected",
+                            reason="paper_submit_plan_below_order_rules",
+                            qty=f"{float(trade_qty):.12f}",
+                            notional_krw=f"{float(trade_qty) * float(fill_price):.8f}",
+                            min_qty=f"{float(rules.min_qty):.12f}",
+                            min_notional_krw=f"{float(rules.min_notional_krw):.8f}",
+                            submit_plan_source=str(plan_payload.get("source") or "-"),
+                            submit_plan_authority=str(plan_payload.get("authority") or "-"),
+                        )
+                    )
+                    return None
+                if abs(float(trade_qty) - requested_plan_qty) > 1e-12:
+                    paper_submit_plan_adjustment_reason = "paper_cash_safety_qty_reduced"
+                fee = (trade_qty * float(fill_price)) * fee_rate
+                intended_lot_count = int(plan_payload.get("intended_lot_count") or 0)
+                executable_lot_count = int(plan_payload.get("executable_lot_count") or 0)
+            elif side == "SELL":
+                if requested_plan_qty > float(normalized_exposure.sellable_executable_qty) + 1e-12:
+                    RUN_LOG.warning(
+                        format_log_kv(
+                            "[ORDER_SKIP] paper submit plan rejected",
+                            reason="paper_submit_plan_qty_exceeds_sellable_executable_qty",
+                            requested_qty=f"{requested_plan_qty:.12f}",
+                            sellable_qty=f"{float(normalized_exposure.sellable_executable_qty):.12f}",
+                            submit_plan_source=str(plan_payload.get("source") or "-"),
+                            submit_plan_authority=str(plan_payload.get("authority") or "-"),
+                        )
+                    )
+                    return None
+                if (
+                    requested_plan_qty + 1e-12 < float(rules.min_qty)
+                    or (requested_plan_qty * float(fill_price)) + 1e-9 < float(rules.min_notional_krw)
+                ):
+                    RUN_LOG.warning(
+                        format_log_kv(
+                            "[ORDER_SKIP] paper submit plan rejected",
+                            reason="paper_submit_plan_below_order_rules",
+                            qty=f"{requested_plan_qty:.12f}",
+                            notional_krw=f"{requested_plan_qty * float(fill_price):.8f}",
+                            min_qty=f"{float(rules.min_qty):.12f}",
+                            min_notional_krw=f"{float(rules.min_notional_krw):.8f}",
+                            submit_plan_source=str(plan_payload.get("source") or "-"),
+                            submit_plan_authority=str(plan_payload.get("authority") or "-"),
+                        )
+                    )
+                    return None
+                trade_qty = requested_plan_qty
+                fee = (trade_qty * float(fill_price)) * fee_rate
+                intended_lot_count = int(
+                    plan_payload.get(
+                        "target_executable_lot_count",
+                        plan_payload.get("executable_lot_count", normalized_exposure.sellable_executable_lot_count),
+                    )
+                    or 0
+                )
+                executable_lot_count = intended_lot_count
+            else:
+                return None
+
+        elif signal == "BUY" and effective_flat:
             # Harmless dust is operationally flat for re-entry. Do not let the
             # residual dust quantity re-trigger the duplicate-entry guardrail.
             guardrail_qty = 0.0 if entry_allowed else float(
@@ -559,6 +727,8 @@ def paper_execute(
                 return None
             fee = (trade_qty * float(fill_price)) * fee_rate
             side = "BUY"
+            intended_lot_count = int(entry_sizing.intended_lot_count)
+            executable_lot_count = int(entry_sizing.executable_lot_count)
 
         elif signal == "SELL":
             exit_sizing = build_sell_execution_sizing(
@@ -576,6 +746,8 @@ def paper_execute(
             trade_qty = float(exit_sizing.executable_qty)
             fee = (trade_qty * float(fill_price)) * fee_rate
             side = "SELL"
+            intended_lot_count = int(exit_sizing.intended_lot_count)
+            executable_lot_count = int(exit_sizing.executable_lot_count)
 
         else:
             return None
@@ -593,8 +765,8 @@ def paper_execute(
             intent_ts=int(ts),
             intent_type=("market_entry" if side == "BUY" else "market_exit"),
             qty=float(trade_qty),
-            intended_lot_count=int(entry_sizing.intended_lot_count if side == "BUY" else exit_sizing.intended_lot_count),
-            executable_lot_count=int(entry_sizing.executable_lot_count if side == "BUY" else exit_sizing.executable_lot_count),
+            intended_lot_count=int(intended_lot_count),
+            executable_lot_count=int(executable_lot_count),
         )
         claimed, existing_intent = claim_order_intent_dedup(
             conn,
@@ -606,8 +778,8 @@ def paper_execute(
             intent_type=("market_entry" if side == "BUY" else "market_exit"),
             intent_ts=int(ts),
             qty=float(trade_qty),
-            intended_lot_count=int(entry_sizing.intended_lot_count if side == "BUY" else exit_sizing.intended_lot_count),
-            executable_lot_count=int(entry_sizing.executable_lot_count if side == "BUY" else exit_sizing.executable_lot_count),
+            intended_lot_count=int(intended_lot_count),
+            executable_lot_count=int(executable_lot_count),
             order_status="PENDING_SUBMIT",
         )
         if not claimed:
@@ -658,6 +830,12 @@ def paper_execute(
                 intent_ts=int(ts),
                 intent_key=intent_key,
                 client_order_id=client_order_id,
+                execution_plan_bundle_present=1 if paper_submit_plan_consumed else 0,
+                paper_submit_plan_consumed=1 if paper_submit_plan_consumed else 0,
+                paper_submit_plan_hash=str(plan_hash or "-"),
+                submit_plan_source=str(plan_payload.get("source") if plan_payload else "-"),
+                submit_plan_authority=str(plan_payload.get("authority") if plan_payload else "-"),
+                paper_submit_plan_adjustment_reason=paper_submit_plan_adjustment_reason,
                 reason=f"client_order_id={client_order_id}",
             )
         )
@@ -710,7 +888,16 @@ def paper_execute(
                 if execution_result.fill_status == "partial"
                 else "FILLED"
             ),
-            evidence=execution_result.evidence,
+            evidence={
+                **execution_result.evidence,
+                "execution_plan_bundle_present": bool(paper_submit_plan_consumed),
+                "submit_plan_source": (None if plan_payload is None else plan_payload.get("source")),
+                "submit_plan_authority": (None if plan_payload is None else plan_payload.get("authority")),
+                "paper_submit_plan_consumed": bool(paper_submit_plan_consumed),
+                "paper_submit_plan_hash": plan_hash,
+                "paper_submit_plan_adjustment_reason": paper_submit_plan_adjustment_reason,
+                "paper_submit_plan": plan_payload,
+            },
         )
 
         if execution_result.fill_status == "failed" or execution_result.filled_qty <= 0.0:
