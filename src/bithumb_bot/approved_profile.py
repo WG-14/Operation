@@ -23,6 +23,7 @@ from .evidence_chain import (
     validate_candidate_regime_policy_equivalence_evidence,
     validate_profile_transition_evidence,
 )
+from .evidence_safety import smoke_only_evidence_rejection_reasons
 from .decision_equivalence import compute_decision_equivalence_hash
 from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.lineage import validate_lineage_artifact, LineageValidationError
@@ -303,6 +304,13 @@ def verify_promotion_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(profile, dict):
         raise ApprovedProfileError("promotion_candidate_profile_missing")
     for source_name, source in (("promotion", payload), ("candidate_profile", profile)):
+        smoke_reasons = smoke_only_evidence_rejection_reasons(source)
+        if smoke_reasons:
+            raise ApprovedProfileError(
+                f"{source_name}_smoke_evidence_not_promotable:"
+                + ",".join(smoke_reasons)
+                + ",regenerate_via_research_validate"
+            )
         if source.get("compatibility_fallback") is True or source.get(
             "research_compatibility_execution_fallback"
         ) is True:

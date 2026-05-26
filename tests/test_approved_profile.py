@@ -330,7 +330,20 @@ def test_promotion_artifact_rejects_research_compatibility_fallback_marker() -> 
 def test_promotion_artifact_rejects_promotion_grade_false_marker() -> None:
     promotion = _promotion(promotion_grade=False)
 
-    with pytest.raises(ApprovedProfileError, match="promotion_promotion_grade_false"):
+    with pytest.raises(ApprovedProfileError, match="promotion_grade_validation_required"):
+        verify_promotion_artifact(promotion)
+
+
+def test_promotion_artifact_rejects_smoke_backtest_markers() -> None:
+    promotion = _promotion(
+        diagnostic_only=True,
+        non_promotable=True,
+        promotion_grade=False,
+        evidence_scope="smoke_only_not_manifest_backed",
+        standalone_backtest_not_full_validation=True,
+    )
+
+    with pytest.raises(ApprovedProfileError, match="smoke_backtest_artifact_not_promotable"):
         verify_promotion_artifact(promotion)
 
 

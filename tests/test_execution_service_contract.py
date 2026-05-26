@@ -13,6 +13,8 @@ from bithumb_bot.execution_service import (
     PaperSignalExecutionService,
     SignalExecutionRequest,
 )
+from bithumb_bot.research.backtest_kernel import ResearchVirtualExecutionService
+from bithumb_bot.research.execution_model import FixedBpsExecutionModel
 
 
 @pytest.fixture(autouse=True)
@@ -993,3 +995,117 @@ def test_live_broker_lot_native_buy_submit_plan_accepts_only_typed_authority_pay
 
     blocked = {**_valid_buy_submit_plan(), "block_reason": "entry_blocked"}
     assert live_broker._lot_native_buy_submit_plan(blocked) is None
+
+
+def _summary_for_plan(plan: ExecutionSubmitPlan) -> ExecutionDecisionSummary:
+    if plan.source == "target_delta":
+        return _typed_target_execution_summary()
+    if plan.source == "residual_inventory":
+        return _typed_residual_execution_summary()
+    return _typed_buy_execution_summary()
+
+
+def _research_admission(plan: ExecutionSubmitPlan | object) -> str:
+    service = ResearchVirtualExecutionService(
+        execution_model=FixedBpsExecutionModel(fee_rate=0.0004, slippage_bps=1.0),
+        fee_rate=0.0004,
+    )
+    try:
+        fill = service.simulate_submit_plan(
+            submit_plan=plan,  # type: ignore[arg-type]
+            signal_ts=1,
+            decision_ts=2,
+            reference_price=100_000_000.0,
+            timing_fields={},
+            depth_fields={},
+        )
+    except ValueError:
+        return "blocked"
+    return "accepted" if fill is not None else "blocked"
+
+
+def _paper_admission(summary: ExecutionDecisionSummary) -> str:
+    object.__setattr__(settings, "MODE", "paper")
+    calls: list[dict[str, object]] = []
+    result = _paper_service(calls).execute(
+        SignalExecutionRequest(
+            signal=summary.final_signal,
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=summary,
+            observability_payload={"promotion_grade": True},
+        )
+    )
+    return "accepted" if result is not None and calls else "blocked"
+
+
+def _live_admission(summary: ExecutionDecisionSummary, *, engine: str, residual_mode: str = "block") -> str:
+    _arm_live_real_orders(engine=engine)
+    object.__setattr__(settings, "RESIDUAL_LIVE_SELL_MODE", residual_mode)
+    calls: list[dict[str, object]] = []
+    result = _service(calls).execute(
+        SignalExecutionRequest(
+            signal=summary.final_signal,
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=summary,
+        )
+    )
+    return "accepted" if result is not None and calls else "blocked"
+
+
+@pytest.mark.parametrize(
+    ("payload_factory", "engine", "residual_mode"),
+    [
+        (_valid_buy_submit_plan, "lot_native", "block"),
+        (_valid_target_submit_plan, "target_delta", "block"),
+        (_valid_residual_submit_plan, "lot_native", "enabled"),
+    ],
+)
+def test_submit_plan_admission_equivalence_valid_typed_plans(
+    payload_factory: Callable[[], dict[str, object]],
+    engine: str,
+    residual_mode: str,
+) -> None:
+    plan = _typed_plan(payload_factory())
+    summary = _summary_for_plan(plan)
+
+    assert _research_admission(plan) == "accepted"
+    assert _paper_admission(summary) == "accepted"
+    assert _live_admission(summary, engine=engine, residual_mode=residual_mode) == "accepted"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda plan: plan.update({"source": "legacy_context"}),
+        lambda plan: plan.update({"authority": "legacy_qty"}),
+        lambda plan: plan.update({"pre_submit_proof_status": "failed"}),
+        lambda plan: plan.update({"block_reason": "entry_filter_blocked", "submit_expected": False}),
+        lambda plan: plan.update({"qty": 0.0}),
+        lambda plan: plan.update({"notional_krw": 0.0}),
+    ],
+)
+def test_submit_plan_admission_equivalence_invalid_buy_plans_fail_closed(
+    caplog: pytest.LogCaptureFixture,
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    payload = _valid_buy_submit_plan()
+    mutate(payload)
+    plan = _typed_plan(payload)
+    try:
+        summary = _typed_buy_execution_summary(plan=payload)
+    except (TypeError, ValueError):
+        summary = _forged_summary_with_raw_plan(field_name="buy_submit_plan", plan=plan)  # type: ignore[arg-type]
+
+    assert _research_admission(plan) == "blocked"
+    assert _paper_admission(summary) == "blocked"
+    assert _live_admission(summary, engine="lot_native") == "blocked"
+
+
+def test_submit_plan_admission_equivalence_dict_only_plans_fail_closed() -> None:
+    summary = _forged_summary_with_raw_plan(field_name="buy_submit_plan", plan=_valid_buy_submit_plan())
+
+    assert _research_admission(_valid_buy_submit_plan()) == "blocked"
+    assert _paper_admission(summary) == "blocked"
+    assert _live_admission(summary, engine="lot_native") == "blocked"

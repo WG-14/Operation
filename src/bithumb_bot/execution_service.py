@@ -1583,6 +1583,8 @@ def _paper_typed_submit_plan(
         return None, "paper_submit_plan_non_submittable_side"
     if plan.qty is None or float(plan.qty or 0.0) <= 0.0:
         return None, "paper_submit_plan_non_positive_qty"
+    if plan.notional_krw is None or float(plan.notional_krw or 0.0) <= 0.0:
+        return None, "paper_submit_plan_non_positive_notional"
     try:
         validate_execution_submit_plan_payload(plan.as_dict(), field_name="paper_submit_plan")
     except ValueError as exc:

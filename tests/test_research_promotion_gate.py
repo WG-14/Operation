@@ -596,6 +596,23 @@ def test_candidate_regime_policy_equivalence_evidence_required_for_production_bo
     test_promotion_requires_candidate_regime_policy_equivalence_when_policy_affects_entries()
 
 
+def test_backtest_candidate_smoke_markers_fail_closed_for_promotion() -> None:
+    candidate = _production_candidate(
+        diagnostic_only=True,
+        non_promotable=True,
+        promotion_grade=False,
+        evidence_scope="smoke_only_not_manifest_backed",
+        standalone_backtest_not_full_validation=True,
+    )
+    candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
+
+    allowed, reasons = validate_backtest_candidate_for_promotion(candidate)
+
+    assert not allowed
+    assert "smoke_backtest_artifact_not_promotable" in reasons
+    assert "promotion_grade_validation_required" in reasons
+
+
 def test_candidate_regime_policy_equivalence_evidence_can_be_bound_to_candidate_profile(tmp_path: Path) -> None:
     candidate = _production_candidate(
         candidate_regime_policy_required_for_live=True,

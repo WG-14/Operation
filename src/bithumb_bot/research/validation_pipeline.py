@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from bithumb_bot.paths import PathManager, PathPolicyError
 from bithumb_bot.storage_io import write_json_atomic
+from bithumb_bot.evidence_safety import smoke_only_evidence_rejection_reasons
 
 from .deployment_policy import is_production_bound_target
 from .experiment_manifest import ExperimentManifest
@@ -302,6 +303,10 @@ def verify_validation_run_payload(
     require_pass: bool = True,
 ) -> list[str]:
     reasons: list[str] = []
+    smoke_reasons = smoke_only_evidence_rejection_reasons(payload)
+    if smoke_reasons:
+        reasons.extend(f"validation_run_{reason}" for reason in smoke_reasons)
+        reasons.append("regenerate_via_research_validate")
     if int(payload.get("validation_run_schema_version") or 0) != VALIDATION_RUN_SCHEMA_VERSION:
         reasons.append("validation_run_schema_version_mismatch")
     reasons.extend(verify_validation_run_binding(payload, expected_binding_hash=None))

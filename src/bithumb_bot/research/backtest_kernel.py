@@ -101,13 +101,15 @@ def execution_submit_plan_to_research_request(
     if side == "BUY":
         requested_notional = _positive_float_or_none(submit_plan.notional_krw)
         requested_qty = _positive_float_or_none(submit_plan.qty)
-        if requested_notional is None and requested_qty is None:
+        if requested_notional is None or requested_qty is None:
             raise ValueError("research_buy_submit_plan_missing_size")
     elif side == "SELL":
         requested_qty = _positive_float_or_none(submit_plan.qty)
         requested_notional = _positive_float_or_none(submit_plan.notional_krw)
         if requested_qty is None:
             raise ValueError("research_sell_submit_plan_missing_qty")
+        if requested_notional is None:
+            raise ValueError("research_sell_submit_plan_missing_notional")
     else:
         raise ValueError(f"research_submit_plan_unsupported_side:{side or 'missing'}")
     return ExecutionRequest(

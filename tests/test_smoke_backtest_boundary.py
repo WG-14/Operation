@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import backtest as smoke_backtest
+import backtest
+from bithumb_bot import smoke_backtest
 
 
 def test_root_backtest_output_is_diagnostic_only_and_non_promotable(monkeypatch) -> None:
@@ -11,4 +12,18 @@ def test_root_backtest_output_is_diagnostic_only_and_non_promotable(monkeypatch)
 
     assert result["diagnostic_only"] is True
     assert result["non_promotable"] is True
+    assert result["promotion_grade"] is False
     assert result["evidence_scope"] == "smoke_only_not_manifest_backed"
+    assert result["standalone_backtest_not_full_validation"] is True
+
+
+def test_root_backtest_default_refuses_to_run_smoke_backtest(capsys) -> None:
+    assert backtest.main(["--short", "2", "--long", "4"]) == 2
+    captured = capsys.readouterr()
+
+    assert "diagnostic_only=true" in captured.err
+    assert "non_promotable=true" in captured.err
+    assert "promotion_grade=false" in captured.err
+    assert "evidence_scope=smoke_only_not_manifest_backed" in captured.err
+    assert "standalone_backtest_not_full_validation=true" in captured.err
+    assert "uv run bithumb-bot research-validate --manifest <path>" in captured.err
