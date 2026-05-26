@@ -95,7 +95,11 @@ def _typed_strategy_decision_payload(result: RuntimeSmaDecisionResult) -> dict[s
 
 
 class ReadOnlyPositionStateNormalizer:
-    """Replay/debug adapter that forbids persistence before snapshot loading."""
+    """Replay/debug adapter that forbids persistence before snapshot loading.
+
+    Replay builds observability evidence from the already-normalized DB
+    snapshot. It must not repair or reclassify position state as a side effect.
+    """
 
     def normalize_and_persist(self, conn: sqlite3.Connection, **kwargs: object) -> int:
         return 0

@@ -434,7 +434,15 @@ def build_sma_with_filter_runtime_decision_from_normalized_db(
     *,
     through_ts_ms: int | None = None,
 ) -> RuntimeSmaDecisionResult | None:
-    """Read normalized DB state and return the typed final SMA runtime decision."""
+    """Read normalized DB state and return the typed final SMA runtime decision.
+
+    This is the post-normalization read-only phase. It may read candles,
+    position projections, fee/rule snapshots, and assemble replay/legacy
+    observability payloads, but it must not repair, reclassify, or persist DB
+    state. Runtime callers that need state repair must use
+    ``decide_sma_with_filter_runtime_snapshot_from_db`` so the mutating
+    ``PositionStateNormalizer`` phase remains explicit and testable.
+    """
     from .utils_time import parse_interval_sec
 
     if int(strategy.short_n) >= int(strategy.long_n):
@@ -937,7 +945,12 @@ def decide_sma_with_filter_runtime_snapshot_from_db(
     through_ts_ms: int | None = None,
     normalizer: PositionStateNormalizer | None = None,
 ) -> RuntimeSmaDecisionResult | None:
-    """Live/runtime orchestration boundary for typed sma_with_filter decisions."""
+    """Live/runtime orchestration boundary for typed sma_with_filter decisions.
+
+    This is the only SMA runtime decision helper in this module allowed to run
+    the pre-decision normalizer. After ``normalize_and_persist`` returns, the
+    normalized builder and pure policy evaluation must remain read-only.
+    """
     signal_through_ts_ms = _resolve_signal_through_ts_ms(
         interval=strategy.interval,
         through_ts_ms=through_ts_ms,

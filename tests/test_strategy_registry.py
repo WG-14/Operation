@@ -323,6 +323,42 @@ def test_live_real_sma_cross_rejected_before_legacy_strategy_creation(
     assert legacy_calls == []
 
 
+def test_legacy_sma_cross_cannot_be_selected_in_live_even_if_strategy_name_argument_is_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_mode = settings.MODE
+    old_armed = settings.LIVE_REAL_ORDER_ARMED
+    old_dry_run = settings.LIVE_DRY_RUN
+    old_strategy_name = settings.STRATEGY_NAME
+    legacy_calls: list[str] = []
+
+    def _fail_legacy_creation(name: str, **_kwargs):
+        legacy_calls.append(name)
+        raise AssertionError("legacy DB strategy creation must not be reached")
+
+    monkeypatch.setattr(engine_module, "create_legacy_strategy", _fail_legacy_creation)
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "STRATEGY_NAME", "sma_with_filter")
+    try:
+        with sqlite3.connect(":memory:") as conn:
+            with pytest.raises(config.LiveModeValidationError, match="plain_sma_live_not_allowed"):
+                engine_module.compute_strategy_decision_snapshot(
+                    conn,
+                    2,
+                    3,
+                    strategy_name="sma_cross",
+                )
+    finally:
+        object.__setattr__(settings, "MODE", old_mode)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", old_armed)
+        object.__setattr__(settings, "LIVE_DRY_RUN", old_dry_run)
+        object.__setattr__(settings, "STRATEGY_NAME", old_strategy_name)
+
+    assert legacy_calls == []
+
+
 def test_runtime_replay_bundle_contains_reproducibility_material(tmp_path) -> None:
     old_db_path = settings.DB_PATH
     old_env_db_path = os.environ.get("DB_PATH")

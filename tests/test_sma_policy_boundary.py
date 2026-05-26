@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import sqlite3
+import textwrap
 from dataclasses import replace
 
 from bithumb_bot.core import sma_policy
@@ -904,6 +905,54 @@ def test_post_normalization_decision_path_does_not_commit(monkeypatch) -> None:
     assert wrapped.commit_count == 0
 
 
+def test_runtime_snapshot_builder_after_normalization_is_read_only() -> None:
+    closes = [10.0] * 11 + [11.0]
+    conn = _build_candle_db(closes)
+    strategy = create_sma_with_filter_strategy(
+        short_n=2,
+        long_n=3,
+        pair="BTC_KRW",
+        interval="1m",
+        min_gap_ratio=0.0,
+        volatility_window=3,
+        min_volatility_ratio=0.0,
+        overextended_lookback=1,
+        overextended_max_return_ratio=0.0,
+        slippage_bps=0.0,
+        live_fee_rate_estimate=0.0,
+        entry_edge_buffer_ratio=0.0,
+        cost_edge_enabled=False,
+        market_regime_enabled=False,
+        candidate_regime_policy=_allowing_policy(),
+    )
+    changes_before = conn.total_changes
+    candles_before = conn.execute(
+        "SELECT ts, pair, interval, close FROM candles ORDER BY ts"
+    ).fetchall()
+
+    try:
+        result = runtime_sma.build_sma_with_filter_runtime_decision_from_normalized_db(
+            conn,
+            strategy,
+            through_ts_ms=1_700_000_000_000 + 11 * 60_000,
+        )
+        changes_after = conn.total_changes
+        candles_after = conn.execute(
+            "SELECT ts, pair, interval, close FROM candles ORDER BY ts"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert result is not None
+    assert changes_after == changes_before
+    assert candles_after == candles_before
+    assert result.decision.policy_input_hash.startswith("sha256:")
+    assert result.decision.policy_decision_hash.startswith("sha256:")
+    assert result.decision.policy_hash.startswith("sha256:")
+    assert result.replay_fingerprint["strategy_name"] == "sma_with_filter"
+    assert result.replay_fingerprint["through_ts_ms"] == 1_700_000_000_000 + 11 * 60_000
+
+
 def test_load_position_context_does_not_commit() -> None:
     closes = [10.0, 10.0, 10.0, 10.0, 11.0]
     wrapped = _CommitCountingConnection(_build_candle_db(closes))
@@ -950,6 +999,54 @@ def test_position_state_normalizer_is_the_commit_boundary(monkeypatch) -> None:
 
     assert updated == 1
     assert wrapped.commit_count == 1
+
+
+def _assert_no_sqlite_mutation_sql_or_commit(functions: tuple[object, ...]) -> None:
+    mutating_sql = {
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "REPLACE",
+        "CREATE",
+        "DROP",
+        "ALTER",
+        "VACUUM",
+    }
+    for function in functions:
+        source = textwrap.dedent(inspect.getsource(function))
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    assert node.func.attr not in {"commit", "executemany", "executescript"}
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                first_token = node.value.strip().split(maxsplit=1)[0].upper() if node.value.strip() else ""
+                assert first_token not in mutating_sql
+
+
+def test_position_normalizer_is_the_only_runtime_decision_mutation_boundary() -> None:
+    _assert_no_sqlite_mutation_sql_or_commit(
+        (
+            sma_policy.evaluate_sma_policy,
+            SmaWithFilterStrategy.decide_snapshot,
+            runtime_sma._load_signal_rows,
+            runtime_sma._load_position_context,
+            runtime_sma._policy_position_snapshot,
+            runtime_sma.build_sma_with_filter_runtime_decision_from_normalized_db,
+            runtime_sma_snapshot.build_sma_with_filter_replay_bundle,
+        )
+    )
+
+    normalizer_source = inspect.getsource(
+        runtime_position_state_normalizer.PositionStateNormalizer.normalize_and_persist
+    )
+    orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db)
+
+    assert "mark_harmless_dust_positions(" in normalizer_source
+    assert "reclassify_non_executable_open_exposure(" in normalizer_source
+    assert "conn.commit()" in normalizer_source
+    assert "normalize_and_persist(" in orchestration_source
+    assert "build_sma_with_filter_runtime_decision_from_normalized_db(" in orchestration_source
 
 
 def test_snapshot_orchestration_normalizes_before_policy_evaluation(monkeypatch) -> None:
@@ -1101,6 +1198,84 @@ def test_replay_bundle_uses_read_only_noop_normalizer(monkeypatch) -> None:
     assert bundle["code_provenance"]["source"] in {"git", "unavailable"}
     assert bundle["final_typed_strategy_decision"]["policy_input_hash"] == bundle["policy_input_hash"]
     assert bundle["execution_decision_summary"]["final_signal"] == bundle["final_typed_strategy_decision"]["final_signal"]
+
+
+def test_replay_decision_uses_read_only_normalizer_and_does_not_mutate_db(monkeypatch) -> None:
+    conn = _build_candle_db([10.0] * 11 + [11.0])
+    strategy = create_sma_with_filter_strategy(
+        short_n=2,
+        long_n=3,
+        pair="BTC_KRW",
+        interval="1m",
+        min_gap_ratio=0.0,
+        volatility_window=3,
+        min_volatility_ratio=0.0,
+        overextended_lookback=1,
+        overextended_max_return_ratio=0.0,
+        slippage_bps=0.0,
+        live_fee_rate_estimate=0.0,
+        entry_edge_buffer_ratio=0.0,
+        cost_edge_enabled=False,
+        market_regime_enabled=False,
+        candidate_regime_policy=_allowing_policy(),
+    )
+    observed_normalizer: list[str] = []
+    original_read_only_normalize = runtime_sma_snapshot.ReadOnlyPositionStateNormalizer.normalize_and_persist
+
+    def _read_only_normalize(self, conn, **kwargs):
+        observed_normalizer.append(type(self).__name__)
+        return original_read_only_normalize(self, conn, **kwargs)
+
+    def _raise_mutating_normalizer(*args, **kwargs):
+        raise AssertionError("mutating normalizer should not run during replay")
+
+    monkeypatch.setattr(
+        runtime_sma_snapshot.ReadOnlyPositionStateNormalizer,
+        "normalize_and_persist",
+        _read_only_normalize,
+    )
+    monkeypatch.setattr(
+        runtime_sma.PositionStateNormalizer,
+        "normalize_and_persist",
+        _raise_mutating_normalizer,
+    )
+    changes_before = conn.total_changes
+
+    try:
+        bundle = runtime_sma_snapshot.build_sma_with_filter_replay_bundle(
+            conn,
+            strategy,
+            through_ts_ms=1_700_000_000_000 + 11 * 60_000,
+        )
+        changes_after = conn.total_changes
+    finally:
+        conn.close()
+
+    assert bundle is not None
+    assert observed_normalizer == ["ReadOnlyPositionStateNormalizer"]
+    assert changes_after == changes_before
+    assert {
+        "boundary_stages",
+        "code_provenance",
+        "market_snapshot",
+        "position_snapshot",
+        "policy_config",
+        "execution_constraint_snapshot",
+        "policy_input_hash",
+        "policy_decision_hash",
+        "pure_policy_hash",
+        "replay_fingerprint",
+        "final_typed_strategy_decision",
+        "execution_decision_reconstructable",
+        "execution_decision_reconstruction_reason",
+    }.issubset(bundle)
+    assert bundle["execution_decision_reconstructable"] is False
+    assert bundle["execution_decision_reconstruction_reason"] == (
+        "live_readiness_context_not_available_in_db_snapshot"
+    )
+    assert bundle["policy_input_hash"].startswith("sha256:")
+    assert bundle["policy_decision_hash"].startswith("sha256:")
+    assert bundle["pure_policy_hash"].startswith("sha256:")
 
 
 def test_compute_signal_uses_direct_sma_with_filter_snapshot_path(monkeypatch) -> None:
