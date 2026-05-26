@@ -69,6 +69,15 @@ COMMON_CANONICAL_DECISION_FIELDS_V2 = (
     "policy_input_hash",
     "policy_decision_hash",
     "replay_fingerprint_hash",
+    "execution_summary_hash",
+    "execution_submit_plan_hash",
+    "final_action",
+    "submit_expected",
+    "pre_submit_proof_status",
+    "execution_block_reason",
+    "submit_plan_source",
+    "submit_plan_authority",
+    "execution_engine",
     "feature_snapshot_hash",
     "strategy_behavior_hash",
 )
@@ -462,6 +471,57 @@ def runtime_decision_to_canonical_event(
         "policy_decision_hash": str(context.get("policy_decision_hash") or ""),
         "replay_fingerprint_hash": canonical_payload_hash(context.get("replay_fingerprint") or {}),
     }
+    execution_decision = (
+        context.get("execution_decision")
+        if isinstance(context.get("execution_decision"), dict)
+        else {}
+    )
+    primary_submit_plan = _primary_execution_submit_plan(execution_decision)
+    payload.update(
+        {
+            "execution_summary_hash": (
+                canonical_payload_hash(execution_decision) if execution_decision else ""
+            ),
+            "execution_submit_plan_hash": (
+                canonical_payload_hash(primary_submit_plan) if primary_submit_plan else ""
+            ),
+            "final_action": str(
+                context.get("final_action")
+                or execution_decision.get("final_action")
+                or ""
+            ),
+            "submit_expected": bool(
+                context.get("submit_expected")
+                if "submit_expected" in context
+                else execution_decision.get("submit_expected")
+            ),
+            "pre_submit_proof_status": str(
+                context.get("pre_submit_proof_status")
+                or execution_decision.get("pre_submit_proof_status")
+                or ""
+            ),
+            "execution_block_reason": str(
+                context.get("execution_block_reason")
+                or execution_decision.get("block_reason")
+                or ""
+            ),
+            "submit_plan_source": str(
+                context.get("submit_plan_source")
+                or primary_submit_plan.get("source")
+                or ""
+            ),
+            "submit_plan_authority": str(
+                context.get("submit_plan_authority")
+                or primary_submit_plan.get("authority")
+                or ""
+            ),
+            "execution_engine": str(
+                execution_decision.get("execution_engine")
+                or context.get("execution_engine")
+                or ""
+            ),
+        }
+    )
     payload["feature_snapshot_hash"] = canonical_payload_hash(payload["feature_snapshot"])
     payload["strategy_behavior_payload"] = {
         "strategy_name": payload["strategy_name"],
@@ -513,6 +573,15 @@ def research_decision_to_canonical_event(
     payload["policy_contract_hash"] = str(payload.get("policy_contract_hash") or "")
     payload["policy_input_hash"] = str(payload.get("policy_input_hash") or "")
     payload["policy_decision_hash"] = str(payload.get("policy_decision_hash") or "")
+    payload["execution_summary_hash"] = str(payload.get("execution_summary_hash") or "")
+    payload["execution_submit_plan_hash"] = str(payload.get("execution_submit_plan_hash") or "")
+    payload["final_action"] = str(payload.get("final_action") or "")
+    payload["submit_expected"] = bool(payload.get("submit_expected"))
+    payload["pre_submit_proof_status"] = str(payload.get("pre_submit_proof_status") or "")
+    payload["execution_block_reason"] = str(payload.get("execution_block_reason") or "")
+    payload["submit_plan_source"] = str(payload.get("submit_plan_source") or "")
+    payload["submit_plan_authority"] = str(payload.get("submit_plan_authority") or "")
+    payload["execution_engine"] = str(payload.get("execution_engine") or "")
     normalized = normalize_canonical_decision(payload)
     if isinstance(payload.get("position_authority"), dict):
         normalized["position_authority"] = dict(payload["position_authority"])  # type: ignore[arg-type]
@@ -704,7 +773,14 @@ def _canonical_field_value(field: str, value: object) -> object:
         if value in (None, ""):
             return None
         return int(value)  # type: ignore[arg-type]
-    if field in {"blocked", "entry_allowed", "exit_allowed", "effective_flat", "normalized_exposure_active"}:
+    if field in {
+        "blocked",
+        "entry_allowed",
+        "exit_allowed",
+        "effective_flat",
+        "normalized_exposure_active",
+        "submit_expected",
+    }:
         if value is None:
             return None
         return bool(value)
@@ -715,6 +791,16 @@ def _canonical_field_value(field: str, value: object) -> object:
             return None
         return float(value)  # type: ignore[arg-type]
     return "" if value is None else str(value)
+
+
+def _primary_execution_submit_plan(execution_decision: object) -> dict[str, Any]:
+    if not isinstance(execution_decision, dict):
+        return {}
+    for field in ("target_submit_plan", "residual_submit_plan", "buy_submit_plan"):
+        value = execution_decision.get(field)
+        if isinstance(value, dict):
+            return _stable_value(value)  # type: ignore[return-value]
+    return {}
 
 
 def _canonical_required_missing(value: object) -> bool:

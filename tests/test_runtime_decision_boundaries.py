@@ -237,6 +237,8 @@ def test_execution_planner_plan_envelope_matches_legacy_context_summary_semantic
     assert bundle.persistence_context["execution_decision"] == legacy.context["execution_decision"]
     assert bundle.persistence_context["execution_plan_bundle_present"] is True
     assert bundle.persistence_context["persistence_context_authoritative"] == 0
+    assert bundle.status is not None
+    assert bundle.status.status == "BLOCKED"
 
 
 def test_mutating_persistence_context_does_not_change_typed_submit_authority() -> None:
@@ -267,6 +269,35 @@ def test_mutating_persistence_context_does_not_change_typed_submit_authority() -
     assert bundle.summary.as_dict() == before
     assert bundle.summary.final_signal == "BUY"
     assert bundle.summary.typed_buy_submit_plan() is not None
+
+
+def test_plan_envelope_uses_typed_decision_over_conflicting_base_context() -> None:
+    decision = _typed_decision(final_signal="BUY", final_reason="typed unit buy")
+    envelope = DecisionEnvelope(
+        strategy_decision=decision,
+        candle_ts=1_700_003_000_000,
+        market_price=10.0,
+        base_context={
+            "signal": "SELL",
+            "reason": "legacy context must not win",
+            "final_signal": "SELL",
+            "final_reason": "legacy context must not win",
+            "raw_signal": "SELL",
+            "last_close": 10.0,
+            "total_effective_exposure_notional_krw": 0.0,
+        },
+        policy_hashes=None,
+        replay_fingerprint={"schema_version": 1},
+        boundary={},
+    )
+    bundle = _planner().plan_envelope(None, envelope, updated_ts=1_700_003_060_000)
+
+    assert bundle.summary is not None
+    assert bundle.summary.raw_signal == "BUY"
+    assert bundle.summary.final_signal == "BUY"
+    assert bundle.summary.block_reason != "legacy context must not win"
+    assert bundle.submit_plan is not None
+    assert bundle.submit_plan.side == "BUY"
 
 
 def test_research_kernel_marks_missing_sma_policy_metadata_non_comparable() -> None:

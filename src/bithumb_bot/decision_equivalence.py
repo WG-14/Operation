@@ -865,6 +865,22 @@ def _reason_for_field(field: str) -> str:
         return "decision_exit_rule_mismatch"
     if field == "execution_timing_policy_hash":
         return "decision_execution_timing_policy_mismatch"
+    if field == "execution_summary_hash":
+        return "execution_summary_hash_mismatch"
+    if field == "execution_submit_plan_hash":
+        return "execution_submit_plan_hash_mismatch"
+    if field == "final_action":
+        return "execution_final_action_mismatch"
+    if field == "submit_expected":
+        return "execution_submit_expected_mismatch"
+    if field == "pre_submit_proof_status":
+        return "execution_pre_submit_proof_status_mismatch"
+    if field == "execution_block_reason":
+        return "execution_block_reason_mismatch"
+    if field in {"submit_plan_source", "submit_plan_authority"}:
+        return "execution_submit_plan_authority_mismatch"
+    if field == "execution_engine":
+        return "execution_engine_mismatch"
     if field == "policy_contract_hash":
         return "policy_contract_hash_mismatch"
     if field == "policy_input_hash":
@@ -1022,6 +1038,7 @@ def _claims_scope(*, state_coverage_matrix: dict[str, dict[str, object]]) -> dic
         "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
         "full_lifecycle_equivalence_supported": False,
         "signal_equivalence_supported": bool(positive_classes),
+        "execution_plan_equivalence_supported": True,
         "position_lifecycle_equivalence_supported": False,
         "fail_closed_unmodeled_state_count": fail_closed_count,
         "limitations": [

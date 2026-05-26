@@ -290,6 +290,56 @@ def test_canonical_v2_policy_hash_mismatches_have_explicit_reasons(
     assert reason in result.report["reason_codes"]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("execution_summary_hash", "sha256:other_summary", "execution_summary_hash_mismatch"),
+        ("execution_submit_plan_hash", "sha256:other_plan", "execution_submit_plan_hash_mismatch"),
+        ("final_action", "BLOCK_ORDER_RULE", "execution_final_action_mismatch"),
+        ("submit_expected", False, "execution_submit_expected_mismatch"),
+        ("submit_plan_authority", "other_authority", "execution_submit_plan_authority_mismatch"),
+    ],
+)
+def test_canonical_v2_execution_plan_mismatches_have_execution_reasons(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    baseline = {
+        "execution_summary_hash": "sha256:summary",
+        "execution_submit_plan_hash": "sha256:plan",
+        "final_action": "ENTER_STRATEGY_POSITION",
+        "submit_expected": True,
+        "pre_submit_proof_status": "not_required",
+        "execution_block_reason": "none",
+        "submit_plan_source": "research_backtest",
+        "submit_plan_authority": "strategy_execution_intent",
+        "execution_engine": "research_virtual",
+    }
+    changed = dict(baseline)
+    changed[field] = value
+    result = _compare(
+        _decision_v2(**baseline),
+        _decision_v2(**changed),
+    )
+
+    assert result.ok is False
+    assert reason in result.report["reason_codes"]
+
+
+def test_signal_match_but_execution_submit_plan_mismatch_fails_execution_equivalence() -> None:
+    result = _compare(
+        _decision_v2(final_signal="BUY", side="BUY", execution_submit_plan_hash="sha256:plan_a"),
+        _decision_v2(final_signal="BUY", side="BUY", execution_submit_plan_hash="sha256:plan_b"),
+    )
+
+    assert result.ok is False
+    assert "decision_final_signal_mismatch" not in result.report["reason_codes"]
+    assert "execution_submit_plan_hash_mismatch" in result.report["reason_codes"]
+    assert result.report["claims_scope"]["execution_plan_equivalence_supported"] is True
+    assert result.report["claims_scope"]["full_lifecycle_equivalence_supported"] is False
+
+
 def test_policy_hashes_are_canonical_diagnostics_not_promotion_required() -> None:
     assert "policy_contract_hash" not in PROMOTION_REQUIRED_CANONICAL_FIELDS
     assert "policy_input_hash" not in PROMOTION_REQUIRED_CANONICAL_FIELDS

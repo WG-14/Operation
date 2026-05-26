@@ -11,6 +11,10 @@ from bithumb_bot.core.sma_policy import (
     SmaPolicyConfig,
     StrategyDecisionV2,
 )
+from bithumb_bot.execution_service import (
+    ExecutionSubmitPlan,
+    validate_execution_submit_plan_payload,
+)
 from bithumb_bot.strategy.exit_rules import ExitPolicyConfig, evaluate_sma_exit_policy, merge_exit_rules
 from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
 
@@ -65,6 +69,169 @@ _trade_from_fill = _engine._trade_from_fill
 _trade_hash_payload = _engine._trade_hash_payload
 empty_execution_event_summary = _engine.empty_execution_event_summary
 execution_event_summary = _engine.execution_event_summary
+
+
+def execution_submit_plan_to_research_request(
+    *,
+    submit_plan: ExecutionSubmitPlan,
+    signal_ts: int,
+    decision_ts: int,
+    reference_price: float,
+    fee_rate: float,
+    timing_fields: dict[str, object],
+    depth_fields: dict[str, object],
+) -> ExecutionRequest | None:
+    if not isinstance(submit_plan, ExecutionSubmitPlan):
+        raise ValueError("research_submit_plan_not_typed")
+    payload = submit_plan.as_dict()
+    validate_execution_submit_plan_payload(payload, field_name="research_submit_plan")
+    if not bool(submit_plan.submit_expected):
+        return None
+    if str(submit_plan.block_reason or "none") != "none":
+        raise ValueError("research_submit_plan_blocked")
+    side = str(submit_plan.side or "").upper()
+    if side == "BUY":
+        requested_notional = _positive_float_or_none(submit_plan.notional_krw)
+        requested_qty = _positive_float_or_none(submit_plan.qty)
+        if requested_notional is None and requested_qty is None:
+            raise ValueError("research_buy_submit_plan_missing_size")
+    elif side == "SELL":
+        requested_qty = _positive_float_or_none(submit_plan.qty)
+        requested_notional = _positive_float_or_none(submit_plan.notional_krw)
+        if requested_qty is None:
+            raise ValueError("research_sell_submit_plan_missing_qty")
+    else:
+        raise ValueError(f"research_submit_plan_unsupported_side:{side or 'missing'}")
+    return ExecutionRequest(
+        signal_ts=int(signal_ts),
+        decision_ts=int(decision_ts),
+        side=side,
+        reference_price=float(reference_price),
+        requested_qty=requested_qty,
+        requested_notional=requested_notional,
+        fee_rate=float(fee_rate),
+        **timing_fields,
+        **depth_fields,
+    )
+
+
+def _positive_float_or_none(value: object) -> float | None:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0.0 else None
+
+
+def _research_execution_submit_plan(
+    *,
+    side: str,
+    cash: float,
+    buy_fraction: float,
+    sellable_qty: float,
+    reference_price: float,
+    policy_decision: StrategyDecisionV2 | None,
+) -> ExecutionSubmitPlan:
+    normalized_side = str(side or "").upper()
+    execution_intent = (
+        policy_decision.execution_intent
+        if policy_decision is not None
+        else None
+    )
+    intent_payload = (
+        execution_intent.as_dict()
+        if execution_intent is not None and hasattr(execution_intent, "as_dict")
+        else {}
+    )
+    authority = (
+        "strategy_execution_intent"
+        if intent_payload
+        else "research_compatibility_execution_intent"
+    )
+    if normalized_side == "BUY":
+        fraction = float(intent_payload.get("budget_fraction_of_cash") or buy_fraction)
+        requested_notional = max(0.0, float(cash) * fraction)
+        max_budget = float(intent_payload.get("max_budget_krw") or 0.0)
+        if max_budget > 0.0:
+            requested_notional = min(requested_notional, max_budget)
+        qty = requested_notional / float(reference_price) if reference_price > 0.0 else None
+        submit_expected = bool(requested_notional > 0.0)
+        return ExecutionSubmitPlan(
+            side="BUY",
+            source="research_backtest",
+            authority=authority,
+            final_action="ENTER_STRATEGY_POSITION" if submit_expected else "BLOCK_RESEARCH_ZERO_SIZE",
+            qty=qty,
+            notional_krw=requested_notional if submit_expected else None,
+            target_exposure_krw=requested_notional if submit_expected else None,
+            current_effective_exposure_krw=0.0,
+            delta_krw=requested_notional if submit_expected else None,
+            submit_expected=submit_expected,
+            pre_submit_proof_status="not_required",
+            block_reason="none" if submit_expected else "research_zero_buy_notional",
+            idempotency_key=None,
+            extra_payload={"execution_engine": "research_virtual"},
+        )
+    if normalized_side == "SELL":
+        qty = max(0.0, float(sellable_qty))
+        notional = qty * float(reference_price) if reference_price > 0.0 else None
+        submit_expected = bool(qty > 0.0)
+        return ExecutionSubmitPlan(
+            side="SELL",
+            source="research_backtest",
+            authority=authority,
+            final_action="EXIT_STRATEGY_POSITION" if submit_expected else "BLOCK_RESEARCH_ZERO_SIZE",
+            qty=qty if submit_expected else None,
+            notional_krw=notional if submit_expected else None,
+            target_exposure_krw=0.0 if submit_expected else None,
+            current_effective_exposure_krw=notional if submit_expected else None,
+            delta_krw=-(notional or 0.0) if submit_expected else None,
+            submit_expected=submit_expected,
+            pre_submit_proof_status="not_required",
+            block_reason="none" if submit_expected else "research_zero_sell_qty",
+            idempotency_key=None,
+            extra_payload={"execution_engine": "research_virtual"},
+        )
+    raise ValueError(f"research_submit_plan_unsupported_side:{normalized_side or 'missing'}")
+
+
+def _execution_plan_evidence(
+    submit_plan: ExecutionSubmitPlan | None,
+) -> dict[str, object]:
+    if submit_plan is None:
+        return {
+            "execution_summary_hash": "",
+            "execution_submit_plan_hash": "",
+            "final_action": "",
+            "submit_expected": False,
+            "pre_submit_proof_status": "",
+            "execution_block_reason": "",
+            "submit_plan_source": "",
+            "submit_plan_authority": "",
+            "execution_engine": "research_virtual",
+        }
+    from bithumb_bot.canonical_decision import canonical_payload_hash
+
+    plan_payload = submit_plan.as_dict()
+    summary_payload = {
+        "final_action": submit_plan.final_action,
+        "submit_expected": bool(submit_plan.submit_expected),
+        "pre_submit_proof_status": submit_plan.pre_submit_proof_status,
+        "block_reason": submit_plan.block_reason,
+        "primary_submit_plan": plan_payload,
+        "execution_engine": "research_virtual",
+    }
+    return {
+        "execution_summary_hash": canonical_payload_hash(summary_payload),
+        "execution_submit_plan_hash": canonical_payload_hash(plan_payload),
+        "final_action": submit_plan.final_action,
+        "submit_expected": bool(submit_plan.submit_expected),
+        "pre_submit_proof_status": submit_plan.pre_submit_proof_status,
+        "execution_block_reason": submit_plan.block_reason,
+        "submit_plan_source": submit_plan.source,
+        "submit_plan_authority": submit_plan.authority,
+        "execution_engine": "research_virtual",
+    }
 
 
 def _research_position_snapshot(
@@ -755,6 +922,18 @@ def _run_decision_event_backtest_impl(
             block_reason = "sell_blocked_no_sellable_qty"
         elif action not in {"BUY", "SELL", "HOLD"}:
             raise ValueError(f"unsupported_decision_event_final_signal:{event.final_signal}")
+        submit_plan = (
+            _research_execution_submit_plan(
+                side=action,
+                cash=float(cash),
+                buy_fraction=float(buy_fraction),
+                sellable_qty=float(sellable_qty),
+                reference_price=float(candle.close),
+                policy_decision=policy_decision,
+            )
+            if action in {"BUY", "SELL"}
+            else None
+        )
         if policy_decision is not None:
             exit_evaluations = [dict(item) for item in policy_decision.exit_evaluations]
             exit_rule = str(policy_decision.exit_rule or "")
@@ -848,6 +1027,7 @@ def _run_decision_event_backtest_impl(
                 "research_policy_unsupported": bool(sma_policy_unsupported_reason),
                 "research_policy_unsupported_reason": sma_policy_unsupported_reason,
                 "research_policy_comparable": not bool(sma_policy_unsupported_reason),
+                **_execution_plan_evidence(submit_plan),
             }
         )
         if policy_decision is not None:
@@ -900,8 +1080,23 @@ def _run_decision_event_backtest_impl(
                 policy=timing_policy,
                 model_latency_ms=_model_latency_ms(model),
             )
-            requested_notional = cash * buy_fraction if side == "BUY" else None
-            requested_qty = sellable_qty if side == "SELL" else None
+            request = execution_submit_plan_to_research_request(
+                submit_plan=submit_plan,  # type: ignore[arg-type]
+                signal_ts=signal.signal_candle_start_ts,
+                decision_ts=signal.decision_ts,
+                reference_price=float(reference.fill_reference_price or signal.signal_reference_price),
+                fee_rate=fee_rate,
+                timing_fields=_timing_request_fields(signal, reference, timing_policy),
+                depth_fields=_depth_request_fields(
+                    dataset=dataset,
+                    reference=reference,
+                    model=model,
+                    timing_policy=timing_policy,
+                ),
+            )
+            if request is None:
+                warnings.append("research_submit_plan_not_expected")
+                continue
             if reference.fill_reference_price is None:
                 fill = _failed_fill(
                     model=model,
@@ -910,28 +1105,11 @@ def _run_decision_event_backtest_impl(
                     timing_policy=timing_policy,
                     side=side,
                     fee_rate=fee_rate,
-                    requested_qty=requested_qty,
-                    requested_notional=requested_notional,
+                    requested_qty=request.requested_qty,
+                    requested_notional=request.requested_notional,
                 )
             else:
-                fill = model.simulate(
-                    ExecutionRequest(
-                        signal_ts=signal.signal_candle_start_ts,
-                        decision_ts=signal.decision_ts,
-                        side=side,
-                        reference_price=float(reference.fill_reference_price),
-                        requested_qty=requested_qty,
-                        requested_notional=requested_notional,
-                        fee_rate=fee_rate,
-                        **_timing_request_fields(signal, reference, timing_policy),
-                        **_depth_request_fields(
-                            dataset=dataset,
-                            reference=reference,
-                            model=model,
-                            timing_policy=timing_policy,
-                        ),
-                    )
-                )
+                fill = model.simulate(request)
             warnings.extend(_execution_reference_warnings(fill))
             if fill.fill_status == "failed" or fill.avg_fill_price is None or fill.filled_qty <= 0.0:
                 trades.append(_trade_from_fill(fill, cash=cash, asset_qty=qty, pnl=None))

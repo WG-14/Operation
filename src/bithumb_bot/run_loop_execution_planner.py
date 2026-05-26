@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Mapping
 
 from .config import settings
 from .db_core import load_target_position_state, upsert_target_position_state
-from .decision_envelope import DecisionEnvelope
+from .decision_envelope import DecisionEnvelope, _thaw_mapping
+from .decision_equivalence import sha256_prefixed
 from .execution_order_rules import resolve_execution_order_rules
 from .execution_service import (
     ExecutionDecisionSummary,
@@ -68,6 +69,24 @@ class ExecutionPlanBundle:
     readiness_payload: dict[str, object]
     target_policy_metadata: dict[str, object]
     planning_error: str | None = None
+    status: "ExecutionPlanStatus | None" = None
+
+
+@dataclass(frozen=True)
+class ExecutionPlanStatus:
+    status: str
+    reason_code: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExecutionPlanningInput:
+    strategy_decision: object
+    candle_ts: int
+    market_price: float
+    base_observability_context: Mapping[str, object]
+    replay_fingerprint: Mapping[str, object]
+    boundary: Mapping[str, object]
 
 
 def run_loop_uses_target_delta() -> bool:
@@ -199,11 +218,22 @@ class ExecutionPlanner:
         *,
         updated_ts: int,
     ) -> ExecutionPlanBundle:
+        planning_input = ExecutionPlanningInput(
+            strategy_decision=envelope.strategy_decision,
+            candle_ts=envelope.candle_ts,
+            market_price=envelope.market_price,
+            base_observability_context=envelope.base_context,
+            replay_fingerprint=envelope.replay_fingerprint,
+            boundary=envelope.boundary,
+        )
         decision = envelope.strategy_decision
-        persistence_context = envelope.as_persistence_context()
+        planning_context = self._planning_context_from_envelope_input(
+            planning_input,
+            policy_hashes=envelope.policy_hashes.as_dict() if envelope.policy_hashes is not None else {},
+        )
         planning = self._plan_context(
             conn,
-            decision_context=persistence_context,
+            decision_context=planning_context,
             signal=str(decision.final_signal),
             reason=str(decision.final_reason),
             raw_signal=str(decision.raw_signal),
@@ -228,7 +258,49 @@ class ExecutionPlanner:
             readiness_payload=planning.readiness_payload,
             target_policy_metadata=planning.target_policy_metadata,
             planning_error=planning.planning_error,
+            status=_plan_status(planning),
         )
+
+    def _planning_context_from_envelope_input(
+        self,
+        planning_input: ExecutionPlanningInput,
+        *,
+        policy_hashes: dict[str, str],
+    ) -> dict[str, object]:
+        decision = planning_input.strategy_decision
+        context = _thaw_mapping(planning_input.base_observability_context)
+        replay_fingerprint = _thaw_mapping(planning_input.replay_fingerprint)
+        boundary = _thaw_mapping(planning_input.boundary)
+        context.update(
+            {
+                "ts": int(planning_input.candle_ts),
+                "last_close": float(planning_input.market_price),
+                "market_price": float(planning_input.market_price),
+                "strategy": getattr(decision, "strategy_name", ""),
+                "signal": getattr(decision, "final_signal", "HOLD"),
+                "reason": getattr(decision, "final_reason", ""),
+                "raw_signal": getattr(decision, "raw_signal", "HOLD"),
+                "raw_reason": getattr(decision, "raw_reason", ""),
+                "final_signal": getattr(decision, "final_signal", "HOLD"),
+                "final_reason": getattr(decision, "final_reason", ""),
+                "pure_policy_hash": getattr(decision, "policy_hash", ""),
+                "policy_contract_hash": getattr(decision, "policy_contract_hash", ""),
+                "policy_input_hash": getattr(decision, "policy_input_hash", ""),
+                "policy_decision_hash": getattr(decision, "policy_decision_hash", ""),
+                "pure_policy_trace": decision.as_trace() if hasattr(decision, "as_trace") else {},
+                "replay_fingerprint": replay_fingerprint,
+                "replay_fingerprint_hash": sha256_prefixed(replay_fingerprint),
+                "boundary": boundary,
+                "decision_authority_source": "DecisionEnvelope.strategy_decision",
+                "decision_envelope_present": True,
+                "persistence_context_authoritative": 0,
+            }
+        )
+        context.update(policy_hashes)
+        execution_intent = getattr(decision, "execution_intent", None)
+        if execution_intent is not None and hasattr(execution_intent, "as_dict"):
+            context["execution_intent"] = execution_intent.as_dict()
+        return context
 
     def plan_strategy_decision(
         self,
@@ -337,3 +409,25 @@ def _primary_submit_plan(
         or summary.typed_residual_submit_plan()
         or summary.typed_buy_submit_plan()
     )
+
+
+def _plan_status(planning: ExecutionPlanningResult) -> ExecutionPlanStatus:
+    if planning.planning_error is not None:
+        return ExecutionPlanStatus(
+            status="ERROR",
+            reason_code="execution_planning_error",
+            reason=planning.planning_error,
+        )
+    if planning.execution_decision_summary is None:
+        return ExecutionPlanStatus(
+            status="ERROR",
+            reason_code="execution_summary_missing",
+            reason="execution decision summary was not produced",
+        )
+    if not bool(planning.execution_decision_summary.submit_expected):
+        return ExecutionPlanStatus(
+            status="BLOCKED",
+            reason_code=str(planning.execution_decision_summary.block_reason or "submit_not_expected"),
+            reason=str(planning.execution_decision_summary.block_reason or "submit_not_expected"),
+        )
+    return ExecutionPlanStatus(status="PLANNED", reason_code="none", reason="none")
