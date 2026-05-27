@@ -35,6 +35,7 @@ from bithumb_bot import runtime_position_state_normalizer
 from bithumb_bot import runtime_sma_snapshot
 from bithumb_bot import runtime_sma_snapshot_builder as runtime_sma
 from bithumb_bot import runtime_strategy_decision
+from bithumb_bot.runtime_adapters import sma_with_filter as runtime_sma_adapter
 from bithumb_bot.strategy import sma as strategy_sma
 from bithumb_bot.strategy.sma import (
     SmaCrossStrategy,
@@ -828,7 +829,7 @@ def test_runtime_decide_is_read_only_and_normalization_boundary_is_explicit() ->
     )
     orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db)
     runtime_normalization_source = inspect.getsource(
-        runtime_strategy_decision.normalize_position_state_before_strategy_decision
+        runtime_sma_adapter.normalize_position_state_before_strategy_decision
     )
     runtime_boundary_source = inspect.getsource(runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db)
     runtime_boundary_module_source = inspect.getsource(runtime_sma_snapshot)
@@ -1178,7 +1179,7 @@ def test_position_normalizer_is_the_only_runtime_decision_mutation_boundary() ->
     )
     orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db)
     runtime_normalization_source = inspect.getsource(
-        runtime_strategy_decision.normalize_position_state_before_strategy_decision
+        runtime_sma_adapter.normalize_position_state_before_strategy_decision
     )
 
     assert "mark_harmless_dust_positions(" in normalizer_source
@@ -1204,12 +1205,12 @@ def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -
         return None
 
     monkeypatch.setattr(
-        runtime_strategy_decision,
+        runtime_sma_adapter,
         "normalize_position_state_before_strategy_decision",
         _normalize,
     )
     monkeypatch.setattr(
-        runtime_strategy_decision,
+        runtime_sma_adapter,
         "decide_sma_with_filter_runtime_snapshot_from_db",
         _decide,
     )

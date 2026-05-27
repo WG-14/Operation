@@ -36,7 +36,6 @@ from .db_core import (
 )
 from .db_core import record_strategy_decision
 from .decision_envelope import DecisionEnvelope
-from .operator_repair_service import OperatorRepairService
 from .runtime_data_access import (
     count_open_orders as _count_open_orders,
     latest_order_identifiers as _latest_order_identifiers,
@@ -74,10 +73,8 @@ from .runtime_resume_services import (
     reconcile_balance_split_mismatch_count,
     reconcile_dust_context,
 )
-from .strategy_performance import evaluate_strategy_performance_gate
 from .dust import build_dust_display_context
 from .utils_time import kst_str, parse_interval_sec
-from .operator_notification_service import OperatorNotificationService
 from .observability import configure_runtime_logging, format_log_kv, safety_event
 from .bootstrap import get_last_explicit_env_load_summary
 from .reason_codes import (
@@ -93,22 +90,25 @@ from .risk import (
     evaluate_daily_loss_breach,
     evaluate_position_loss_breach,
 )
-from .operator_flatten_service import OperatorFlattenService
 from .execution_service import (
     ExecutionDecisionSummary,
     SignalExecutionRequest,
-    build_typed_execution_decision_summary,
     build_signal_execution_service,
     live_execute_signal,
     paper_execute,
     record_harmless_dust_exit_suppression,
 )
 from .run_loop_execution_planner import (
-    ExecutionPlanner,
     load_previous_target_exposure_for_run_loop,
     prepare_strategy_decision_persistence_context as _planner_prepare_strategy_decision_persistence_context,
     resolve_target_position_state_for_run_loop,
     run_loop_uses_target_delta,
+)
+from .runtime_service_factories import (
+    operator_flatten_service,
+    operator_notification_service,
+    operator_repair_service,
+    run_loop_execution_planner,
 )
 
 
@@ -132,16 +132,16 @@ def _runtime_gate_api() -> RuntimeGateApi:
     )
 
 
-def _operator_repair_service() -> OperatorRepairService:
-    return OperatorRepairService()
+def _operator_repair_service():
+    return operator_repair_service()
 
 
-def _operator_notification_service() -> OperatorNotificationService:
-    return OperatorNotificationService()
+def _operator_notification_service():
+    return operator_notification_service()
 
 
-def _operator_flatten_service() -> OperatorFlattenService:
-    return OperatorFlattenService()
+def _operator_flatten_service():
+    return operator_flatten_service()
 
 
 def _runtime_resume_service() -> RuntimeResumeService:
@@ -1809,10 +1809,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                 strategy_name = typed_runtime_decision.decision.strategy_name
                 signal = typed_runtime_decision.decision.final_signal
                 reason = typed_runtime_decision.decision.final_reason
-                planning_bundle = ExecutionPlanner(
-                    readiness_snapshot_builder=compute_runtime_readiness_snapshot,
-                    performance_gate_evaluator=evaluate_strategy_performance_gate,
-                    summary_builder=build_typed_execution_decision_summary,
+                planning_bundle = run_loop_execution_planner(
                     target_state_resolver=_resolve_target_position_state_for_run_loop,
                     persistence_context_builder=prepare_strategy_decision_persistence_context,
                 ).plan_envelope(

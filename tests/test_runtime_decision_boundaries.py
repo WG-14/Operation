@@ -25,6 +25,7 @@ from bithumb_bot.run_loop_execution_planner import (
     ExecutionPlanningInput,
 )
 from bithumb_bot.run_loop_compatibility import (
+    LegacyDbDecisionCompatibilityRunner,
     legacy_context_planning_allowed_for_compatibility,
 )
 from bithumb_bot.runtime_recovery_gate import RuntimeRecoveryGateService
@@ -354,7 +355,7 @@ def test_sma_with_filter_live_runtime_requires_typed_handoff() -> None:
         ) is True
         assert engine._promotion_grade_typed_runtime_decision_required(
             selected_strategy_name="sma_cross"
-        ) is False
+        ) is True
     finally:
         for key, value in original.items():
             object.__setattr__(settings, key, value)
@@ -384,7 +385,7 @@ def test_sma_with_filter_live_dict_handoff_from_monkey_patch_fails_closed() -> N
     assert reason == "typed_runtime_decision_required"
 
 
-def test_sma_with_filter_paper_dict_handoff_is_only_non_promotion_compatible() -> None:
+def test_sma_with_filter_paper_dict_handoff_fails_closed_for_promotion_runtime() -> None:
     original = {
         "MODE": settings.MODE,
         "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
@@ -405,7 +406,7 @@ def test_sma_with_filter_paper_dict_handoff_is_only_non_promotion_compatible() -
         for key, value in original.items():
             object.__setattr__(settings, key, value)
 
-    assert reason is None
+    assert reason == "typed_runtime_decision_required"
 
 
 def test_sma_with_filter_approved_profile_runtime_requires_typed_handoff() -> None:
@@ -480,9 +481,10 @@ def test_engine_import_boundary_stays_thin_for_runtime_entrypoint() -> None:
 
     assert violations == {}
     assert "from .runtime_decision_service import" in source
-    assert "from .operator_repair_service import" in source
-    assert "from .operator_notification_service import" in source
-    assert "from .operator_flatten_service import" in source
+    assert "from .runtime_service_factories import" in source
+    assert "from .operator_repair_service import" not in source
+    assert "from .operator_notification_service import" not in source
+    assert "from .operator_flatten_service import" not in source
     forbidden_concrete_names = {
         "build_fee_gap_accounting_repair_preview",
         "build_manual_flat_accounting_repair_preview",
@@ -503,6 +505,39 @@ def test_engine_import_boundary_stays_thin_for_runtime_entrypoint() -> None:
     }
     assert forbidden_concrete_names.isdisjoint(called_names)
     assert forbidden_concrete_names.isdisjoint(imported_names)
+
+
+def test_engine_has_no_concrete_runtime_architecture_references() -> None:
+    source = Path("src/bithumb_bot/engine.py").read_text(encoding="utf-8-sig")
+    forbidden_tokens = {
+        "SmaWithFilterStrategy",
+        "decide_sma_with_filter_runtime_snapshot_from_db",
+        "RuntimeSmaDecisionResult",
+        "create_legacy_strategy",
+        "LegacyDbStrategy",
+        "OperatorNotificationService",
+        "OperatorFlattenService",
+        "flatten_btc_position",
+        "build_fee_gap_accounting_repair_preview",
+        "build_manual_flat_accounting_repair_preview",
+        '"sma_with_filter"',
+        "'sma_with_filter'",
+    }
+    assert {token for token in forbidden_tokens if token in source} == set()
+
+
+def test_generic_runtime_decision_code_has_no_sma_specific_imports() -> None:
+    source = Path("src/bithumb_bot/runtime_strategy_decision.py").read_text()
+    forbidden_tokens = {
+        "SmaWithFilterStrategy",
+        "RuntimeSmaDecisionResult",
+        "decide_sma_with_filter_runtime_snapshot_from_db",
+        "runtime_sma_snapshot",
+        "runtime_sma_snapshot_builder",
+    }
+    assert {token for token in forbidden_tokens if token in source} == set()
+    assert "create_legacy_strategy" not in source
+    assert ".decide(conn" not in source
 
 
 def test_engine_does_not_own_low_level_runtime_sql_helpers() -> None:
@@ -559,6 +594,51 @@ def test_runtime_decision_adapter_registry_drives_promotion_path_without_engine_
     assert "unit_promotion" not in Path("src/bithumb_bot/engine.py").read_text()
 
 
+def test_unregistered_runtime_strategy_fails_closed_without_legacy_fallback() -> None:
+    with pytest.raises(RuntimeError, match="runtime_decision_adapter_not_registered:missing_runtime"):
+        engine.compute_strategy_decision_snapshot(
+            None,
+            5,
+            20,
+            through_ts_ms=1_700_003_000_000,
+            strategy_name="missing_runtime",
+        )
+
+    assert engine._legacy_db_strategy_fallback_allowed(
+        selected_strategy_name="missing_runtime"
+    ) is False
+    assert engine._typed_runtime_handoff_failure_reason(
+        {"signal": "BUY"},
+        selected_strategy_name="missing_runtime",
+    ) == "runtime_decision_adapter_not_registered"
+
+
+def test_legacy_db_decision_compatibility_runner_is_explicit_and_not_live_real_order() -> None:
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+    }
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", False)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+
+        with pytest.raises(
+            RuntimeError,
+            match="legacy_db_decision_compatibility_live_real_order_disabled",
+        ):
+            LegacyDbDecisionCompatibilityRunner().decide_snapshot(
+                None,
+                2,
+                3,
+                strategy_name="sma_cross",
+            )
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+
 def test_generic_runtime_result_flows_through_envelope_and_planner() -> None:
     result = _generic_runtime_result(strategy_name="unit_non_sma")
 
@@ -578,6 +658,64 @@ def test_generic_runtime_result_flows_through_envelope_and_planner() -> None:
     assert bundle.persistence_context["policy_input_hash"] == "sha256:input"
     assert bundle.persistence_context["policy_decision_hash"] == "sha256:decision"
     assert bundle.persistence_context["replay_fingerprint_hash"]
+
+
+def test_registered_sma_and_safe_hold_adapters_share_typed_envelope_planner_path() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_schema(conn)
+        _insert_candles(
+            conn,
+            pair=settings.PAIR,
+            interval=settings.INTERVAL,
+            base_ts=1_700_001_000_000,
+        )
+        conn.commit()
+
+        registered = set(runtime_strategy_decision.list_runtime_decision_adapters())
+        assert {"sma_with_filter", "safe_hold"}.issubset(registered)
+
+        for strategy_name in ("sma_with_filter", "safe_hold"):
+            result = engine.compute_strategy_decision_snapshot(
+                conn,
+                2,
+                3,
+                through_ts_ms=1_700_001_000_000 + 39 * 60_000,
+                strategy_name=strategy_name,
+            )
+            assert runtime_strategy_decision.is_runtime_strategy_decision_result(result)
+            assert result is not None
+            envelope = DecisionEnvelope.from_runtime_result(result)
+            bundle = _planner().plan_envelope(conn, envelope, updated_ts=1_700_003_060_000)
+
+            context = bundle.persistence_context
+            assert context["decision_authority_source"] == "DecisionEnvelope.strategy_decision"
+            assert context["decision_envelope_present"] is True
+            assert context["execution_plan_bundle_present"] is True
+            assert context["persistence_context_authoritative"] == 0
+            assert context["policy_contract_hash"]
+            assert context["policy_input_hash"]
+            assert context["policy_decision_hash"]
+            assert context["replay_fingerprint_hash"]
+            assert context["boundary"]
+    finally:
+        conn.close()
+
+
+def test_persistence_context_cannot_override_typed_decision_authority() -> None:
+    result = _generic_runtime_result(strategy_name="unit_non_sma")
+    result.base_context["final_signal"] = "BUY"
+    result.base_context["signal"] = "BUY"
+    result.base_context["reason"] = "mutated non-authoritative context"
+
+    envelope = DecisionEnvelope.from_runtime_result(result)
+    bundle = _planner().plan_envelope(None, envelope, updated_ts=1_700_003_060_000)
+
+    assert envelope.strategy_decision.final_signal == "HOLD"
+    assert bundle.persistence_context["final_signal"] == "HOLD"
+    assert bundle.persistence_context["signal"] == "HOLD"
+    assert bundle.persistence_context["persistence_context_authoritative"] == 0
 
 
 def test_generic_promotion_adapter_dict_handoff_fails_closed_when_typed_required(

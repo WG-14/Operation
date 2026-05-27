@@ -5,6 +5,7 @@ from typing import Callable
 
 from .config import settings
 from .run_loop_execution_planner import ExecutionPlanner, ExecutionPlanningResult
+from .strategy import create_legacy_strategy
 
 
 def _live_real_order_enabled() -> bool:
@@ -54,3 +55,32 @@ class RunLoopCompatibilityPlanner:
                 runtime_handoff_fn=self.runtime_handoff_fn,
             ),
         )
+
+
+@dataclass(frozen=True)
+class LegacyDbDecisionCompatibilityRunner:
+    """Explicit non-production runner for legacy DB-bound smoke compatibility."""
+
+    strategy_factory: Callable[..., object] = create_legacy_strategy
+
+    def decide_snapshot(
+        self,
+        conn,
+        short_n: int,
+        long_n: int,
+        *,
+        through_ts_ms: int | None = None,
+        strategy_name: str | None = None,
+    ) -> tuple[object, object] | None:
+        if _live_real_order_enabled():
+            raise RuntimeError("legacy_db_decision_compatibility_live_real_order_disabled")
+        selected_strategy_name = str(strategy_name or settings.STRATEGY_NAME).strip().lower()
+        strategy = self.strategy_factory(
+            selected_strategy_name,
+            short_n=short_n,
+            long_n=long_n,
+            pair=settings.PAIR,
+            interval=settings.INTERVAL,
+        )
+        decision = strategy.decide(conn, through_ts_ms=through_ts_ms)
+        return None if decision is None else (decision, strategy)

@@ -17,6 +17,8 @@ from bithumb_bot.db_core import ensure_db
 from bithumb_bot.engine import compute_signal
 from bithumb_bot.profile_cli import cmd_replay_decision
 from bithumb_bot import runtime_strategy_decision
+from bithumb_bot.runtime_adapters import sma_with_filter as runtime_sma_adapter
+from bithumb_bot.run_loop_compatibility import LegacyDbDecisionCompatibilityRunner
 from bithumb_bot.runtime_sma_snapshot import build_sma_with_filter_replay_bundle
 from bithumb_bot.research.strategy_registry import (
     ResearchStrategyRegistryError,
@@ -141,7 +143,7 @@ def test_compute_signal_routes_sma_with_filter_through_snapshot_orchestration(
     old_env_db_path = os.environ.get("DB_PATH")
     calls: list[str] = []
 
-    original_typed_boundary = runtime_strategy_decision.decide_sma_with_filter_runtime_snapshot_from_db
+    original_typed_boundary = runtime_sma_adapter.decide_sma_with_filter_runtime_snapshot_from_db
 
     def _snapshot_orchestration(conn, strategy, *, through_ts_ms=None):
         calls.append(strategy.name)
@@ -152,7 +154,7 @@ def test_compute_signal_routes_sma_with_filter_through_snapshot_orchestration(
         )
 
     monkeypatch.setattr(
-        runtime_strategy_decision,
+        runtime_sma_adapter,
         "decide_sma_with_filter_runtime_snapshot_from_db",
         _snapshot_orchestration,
     )
@@ -214,13 +216,6 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
         _fail_legacy_normalized_db,
         raising=False,
     )
-    monkeypatch.setattr(
-        runtime_strategy_decision,
-        "create_legacy_strategy",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy registry creation path called")
-        ),
-    )
     snapshot_calls: list[str] = []
     normalization_calls: list[str] = []
 
@@ -233,12 +228,12 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
         return None
 
     monkeypatch.setattr(
-        runtime_strategy_decision,
+        runtime_sma_adapter,
         "normalize_position_state_before_strategy_decision",
         _normalize_before_decision,
     )
     monkeypatch.setattr(
-        runtime_strategy_decision,
+        runtime_sma_adapter,
         "decide_sma_with_filter_runtime_snapshot_from_db",
         _snapshot_boundary,
     )
@@ -289,22 +284,25 @@ def test_decision_runner_exposes_typed_strategy_decision_boundary(
 ) -> None:
     calls: list[tuple[int, int, str | None]] = []
 
-    def _fake_impl(conn, short_n, long_n, *, through_ts_ms=None, strategy_name=None):
-        calls.append((short_n, long_n, strategy_name))
-        return None
+    class _UnitAdapter:
+        strategy_name = "unit_runner"
 
-    monkeypatch.setattr(
-        runtime_strategy_decision,
-        "_compute_strategy_decision_snapshot_impl",
-        _fake_impl,
-    )
+        def decide(self, conn, *, short_n, long_n, through_ts_ms=None):
+            del conn, through_ts_ms
+            calls.append((short_n, long_n, self.strategy_name))
+            return None
 
-    runner = engine_module.DecisionRunner(strategy_name="sma_with_filter")
+        def typed_authority_required(self) -> bool:
+            return True
+
+    monkeypatch.setitem(runtime_strategy_decision._RUNTIME_DECISION_ADAPTERS, "unit_runner", _UnitAdapter)
+
+    runner = engine_module.DecisionRunner(strategy_name="unit_runner")
     with sqlite3.connect(":memory:") as conn:
         result = runner.decide_snapshot(conn, 2, 3, through_ts_ms=123)
 
     assert result is None
-    assert calls == [(2, 3, "sma_with_filter")]
+    assert calls == [(2, 3, "unit_runner")]
 
 
 def test_live_real_sma_cross_rejected_before_legacy_strategy_creation(
@@ -320,7 +318,6 @@ def test_live_real_sma_cross_rejected_before_legacy_strategy_creation(
         legacy_calls.append(name)
         raise AssertionError("legacy DB strategy creation must not be reached")
 
-    monkeypatch.setattr(runtime_strategy_decision, "create_legacy_strategy", _fail_legacy_creation)
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
     object.__setattr__(settings, "LIVE_DRY_RUN", False)
@@ -351,7 +348,6 @@ def test_legacy_sma_cross_cannot_be_selected_in_live_even_if_strategy_name_argum
         legacy_calls.append(name)
         raise AssertionError("legacy DB strategy creation must not be reached")
 
-    monkeypatch.setattr(runtime_strategy_decision, "create_legacy_strategy", _fail_legacy_creation)
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
     object.__setattr__(settings, "LIVE_DRY_RUN", False)
@@ -641,7 +637,7 @@ def test_replay_decision_cli_with_readiness_json_marks_execution_reconstructable
     assert out["bundle"]["execution_decision_summary"]["execution_engine"] in {"lot_native", "target_delta"}
 
 
-def test_compute_signal_allows_strategy_override_for_backtest_compatibility(tmp_path) -> None:
+def test_legacy_strategy_override_requires_explicit_compatibility_runner(tmp_path) -> None:
     old_db_path = settings.DB_PATH
     old_env_db_path = os.environ.get("DB_PATH")
 
@@ -663,7 +659,14 @@ def test_compute_signal_allows_strategy_override_for_backtest_compatibility(tmp_
             )
         conn.commit()
 
-        result = compute_signal(conn, 2, 3, strategy_name="sma_cross")
+        with pytest.raises(RuntimeError, match="runtime_decision_adapter_not_registered:sma_cross"):
+            compute_signal(conn, 2, 3, strategy_name="sma_cross")
+        legacy_result = LegacyDbDecisionCompatibilityRunner().decide_snapshot(
+            conn,
+            2,
+            3,
+            strategy_name="sma_cross",
+        )
     finally:
         conn.close()
         object.__setattr__(settings, "DB_PATH", old_db_path)
@@ -672,13 +675,14 @@ def test_compute_signal_allows_strategy_override_for_backtest_compatibility(tmp_
         else:
             os.environ["DB_PATH"] = old_env_db_path
 
-    assert result is not None
-    assert result["signal"] in {"BUY", "SELL", "HOLD"}
-    assert result["strategy"] == "sma_cross"
-    assert "reason" in result
+    assert legacy_result is not None
+    decision, strategy = legacy_result
+    assert decision.as_dict()["signal"] in {"BUY", "SELL", "HOLD"}
+    assert strategy.name == "sma_cross"
+    assert "reason" in decision.as_dict()
 
 
-def test_compute_signal_normalizes_strategy_override_name(tmp_path) -> None:
+def test_legacy_compatibility_runner_normalizes_strategy_override_name(tmp_path) -> None:
     old_db_path = settings.DB_PATH
     old_env_db_path = os.environ.get("DB_PATH")
 
@@ -700,7 +704,12 @@ def test_compute_signal_normalizes_strategy_override_name(tmp_path) -> None:
             )
         conn.commit()
 
-        result = compute_signal(conn, 2, 3, strategy_name="  SMA_CROSS ")
+        legacy_result = LegacyDbDecisionCompatibilityRunner().decide_snapshot(
+            conn,
+            2,
+            3,
+            strategy_name="  SMA_CROSS ",
+        )
     finally:
         conn.close()
         object.__setattr__(settings, "DB_PATH", old_db_path)
@@ -709,8 +718,9 @@ def test_compute_signal_normalizes_strategy_override_name(tmp_path) -> None:
         else:
             os.environ["DB_PATH"] = old_env_db_path
 
-    assert result is not None
-    assert result["strategy"] == "sma_cross"
+    assert legacy_result is not None
+    _decision, strategy = legacy_result
+    assert strategy.name == "sma_cross"
 
 
 def test_live_compute_signal_rejects_plain_sma_cross_override() -> None:
