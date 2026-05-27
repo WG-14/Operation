@@ -16,6 +16,7 @@ from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.engine import compute_signal
 from bithumb_bot.profile_cli import cmd_replay_decision
+from bithumb_bot import runtime_strategy_decision
 from bithumb_bot.runtime_sma_snapshot import build_sma_with_filter_replay_bundle
 from bithumb_bot.research.strategy_registry import (
     ResearchStrategyRegistryError,
@@ -140,7 +141,7 @@ def test_compute_signal_routes_sma_with_filter_through_snapshot_orchestration(
     old_env_db_path = os.environ.get("DB_PATH")
     calls: list[str] = []
 
-    original_typed_boundary = engine_module.decide_sma_with_filter_runtime_snapshot_from_db
+    original_typed_boundary = runtime_strategy_decision.decide_sma_with_filter_runtime_snapshot_from_db
 
     def _snapshot_orchestration(conn, strategy, *, through_ts_ms=None):
         calls.append(strategy.name)
@@ -151,7 +152,7 @@ def test_compute_signal_routes_sma_with_filter_through_snapshot_orchestration(
         )
 
     monkeypatch.setattr(
-        engine_module,
+        runtime_strategy_decision,
         "decide_sma_with_filter_runtime_snapshot_from_db",
         _snapshot_orchestration,
     )
@@ -214,7 +215,7 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
         raising=False,
     )
     monkeypatch.setattr(
-        engine_module,
+        runtime_strategy_decision,
         "create_legacy_strategy",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("legacy registry creation path called")
@@ -232,12 +233,12 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
         return None
 
     monkeypatch.setattr(
-        engine_module,
+        runtime_strategy_decision,
         "normalize_position_state_before_strategy_decision",
         _normalize_before_decision,
     )
     monkeypatch.setattr(
-        engine_module,
+        runtime_strategy_decision,
         "decide_sma_with_filter_runtime_snapshot_from_db",
         _snapshot_boundary,
     )
@@ -292,7 +293,11 @@ def test_decision_runner_exposes_typed_strategy_decision_boundary(
         calls.append((short_n, long_n, strategy_name))
         return None
 
-    monkeypatch.setattr(engine_module, "_compute_strategy_decision_snapshot_impl", _fake_impl)
+    monkeypatch.setattr(
+        runtime_strategy_decision,
+        "_compute_strategy_decision_snapshot_impl",
+        _fake_impl,
+    )
 
     runner = engine_module.DecisionRunner(strategy_name="sma_with_filter")
     with sqlite3.connect(":memory:") as conn:
@@ -315,7 +320,7 @@ def test_live_real_sma_cross_rejected_before_legacy_strategy_creation(
         legacy_calls.append(name)
         raise AssertionError("legacy DB strategy creation must not be reached")
 
-    monkeypatch.setattr(engine_module, "create_legacy_strategy", _fail_legacy_creation)
+    monkeypatch.setattr(runtime_strategy_decision, "create_legacy_strategy", _fail_legacy_creation)
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
     object.__setattr__(settings, "LIVE_DRY_RUN", False)
@@ -346,7 +351,7 @@ def test_legacy_sma_cross_cannot_be_selected_in_live_even_if_strategy_name_argum
         legacy_calls.append(name)
         raise AssertionError("legacy DB strategy creation must not be reached")
 
-    monkeypatch.setattr(engine_module, "create_legacy_strategy", _fail_legacy_creation)
+    monkeypatch.setattr(runtime_strategy_decision, "create_legacy_strategy", _fail_legacy_creation)
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
     object.__setattr__(settings, "LIVE_DRY_RUN", False)

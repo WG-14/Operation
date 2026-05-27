@@ -34,6 +34,7 @@ from bithumb_bot import engine
 from bithumb_bot import runtime_position_state_normalizer
 from bithumb_bot import runtime_sma_snapshot
 from bithumb_bot import runtime_sma_snapshot_builder as runtime_sma
+from bithumb_bot import runtime_strategy_decision
 from bithumb_bot.strategy import sma as strategy_sma
 from bithumb_bot.strategy.sma import (
     SmaCrossStrategy,
@@ -826,7 +827,9 @@ def test_runtime_decide_is_read_only_and_normalization_boundary_is_explicit() ->
         runtime_sma._build_sma_with_filter_runtime_decision_from_normalized_db_readonly_impl
     )
     orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db)
-    engine_normalization_source = inspect.getsource(engine.normalize_position_state_before_strategy_decision)
+    runtime_normalization_source = inspect.getsource(
+        runtime_strategy_decision.normalize_position_state_before_strategy_decision
+    )
     runtime_boundary_source = inspect.getsource(runtime_sma_snapshot.decide_sma_with_filter_snapshot_from_db)
     runtime_boundary_module_source = inspect.getsource(runtime_sma_snapshot)
 
@@ -840,7 +843,7 @@ def test_runtime_decide_is_read_only_and_normalization_boundary_is_explicit() ->
     assert "_load_position_context(" in builder_impl_source
     assert "evaluate_sma_final_decision(" in builder_impl_source
     assert "normalize_and_persist(" not in orchestration_source
-    assert "normalize_and_persist(" in engine_normalization_source
+    assert "normalize_and_persist(" in runtime_normalization_source
     assert "strategy.decide(" not in orchestration_source
     assert "_decide_from_normalized_db(" not in orchestration_source
     assert "build_sma_with_filter_runtime_decision_from_normalized_db(" in orchestration_source
@@ -1174,13 +1177,15 @@ def test_position_normalizer_is_the_only_runtime_decision_mutation_boundary() ->
         runtime_position_state_normalizer.PositionStateNormalizer.normalize_and_persist
     )
     orchestration_source = inspect.getsource(runtime_sma.decide_sma_with_filter_runtime_snapshot_from_db)
-    engine_normalization_source = inspect.getsource(engine.normalize_position_state_before_strategy_decision)
+    runtime_normalization_source = inspect.getsource(
+        runtime_strategy_decision.normalize_position_state_before_strategy_decision
+    )
 
     assert "mark_harmless_dust_positions(" in normalizer_source
     assert "reclassify_non_executable_open_exposure(" in normalizer_source
     assert "conn.commit()" in normalizer_source
     assert "normalize_and_persist(" not in orchestration_source
-    assert "normalize_and_persist(" in engine_normalization_source
+    assert "normalize_and_persist(" in runtime_normalization_source
     assert "build_sma_with_filter_runtime_decision_from_normalized_db(" in orchestration_source
 
 
@@ -1198,8 +1203,16 @@ def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -
         events.append("decision")
         return None
 
-    monkeypatch.setattr(engine, "normalize_position_state_before_strategy_decision", _normalize)
-    monkeypatch.setattr(engine, "decide_sma_with_filter_runtime_snapshot_from_db", _decide)
+    monkeypatch.setattr(
+        runtime_strategy_decision,
+        "normalize_position_state_before_strategy_decision",
+        _normalize,
+    )
+    monkeypatch.setattr(
+        runtime_strategy_decision,
+        "decide_sma_with_filter_runtime_snapshot_from_db",
+        _decide,
+    )
 
     try:
         object.__setattr__(engine.settings, "PAIR", "BTC_KRW")

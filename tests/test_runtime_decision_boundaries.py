@@ -8,6 +8,7 @@ import pytest
 
 from bithumb_bot.config import settings
 from bithumb_bot import engine
+from bithumb_bot import runtime_strategy_decision
 from bithumb_bot.core.sma_policy import PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.db_core import ensure_schema
 from bithumb_bot.decision_envelope import DecisionEnvelope
@@ -55,9 +56,14 @@ def _insert_candles(conn: sqlite3.Connection, *, pair: str, interval: str, base_
         )
 
 
-def _typed_decision(*, final_signal: str = "HOLD", final_reason: str = "unit hold") -> StrategyDecisionV2:
+def _typed_decision(
+    *,
+    final_signal: str = "HOLD",
+    final_reason: str = "unit hold",
+    strategy_name: str = "sma_with_filter",
+) -> StrategyDecisionV2:
     return StrategyDecisionV2(
-        strategy_name="sma_with_filter",
+        strategy_name=strategy_name,
         raw_signal=final_signal,
         raw_reason=final_reason,
         entry_signal=final_signal,
@@ -84,9 +90,9 @@ def _typed_decision(*, final_signal: str = "HOLD", final_reason: str = "unit hol
     )
 
 
-def _runtime_result() -> RuntimeSmaDecisionResult:
+def _runtime_result(*, strategy_name: str = "sma_with_filter") -> RuntimeSmaDecisionResult:
     return RuntimeSmaDecisionResult(
-        decision=_typed_decision(),
+        decision=_typed_decision(strategy_name=strategy_name),
         base_context={
             "market_price": 10.0,
             "last_close": 10.0,
@@ -381,6 +387,76 @@ def test_sma_with_filter_approved_profile_runtime_requires_typed_handoff() -> No
     finally:
         for key, value in original.items():
             object.__setattr__(settings, key, value)
+
+
+def test_engine_promotion_runtime_path_has_no_concrete_sma_branch() -> None:
+    source = Path("src/bithumb_bot/engine.py").read_text()
+
+    assert 'selected_strategy_name == "sma_with_filter"' not in source
+    assert "SmaWithFilterStrategy" not in source
+    assert "isinstance(strategy, SmaWithFilterStrategy)" not in source
+    assert "decide_sma_with_filter_runtime_snapshot_from_db" not in source
+
+
+def test_runtime_decision_adapter_registry_drives_promotion_path_without_engine_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int, int | None]] = []
+
+    class _UnitPromotionAdapter:
+        strategy_name = "unit_promotion"
+
+        def decide(self, conn, *, short_n, long_n, through_ts_ms=None):
+            calls.append((short_n, long_n, through_ts_ms))
+            return _runtime_result(strategy_name=self.strategy_name)
+
+        def typed_authority_required(self) -> bool:
+            return True
+
+    monkeypatch.setitem(
+        runtime_strategy_decision._RUNTIME_DECISION_ADAPTERS,
+        "unit_promotion",
+        _UnitPromotionAdapter,
+    )
+
+    result = engine.compute_strategy_decision_snapshot(
+        None,
+        5,
+        20,
+        through_ts_ms=1_700_003_000_000,
+        strategy_name="unit_promotion",
+    )
+
+    assert isinstance(result, RuntimeSmaDecisionResult)
+    assert result.decision.strategy_name == "unit_promotion"
+    assert calls == [(5, 20, 1_700_003_000_000)]
+    assert "unit_promotion" not in Path("src/bithumb_bot/engine.py").read_text()
+
+
+def test_generic_promotion_adapter_dict_handoff_fails_closed_when_typed_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RequiredTypedAdapter:
+        strategy_name = "unit_required_typed"
+
+        def decide(self, conn, *, short_n, long_n, through_ts_ms=None):
+            raise AssertionError("not used")
+
+        def typed_authority_required(self) -> bool:
+            return True
+
+    monkeypatch.setitem(
+        runtime_strategy_decision._RUNTIME_DECISION_ADAPTERS,
+        "unit_required_typed",
+        _RequiredTypedAdapter,
+    )
+
+    reason = engine._typed_runtime_handoff_failure_reason(
+        {"signal": "BUY", "reason": "legacy dict"},
+        selected_strategy_name="unit_required_typed",
+    )
+
+    assert reason == "typed_runtime_decision_required"
 
 
 def test_mutating_persistence_context_does_not_change_typed_submit_authority() -> None:

@@ -6,31 +6,32 @@ import re
 import time
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from .config import (
     DEFAULT_RUNTIME_STRATEGY,
     MarketPreflightValidationError,
     settings,
     validate_live_mode_preflight,
-    validate_live_strategy_selection,
     validate_market_preflight,
     validate_market_runtime,
 )
 from .marketdata import cmd_sync
-from .strategy import (
-    SmaWithFilterStrategy,
-    create_legacy_strategy,
-    create_strategy_policy,
-)
-from .runtime_sma_snapshot import (
-    decide_sma_with_filter_runtime_snapshot_from_db,
-)
-from .runtime_position_state_normalizer import PositionStateNormalizer
-from .runtime_sma_snapshot_builder import (
-    RuntimeSmaDecisionResult,
-    _latest_signal_close,
-    _resolve_signal_through_ts_ms,
+from .runtime_strategy_decision import (
+    ORIGINAL_COMPUTE_SIGNAL as _ORIGINAL_COMPUTE_SIGNAL,
+    DecisionRunner,
+    RuntimeStrategyDecisionResult,
+    build_read_only_strategy_decision_snapshot,
+    compute_signal,
+    compute_signal_runtime_handoff,
+    compute_strategy_decision_after_normalization,
+    compute_strategy_decision_snapshot,
+    is_runtime_strategy_decision_result,
+    legacy_db_strategy_fallback_allowed as _runtime_legacy_db_strategy_fallback_allowed,
+    normalize_position_state_before_strategy_decision,
+    normalize_position_state_for_runtime_decision,
+    promotion_grade_typed_runtime_decision_required,
+    typed_runtime_handoff_failure_reason,
 )
 from .broker.bithumb import BithumbBroker, build_broker_with_auth_diagnostics
 from .broker.base import BrokerError
@@ -378,75 +379,12 @@ def get_stale_risk_state_mismatch_halt_diagnostics(
         state=runtime_state.snapshot(),
         startup_gate_reason=gate_reason,
     )
-def compute_signal(
-    conn,
-    short_n: int,
-    long_n: int,
-    *,
-    through_ts_ms: int | None = None,
-    strategy_name: str | None = None,
-):
-    result = compute_signal_runtime_handoff(
-        conn,
-        short_n,
-        long_n,
-        through_ts_ms=through_ts_ms,
-        strategy_name=strategy_name,
-    )
-    if result is None:
-        return None
-    if isinstance(result, RuntimeSmaDecisionResult):
-        payload = result.as_legacy_dict()
-        payload.setdefault("strategy", result.decision.strategy_name)
-        return payload
-    return result
-
-
-def compute_signal_runtime_handoff(
-    conn,
-    short_n: int,
-    long_n: int,
-    *,
-    through_ts_ms: int | None = None,
-    strategy_name: str | None = None,
-) -> RuntimeSmaDecisionResult | dict[str, object] | None:
-    """Return typed SMA runtime decisions before compatibility serialization.
-
-    ``compute_signal`` remains the legacy dict API. The live run loop binds here
-    so ``sma_with_filter`` can carry ``RuntimeSmaDecisionResult`` until the
-    explicit persistence/logging boundary.
-    """
-    result = compute_strategy_decision_snapshot(
-        conn,
-        short_n,
-        long_n,
-        through_ts_ms=through_ts_ms,
-        strategy_name=strategy_name,
-    )
-    if result is None:
-        return None
-    if isinstance(result, RuntimeSmaDecisionResult):
-        return result
-    decision, strategy = result
-    payload = decision.as_dict()
-    payload.setdefault("strategy", strategy.name)
-    return payload
-
-
-_ORIGINAL_COMPUTE_SIGNAL = compute_signal
-
-
 def _promotion_grade_typed_runtime_decision_required(*, selected_strategy_name: str) -> bool:
-    if str(selected_strategy_name or "").strip().lower() != "sma_with_filter":
-        return False
-    if compute_signal is not _ORIGINAL_COMPUTE_SIGNAL:
-        return False
-    mode = str(settings.MODE or "").strip().lower()
-    if mode == "live":
-        return True
-    if str(getattr(settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
-        return True
-    return False
+    return promotion_grade_typed_runtime_decision_required(
+        selected_strategy_name=selected_strategy_name,
+        compute_signal_fn=compute_signal,
+        original_compute_signal_fn=_ORIGINAL_COMPUTE_SIGNAL,
+    )
 
 
 def _typed_runtime_handoff_failure_reason(
@@ -454,212 +392,18 @@ def _typed_runtime_handoff_failure_reason(
     *,
     selected_strategy_name: str,
 ) -> str | None:
-    if not _promotion_grade_typed_runtime_decision_required(
-        selected_strategy_name=selected_strategy_name
-    ):
-        return None
-    if isinstance(signal_handoff, RuntimeSmaDecisionResult):
-        return None
-    return "typed_runtime_decision_required"
+    return typed_runtime_handoff_failure_reason(
+        signal_handoff,
+        selected_strategy_name=selected_strategy_name,
+        compute_signal_fn=compute_signal,
+        original_compute_signal_fn=_ORIGINAL_COMPUTE_SIGNAL,
+    )
 
 
 def _legacy_db_strategy_fallback_allowed(*, selected_strategy_name: str) -> bool:
-    if selected_strategy_name == "sma_with_filter":
-        return False
-    live_real_order = bool(
-        str(settings.MODE).strip().lower() == "live"
-        and bool(settings.LIVE_REAL_ORDER_ARMED)
-        and not bool(settings.LIVE_DRY_RUN)
+    return _runtime_legacy_db_strategy_fallback_allowed(
+        selected_strategy_name=selected_strategy_name
     )
-    return not live_real_order
-
-
-def normalize_position_state_before_strategy_decision(
-    conn,
-    strategy: SmaWithFilterStrategy,
-    *,
-    through_ts_ms: int | None = None,
-    normalizer: PositionStateNormalizer | None = None,
-) -> int:
-    """Run explicit mutating position normalization before read-only decisions."""
-    signal_through_ts_ms = _resolve_signal_through_ts_ms(
-        interval=strategy.interval,
-        through_ts_ms=through_ts_ms,
-    )
-    if signal_through_ts_ms is None:
-        return 0
-    market_price = _latest_signal_close(
-        conn,
-        pair=strategy.pair,
-        interval=strategy.interval,
-        through_ts_ms=signal_through_ts_ms,
-    )
-    if market_price is None:
-        return 0
-    return (normalizer or PositionStateNormalizer()).normalize_and_persist(
-        conn,
-        pair=strategy.pair,
-        market_price=float(market_price),
-        slippage_bps=float(strategy.slippage_bps),
-        entry_edge_buffer_ratio=float(strategy.entry_edge_buffer_ratio),
-    )
-
-
-def normalize_position_state_for_runtime_decision(
-    conn,
-    strategy: SmaWithFilterStrategy,
-    *,
-    through_ts_ms: int | None = None,
-    normalizer: PositionStateNormalizer | None = None,
-) -> dict[str, object]:
-    """Explicit mutable pre-decision phase for runtime strategy decisions."""
-    updated_count = normalize_position_state_before_strategy_decision(
-        conn,
-        strategy,
-        through_ts_ms=through_ts_ms,
-        normalizer=normalizer,
-    )
-    return {
-        "normalization_boundary": "engine.normalize_position_state_before_strategy_decision",
-        "normalization_updated_count": int(updated_count),
-        "decision_boundary_phase": "pre_decision_normalization_complete",
-    }
-
-
-def build_read_only_strategy_decision_snapshot(
-    conn,
-    strategy: SmaWithFilterStrategy,
-    *,
-    through_ts_ms: int | None = None,
-    boundary_telemetry: dict[str, object] | None = None,
-) -> RuntimeSmaDecisionResult | None:
-    """Post-normalization read-only decision phase.
-
-    This function assumes any mutable position normalization has already
-    completed. It must not call the normalizer or any legacy DB-bound strategy
-    ``decide(conn)`` method.
-    """
-    result = decide_sma_with_filter_runtime_snapshot_from_db(
-        conn,
-        strategy,
-        through_ts_ms=through_ts_ms,
-    )
-    if result is not None and boundary_telemetry:
-        boundary = {**dict(result.boundary), **dict(boundary_telemetry)}
-        boundary["decision_boundary_phase"] = "post_normalization_decision"
-        result.base_context.update(boundary)
-        object.__setattr__(result, "boundary", boundary)
-    return result
-
-
-def compute_strategy_decision_after_normalization(
-    conn,
-    strategy: SmaWithFilterStrategy,
-    *,
-    through_ts_ms: int | None = None,
-    boundary_telemetry: dict[str, object] | None = None,
-) -> RuntimeSmaDecisionResult | None:
-    """Decision-only helper for callers that already ran normalization."""
-    return build_read_only_strategy_decision_snapshot(
-        conn,
-        strategy,
-        through_ts_ms=through_ts_ms,
-        boundary_telemetry=boundary_telemetry,
-    )
-
-
-@dataclass(frozen=True)
-class DecisionRunner:
-    """Small orchestration seam for runtime strategy decisions.
-
-    This keeps the strategy selection and typed snapshot boundary callable
-    independently from the larger run loop while preserving the existing public
-    ``compute_strategy_decision_snapshot`` API.
-    """
-
-    strategy_name: str | None = None
-
-    def decide_snapshot(
-        self,
-        conn,
-        short_n: int,
-        long_n: int,
-        *,
-        through_ts_ms: int | None = None,
-        strategy_name: str | None = None,
-    ) -> RuntimeSmaDecisionResult | tuple[object, object] | None:
-        return _compute_strategy_decision_snapshot_impl(
-            conn,
-            short_n,
-            long_n,
-            through_ts_ms=through_ts_ms,
-            strategy_name=strategy_name or self.strategy_name,
-        )
-
-
-def compute_strategy_decision_snapshot(
-    conn,
-    short_n: int,
-    long_n: int,
-    *,
-    through_ts_ms: int | None = None,
-    strategy_name: str | None = None,
-) -> RuntimeSmaDecisionResult | tuple[object, object] | None:
-    return DecisionRunner(strategy_name=strategy_name).decide_snapshot(
-        conn,
-        short_n,
-        long_n,
-        through_ts_ms=through_ts_ms,
-    )
-
-
-def _compute_strategy_decision_snapshot_impl(
-    conn,
-    short_n: int,
-    long_n: int,
-    *,
-    through_ts_ms: int | None = None,
-    strategy_name: str | None = None,
-) -> RuntimeSmaDecisionResult | tuple[object, object] | None:
-    """Compute a strategy decision through the promotion-grade typed path when available.
-
-    The tuple return is an explicitly legacy DB-bound compatibility result for
-    paper/smoke callers. Live real-order execution must not reach that branch.
-    """
-    selected_strategy_name = str(strategy_name or settings.STRATEGY_NAME).strip().lower()
-    validate_live_strategy_selection(replace(settings, STRATEGY_NAME=selected_strategy_name))
-    if selected_strategy_name == "sma_with_filter":
-        strategy = create_strategy_policy(
-            selected_strategy_name,
-            short_n=short_n,
-            long_n=long_n,
-            pair=settings.PAIR,
-            interval=settings.INTERVAL,
-        )
-        if not isinstance(strategy, SmaWithFilterStrategy):
-            raise RuntimeError(f"strategy_policy_invalid:{selected_strategy_name}")
-        boundary_telemetry = normalize_position_state_for_runtime_decision(
-            conn,
-            strategy,
-            through_ts_ms=through_ts_ms,
-        )
-        return compute_strategy_decision_after_normalization(
-            conn,
-            strategy,
-            through_ts_ms=through_ts_ms,
-            boundary_telemetry=boundary_telemetry,
-        )
-    if not _legacy_db_strategy_fallback_allowed(selected_strategy_name=selected_strategy_name):
-        raise RuntimeError(f"legacy_db_strategy_not_allowed_for_live:{selected_strategy_name}")
-    strategy = create_legacy_strategy(
-        selected_strategy_name,
-        short_n=short_n,
-        long_n=long_n,
-        pair=settings.PAIR,
-        interval=settings.INTERVAL,
-    )
-    decision = strategy.decide(conn, through_ts_ms=through_ts_ms)
-    return None if decision is None else (decision, strategy)
 
 
 READINESS_CONTEXT_KEYS = (
@@ -3445,7 +3189,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                     continue
 
             conn = ensure_db()
-            typed_runtime_decision: RuntimeSmaDecisionResult | None = None
+            typed_runtime_decision: RuntimeStrategyDecisionResult | None = None
             signal_handoff_fn = (
                 compute_signal_runtime_handoff
                 if compute_signal is _ORIGINAL_COMPUTE_SIGNAL
@@ -3492,7 +3236,7 @@ def run_loop(short_n: int, long_n: int) -> None:
                     reason="insufficient candle history; signal will be recalculated after more syncs",
                 )
                 continue
-            if isinstance(signal_handoff, RuntimeSmaDecisionResult):
+            if is_runtime_strategy_decision_result(signal_handoff):
                 typed_runtime_decision = signal_handoff
                 r = {
                     "ts": typed_runtime_decision.candle_ts,
