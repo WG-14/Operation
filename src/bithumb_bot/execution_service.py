@@ -9,12 +9,12 @@ from .config import settings
 from .db_core import ensure_db
 from .decision_contract import apply_decision_contract
 from .decision_context import resolve_canonical_position_exposure_snapshot
-from .core.sma_policy import StrategyDecisionV2
 from .execution_order_rules import resolve_execution_order_rules
 from .observability import format_log_kv
 from .oms import build_order_intent_key
 from .order_sizing import build_target_delta_execution_sizing
 from .pre_trade_economics import build_pre_trade_economics_snapshot
+from .strategy_policy_contract import StrategyDecisionV2
 from .target_position import TargetPositionSettings, build_target_position_decision
 
 if False:  # pragma: no cover

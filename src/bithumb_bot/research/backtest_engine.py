@@ -114,14 +114,7 @@ class _BacktestAccumulator:
     strategy_behavior_hash_material: list[dict[str, object]] = field(default_factory=list)
     trade_ledger_hash_material: list[dict[str, object]] = field(default_factory=list)
     equity_curve_hash_material: list[dict[str, object]] = field(default_factory=list)
-    raw_sell_filter_blocked_while_in_position_count: int = 0
-    raw_buy_filter_blocked_count: int = 0
-    opposite_cross_triggered_count: int = 0
-    opposite_cross_deferred_small_loss_count: int = 0
-    opposite_cross_deferred_small_gain_count: int = 0
-    stop_loss_exit_count: int = 0
-    max_holding_exit_count: int = 0
-    exit_filter_suppression_prevented_count: int = 0
+    strategy_diagnostic_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def report_detail(self) -> str:
@@ -158,11 +151,11 @@ class _BacktestAccumulator:
         entry_blocked = bool(payload.get("entry_blocked"))
         sellable_qty = float(payload.get("sellable_qty") or 0.0)
         if raw_signal == "BUY" and entry_blocked:
-            self.raw_buy_filter_blocked_count += 1
+            self._increment_diagnostic("raw_buy_filter_blocked_count")
         if raw_signal == "SELL" and raw_filter_would_block and sellable_qty > 1e-12:
-            self.raw_sell_filter_blocked_while_in_position_count += 1
+            self._increment_diagnostic("raw_sell_filter_blocked_while_in_position_count")
         if bool(payload.get("exit_filter_suppression_prevented")):
-            self.exit_filter_suppression_prevented_count += 1
+            self._increment_diagnostic("exit_filter_suppression_prevented_count")
         for evaluation in payload.get("exit_evaluations") or []:
             if not isinstance(evaluation, dict):
                 continue
@@ -170,17 +163,17 @@ class _BacktestAccumulator:
             rule = str(evaluation.get("rule") or context.get("rule") or "")
             if rule == "opposite_cross":
                 if bool(context.get("opposite_cross_triggered")):
-                    self.opposite_cross_triggered_count += 1
+                    self._increment_diagnostic("opposite_cross_triggered_count")
                 if bool(context.get("filter_applied")):
                     zone = str(context.get("filter_zone") or "")
                     if zone == "small_loss":
-                        self.opposite_cross_deferred_small_loss_count += 1
+                        self._increment_diagnostic("opposite_cross_deferred_small_loss_count")
                     elif zone == "small_gain":
-                        self.opposite_cross_deferred_small_gain_count += 1
+                        self._increment_diagnostic("opposite_cross_deferred_small_gain_count")
             elif rule == "stop_loss" and bool(evaluation.get("triggered")):
-                self.stop_loss_exit_count += 1
+                self._increment_diagnostic("stop_loss_exit_count")
             elif rule == "max_holding_time" and bool(evaluation.get("triggered")):
-                self.max_holding_exit_count += 1
+                self._increment_diagnostic("max_holding_exit_count")
         self.decision_hash_material.append(str(payload.get("replay_fingerprint_hash") or ""))
         self.behavior_hash_material.append(
             {
@@ -240,6 +233,9 @@ class _BacktestAccumulator:
             self.active_bar_count += 1
         if retained:
             self.retained_equity_point_count += 1
+
+    def _increment_diagnostic(self, key: str) -> None:
+        self.strategy_diagnostic_counts[key] = int(self.strategy_diagnostic_counts.get(key, 0)) + 1
 
     def record_equity_point(self, *, ts: int, equity: float, cash: float, asset_qty: float) -> None:
         self.equity_curve_hash_material.append(
@@ -347,14 +343,28 @@ class _BacktestAccumulator:
         return _strategy_diagnostics_from_trades(
             namespace=self.diagnostics_namespace,
             trades=trades,
-            raw_sell_filter_blocked_while_in_position_count=self.raw_sell_filter_blocked_while_in_position_count,
-            raw_buy_filter_blocked_count=self.raw_buy_filter_blocked_count,
-            opposite_cross_triggered_count=self.opposite_cross_triggered_count,
-            opposite_cross_deferred_small_loss_count=self.opposite_cross_deferred_small_loss_count,
-            opposite_cross_deferred_small_gain_count=self.opposite_cross_deferred_small_gain_count,
-            stop_loss_exit_count=self.stop_loss_exit_count,
-            max_holding_exit_count=self.max_holding_exit_count,
-            exit_filter_suppression_prevented_count=self.exit_filter_suppression_prevented_count,
+            **{
+                "raw_sell_filter_blocked_while_in_position_count": int(
+                    self.strategy_diagnostic_counts.get("raw_sell_filter_blocked_while_in_position_count", 0)
+                ),
+                "raw_buy_filter_blocked_count": int(
+                    self.strategy_diagnostic_counts.get("raw_buy_filter_blocked_count", 0)
+                ),
+                "opposite_cross_triggered_count": int(
+                    self.strategy_diagnostic_counts.get("opposite_cross_triggered_count", 0)
+                ),
+                "opposite_cross_deferred_small_loss_count": int(
+                    self.strategy_diagnostic_counts.get("opposite_cross_deferred_small_loss_count", 0)
+                ),
+                "opposite_cross_deferred_small_gain_count": int(
+                    self.strategy_diagnostic_counts.get("opposite_cross_deferred_small_gain_count", 0)
+                ),
+                "stop_loss_exit_count": int(self.strategy_diagnostic_counts.get("stop_loss_exit_count", 0)),
+                "max_holding_exit_count": int(self.strategy_diagnostic_counts.get("max_holding_exit_count", 0)),
+                "exit_filter_suppression_prevented_count": int(
+                    self.strategy_diagnostic_counts.get("exit_filter_suppression_prevented_count", 0)
+                ),
+            },
         )
 
 

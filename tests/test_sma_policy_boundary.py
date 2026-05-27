@@ -1749,12 +1749,12 @@ def test_research_kernel_missing_sma_policy_metadata_fails_closed_not_comparable
     decision = result.decisions[-1]
     assert decision["final_signal"] == "HOLD"
     assert decision["blocked"] is True
-    assert decision["entry_reason"] == "sma_with_filter_policy_decision_missing_not_comparable"
+    assert decision["entry_reason"] == "research_policy_decision_missing_not_comparable"
     assert decision["research_policy_recomputed_with_simulated_position"] is False
     assert decision["research_policy_unsupported"] is True
     assert decision["research_policy_comparable"] is False
     assert decision["research_policy_unsupported_reason"] == (
-        "sma_with_filter_policy_decision_missing_not_comparable"
+        "research_policy_decision_missing_not_comparable"
     )
 
 

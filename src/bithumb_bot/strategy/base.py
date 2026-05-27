@@ -4,9 +4,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from bithumb_bot.core.sma_policy import (
+from bithumb_bot.strategy_policy_contract import (
     ExecutionConstraintSnapshot,
-    MarketWindow,
     PositionSnapshot,
     StrategyDecisionV2,
 )
@@ -90,7 +89,7 @@ class StrategyPolicy(Protocol):
     def decide_snapshot(
         self,
         *,
-        market: MarketWindow,
+        market: object,
         position: PositionSnapshot,
         config: object,
         execution_context: ExecutionConstraintSnapshot,

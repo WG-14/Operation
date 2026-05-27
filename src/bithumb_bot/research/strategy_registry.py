@@ -49,6 +49,7 @@ ExitRuleFactory = Callable[
     ],
     list[Any],
 ]
+ResearchPolicyDecisionBuilder = Callable[..., Any]
 ResearchExportNormalizer = Callable[
     [
         list[dict[str, object]],
@@ -234,6 +235,7 @@ class ResearchStrategyPlugin:
     decision_payload_adapter: DecisionPayloadAdapter | None = None
     exit_signal_context_builder: ExitSignalContextBuilder | None = None
     exit_rule_factory: ExitRuleFactory | None = None
+    research_policy_decision_builder: ResearchPolicyDecisionBuilder | None = None
     research_export_normalizer: ResearchExportNormalizer | None = None
     runtime_decision_adapter_factory: Callable[[], Any] | None = None
     single_replay_bundle_builder: SingleReplayBundleBuilder | None = None
@@ -326,6 +328,17 @@ class ResearchStrategyPlugin:
             ),
             "exit_rule_factory_qualname": (
                 self.exit_rule_factory.__qualname__ if self.exit_rule_factory is not None else None
+            ),
+            "research_policy_decision_builder_supported": self.research_policy_decision_builder is not None,
+            "research_policy_decision_builder_module": (
+                self.research_policy_decision_builder.__module__
+                if self.research_policy_decision_builder is not None
+                else None
+            ),
+            "research_policy_decision_builder_qualname": (
+                self.research_policy_decision_builder.__qualname__
+                if self.research_policy_decision_builder is not None
+                else None
             ),
             "research_export_normalizer_supported": self.research_export_normalizer is not None,
             "research_export_normalizer_module": (
@@ -690,6 +703,122 @@ def _sma_exit_rule_factory(
     )
 
 
+def _sma_research_policy_decision_builder(
+    *,
+    event: Any,
+    dataset: DatasetSnapshot,
+    candle_index: int,
+    position: Any,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    active_exit_policy: dict[str, Any],
+    buy_fraction: float = 0.0,
+) -> Any:
+    from bithumb_bot.core.sma_policy import (
+        ExecutionConstraintSnapshot,
+        MarketWindow,
+        SmaPolicyConfig,
+    )
+    from bithumb_bot.runtime_sma_context import (
+        fee_authority_context,
+        get_effective_order_rules,
+        resolve_strategy_fee_authority,
+    )
+    from bithumb_bot.canonical_decision import order_rules_snapshot_payload
+    from bithumb_bot.strategy.exit_rules import ExitPolicyConfig
+    from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
+
+    event_extra = event.extra_payload if isinstance(getattr(event, "extra_payload", None), dict) else {}
+    entry_decision = event_extra.get("entry_decision")
+    if entry_decision is None:
+        return None
+    candles = dataset.candles[: candle_index + 1]
+    prev_above = event_extra.get("prev_above")
+    previous_cross_state = "unknown" if prev_above is None else "above" if bool(prev_above) else "below"
+    market = MarketWindow(
+        pair=dataset.market,
+        interval=dataset.interval,
+        candle_ts=int(event.candle_ts),
+        closes=tuple(float(item.close) for item in candles),
+        prev_s=float(event_extra.get("prev_s", 0.0) or 0.0),
+        prev_l=float(event_extra.get("prev_l", 0.0) or 0.0),
+        curr_s=float(event_extra.get("curr_s", 0.0) or 0.0),
+        curr_l=float(event_extra.get("curr_l", 0.0) or 0.0),
+        gap_ratio=float(getattr(entry_decision, "gap_ratio", 0.0) or 0.0),
+        volatility_ratio=float(getattr(entry_decision, "volatility_ratio", 0.0) or 0.0),
+        overextended_ratio=float(getattr(entry_decision, "overextended_ratio", 0.0) or 0.0),
+        market_regime_snapshot=dict(event_extra.get("regime_snapshot") or {}),
+        entry_decision=entry_decision,
+        through_ts_ms=int(event.candle_ts),
+        previous_cross_state=previous_cross_state,
+        allow_initial_cross=False,
+    )
+    config = SmaPolicyConfig(
+        strategy_name=str(event.strategy_name),
+        short_n=int(parameter_values.get("SMA_SHORT") or 0),
+        long_n=int(parameter_values.get("SMA_LONG") or 0),
+        min_gap_ratio=float(parameter_values.get("SMA_FILTER_GAP_MIN_RATIO") or 0.0),
+        volatility_window=int(parameter_values.get("SMA_FILTER_VOL_WINDOW") or 1),
+        min_volatility_ratio=float(parameter_values.get("SMA_FILTER_VOL_MIN_RANGE_RATIO") or 0.0),
+        overextended_lookback=int(parameter_values.get("SMA_FILTER_OVEREXT_LOOKBACK") or 1),
+        overextended_max_return_ratio=float(
+            parameter_values.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO") or 0.0
+        ),
+        slippage_bps=float(parameter_values.get("STRATEGY_ENTRY_SLIPPAGE_BPS", slippage_bps) or 0.0),
+        live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
+        entry_edge_buffer_ratio=float(parameter_values.get("ENTRY_EDGE_BUFFER_RATIO") or 0.0),
+        cost_edge_enabled=bool(parameter_values.get("SMA_COST_EDGE_ENABLED", True)),
+        cost_edge_min_ratio=float(parameter_values.get("SMA_COST_EDGE_MIN_RATIO") or 0.0),
+        market_regime_enabled=bool(parameter_values.get("SMA_MARKET_REGIME_ENABLED", True)),
+        buy_fraction=float(parameter_values.get("BUY_FRACTION") or buy_fraction or 0.0),
+        max_order_krw=float(parameter_values.get("MAX_ORDER_KRW") or 0.0),
+        candidate_regime_policy=None,
+    )
+    exit_policy = active_exit_policy
+    strategy_specific_policy = exit_policy.get("strategy_specific", {})
+    exit_policy_config = ExitPolicyConfig(
+        rule_names=tuple(exit_policy.get("rules") or ()),
+        stop_loss_ratio=float(exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)),
+        max_holding_sec=float(exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)) * 60.0,
+        min_take_profit_ratio=float(strategy_specific_policy.get("min_take_profit_ratio", 0.0)),
+        small_loss_tolerance_ratio=float(strategy_specific_policy.get("small_loss_tolerance_ratio", 0.0)),
+        live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
+    )
+    common_exit_rule_names = set(exit_policy.get("common_rules") or ())
+    strategy_exit_rule_names = set(exit_policy.get("strategy_rules") or ())
+    rule_sources = {
+        name: (
+            "common_risk_and_plugin"
+            if name in common_exit_rule_names and name in strategy_exit_rule_names
+            else "common_risk"
+            if name in common_exit_rule_names
+            else "plugin"
+            if name in strategy_exit_rule_names
+            else "unknown"
+        )
+        for name in exit_policy.get("rules") or ()
+    }
+    fee = float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate)
+    return evaluate_sma_final_decision(
+        market=market,
+        position=position,
+        config=config,
+        execution_context=ExecutionConstraintSnapshot(
+            fee_rate_for_decision=fee,
+            fee_authority=fee_authority_context(
+                resolve_strategy_fee_authority(pair=dataset.market, config_fallback_fee_rate=fee)
+            ),
+            order_rules=order_rules_snapshot_payload(
+                get_effective_order_rules(dataset.market),
+                pair=dataset.market,
+            ),
+        ),
+        exit_policy_config=exit_policy_config,
+        rule_sources=rule_sources,
+    )
+
+
 def _sma_runtime_decision_adapter_factory() -> Any:
     from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
 
@@ -865,6 +994,7 @@ _SMA_WITH_FILTER_PLUGIN = ResearchStrategyPlugin(
     decision_payload_adapter=_sma_decision_payload_adapter,
     exit_signal_context_builder=_sma_exit_signal_context,
     exit_rule_factory=_sma_exit_rule_factory,
+    research_policy_decision_builder=_sma_research_policy_decision_builder,
     research_export_normalizer=_sma_research_export_normalizer,
     runtime_decision_adapter_factory=_sma_runtime_decision_adapter_factory,
     single_replay_bundle_builder=_sma_single_replay_bundle_builder,

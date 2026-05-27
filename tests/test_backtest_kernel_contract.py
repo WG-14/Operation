@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import replace
+from pathlib import Path
 
 from bithumb_bot.research import backtest_engine, backtest_kernel
 import bithumb_bot.research.strategy_registry as strategy_registry
@@ -411,6 +412,52 @@ def test_backtest_kernel_module_owns_decision_event_implementation() -> None:
     assert "from .backtest_engine import _run_decision_event_backtest_impl" not in source
     assert "Execute strategy decision events through the shared research backtest kernel" in implementation_source
     assert "resolve_research_strategy_plugin(strategy_name)" in implementation_source
+
+
+def test_backtest_kernel_has_no_sma_specific_dependencies_or_branches() -> None:
+    source = inspect.getsource(backtest_kernel)
+    forbidden = (
+        "bithumb_bot.core.sma_policy",
+        "bithumb_bot.sma_decision",
+        "evaluate_sma_",
+        "SmaPolicyConfig",
+        "MarketWindow",
+        "sma_with_filter",
+        "curr_s",
+        "curr_l",
+        "prev_s",
+        "prev_l",
+        "gap_ratio",
+    )
+
+    for text in forbidden:
+        assert text not in source
+    assert "research_policy_decision_builder" in source
+    assert "from . import backtest_engine as _engine" not in source
+    assert "=_engine." not in source.replace(" ", "")
+
+
+def test_neutral_strategy_contracts_do_not_import_sma_policy() -> None:
+    contract_source = Path("src/bithumb_bot/strategy_policy_contract.py").read_text(encoding="utf-8")
+    base_source = Path("src/bithumb_bot/strategy/base.py").read_text(encoding="utf-8")
+
+    assert "core.sma_policy" not in contract_source
+    assert "core.sma_policy" not in base_source
+    assert "SmaEntryDecision" not in contract_source
+    assert "entry_decision: object | None" in contract_source
+
+
+def test_backtest_accumulator_uses_generic_diagnostic_count_map() -> None:
+    accumulator_fields = backtest_engine._BacktestAccumulator.__dataclass_fields__
+
+    assert "strategy_diagnostic_counts" in accumulator_fields
+    for field_name in (
+        "opposite_cross_triggered_count",
+        "stop_loss_exit_count",
+        "max_holding_exit_count",
+        "raw_buy_filter_blocked_count",
+    ):
+        assert field_name not in accumulator_fields
 
 
 def test_backtest_kernel_does_not_own_sma_specific_exit_rule_names() -> None:

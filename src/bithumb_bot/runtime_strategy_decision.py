@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Protocol, runtime_checkable
 
 from .config import settings, validate_live_strategy_selection
-from .core.sma_policy import StrategyDecisionV2
+from .strategy_policy_contract import StrategyDecisionV2
 
 
 @runtime_checkable

@@ -84,6 +84,22 @@ class SmaWithFilterStrategy:
             exit_policy_config=self.exit_policy_config(),
         )
 
+    def decide_runtime_snapshot(
+        self,
+        conn: object,
+        *,
+        through_ts_ms: int | None = None,
+    ) -> object:
+        from bithumb_bot.runtime_sma_snapshot import (
+            decide_sma_with_filter_runtime_snapshot_from_db,
+        )
+
+        return decide_sma_with_filter_runtime_snapshot_from_db(
+            conn,
+            self,
+            through_ts_ms=through_ts_ms,
+        )
+
     def exit_policy_config(self) -> ExitPolicyConfig:
         return ExitPolicyConfig(
             rule_names=tuple(self.exit_rule_names),

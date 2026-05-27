@@ -4,13 +4,6 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from bithumb_bot.market_regime import aggregate_regime_coverage, aggregate_regime_performance
-from bithumb_bot.core.sma_policy import (
-    ExecutionConstraintSnapshot,
-    MarketWindow,
-    PositionSnapshot,
-    SmaPolicyConfig,
-    StrategyDecisionV2,
-)
 from bithumb_bot.lot_model import quantize_to_lot_count
 from bithumb_bot.execution_service import (
     ExecutionReadinessPlanningInput,
@@ -22,10 +15,10 @@ from bithumb_bot.execution_service import (
     build_typed_execution_decision_summary,
     validate_execution_submit_plan_payload,
 )
-from bithumb_bot.strategy.exit_rules import ExitPolicyConfig, evaluate_sma_exit_policy, merge_exit_rules
-from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
+from bithumb_bot.strategy.exit_rules import merge_exit_rules
+from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
-from . import backtest_engine as _engine
+from . import backtest_support as support
 from .decision_event import ResearchDecisionEvent
 from .execution_model import ExecutionFill, ExecutionModel, ExecutionRequest, FixedBpsExecutionModel
 from .execution_timing import build_signal_event, candle_close_ts, resolve_execution_reference
@@ -34,48 +27,16 @@ from .metrics_contract import EquityPoint, build_metrics_v2
 from .strategy_spec import exit_policy_from_parameters, exit_policy_hash, strategy_spec_for_name
 
 if TYPE_CHECKING:
-    from .backtest_engine import BacktestRun, BacktestRunContext
+    from .backtest_support import BacktestRun, BacktestRunContext
     from .dataset_snapshot import DatasetSnapshot
     from .execution_model import ExecutionModel
     from .experiment_manifest import ExecutionTimingPolicy, PortfolioPolicy
 
 
-# BacktestEngine still owns the surrounding research data structures and helper
-# graph. The decision-event loop is implemented here and calls those helpers as
-# a compatibility dependency while callers bind to this public kernel module.
-BacktestRun = _engine.BacktestRun
-BacktestRunContext = _engine.BacktestRunContext
-_BacktestAccumulator = _engine._BacktestAccumulator
-_PendingFill = _engine._PendingFill
-_RegimeCoverageAccumulator = _engine._RegimeCoverageAccumulator
-_ResearchPositionContext = _engine._ResearchPositionContext
-_apply_pending_fills = _engine._apply_pending_fills
-_closed_trade_diagnostics = _engine._closed_trade_diagnostics
-_complete_audit_trace = _engine._complete_audit_trace
-_create_exit_rules = _engine._create_exit_rules
-_depth_request_fields = _engine._depth_request_fields
-_empty_metrics = _engine._empty_metrics
-_empty_metrics_v2 = _engine._empty_metrics_v2
-_execution_reference_warnings = _engine._execution_reference_warnings
-_failed_fill = _engine._failed_fill
-_fill_applies_to_mark = _engine._fill_applies_to_mark
-_fill_effective_ts = _engine._fill_effective_ts
-_mark_pending_fills_at_end = _engine._mark_pending_fills_at_end
-_metrics = _engine._metrics
-_metrics_v2_ledgers_from_trades = _engine._metrics_v2_ledgers_from_trades
-_model_latency_ms = _engine._model_latency_ms
-_pending_trade_from_fill = _engine._pending_trade_from_fill
-_record_equity_mark = _engine._record_equity_mark
-_research_decision_payload = _engine._research_decision_payload
-_retained_detail_summary = _engine._retained_detail_summary
-_timing_request_fields = _engine._timing_request_fields
-_trace_decision = _engine._trace_decision
-_trace_equity_mark = _engine._trace_equity_mark
-_trace_execution = _engine._trace_execution
-_trade_from_fill = _engine._trade_from_fill
-_trade_hash_payload = _engine._trade_hash_payload
-empty_execution_event_summary = _engine.empty_execution_event_summary
-execution_event_summary = _engine.execution_event_summary
+BacktestRun = support.BacktestRun
+BacktestRunContext = support.BacktestRunContext
+empty_execution_event_summary = support.empty_execution_event_summary
+execution_event_summary = support.execution_event_summary
 
 
 @dataclass(frozen=True)
@@ -619,164 +580,6 @@ def _research_lot_count(qty: float) -> int:
     return quantize_to_lot_count(qty=max(0.0, float(qty)), lot_size=0.0001)
 
 
-def _sma_policy_config_from_research_parameters(
-    *,
-    strategy_name: str,
-    parameter_values: dict[str, Any],
-    fee_rate: float,
-    slippage_bps: float,
-    default_buy_fraction: float = 0.0,
-) -> SmaPolicyConfig:
-    return SmaPolicyConfig(
-        strategy_name=strategy_name,
-        short_n=int(parameter_values.get("SMA_SHORT") or 0),
-        long_n=int(parameter_values.get("SMA_LONG") or 0),
-        min_gap_ratio=float(parameter_values.get("SMA_FILTER_GAP_MIN_RATIO") or 0.0),
-        volatility_window=int(parameter_values.get("SMA_FILTER_VOL_WINDOW") or 1),
-        min_volatility_ratio=float(parameter_values.get("SMA_FILTER_VOL_MIN_RANGE_RATIO") or 0.0),
-        overextended_lookback=int(parameter_values.get("SMA_FILTER_OVEREXT_LOOKBACK") or 1),
-        overextended_max_return_ratio=float(
-            parameter_values.get("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO") or 0.0
-        ),
-        slippage_bps=float(parameter_values.get("STRATEGY_ENTRY_SLIPPAGE_BPS", slippage_bps) or 0.0),
-        live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-        entry_edge_buffer_ratio=float(parameter_values.get("ENTRY_EDGE_BUFFER_RATIO") or 0.0),
-        cost_edge_enabled=bool(parameter_values.get("SMA_COST_EDGE_ENABLED", True)),
-        cost_edge_min_ratio=float(parameter_values.get("SMA_COST_EDGE_MIN_RATIO") or 0.0),
-        market_regime_enabled=bool(parameter_values.get("SMA_MARKET_REGIME_ENABLED", True)),
-        buy_fraction=float(parameter_values.get("BUY_FRACTION") or default_buy_fraction or 0.0),
-        max_order_krw=float(parameter_values.get("MAX_ORDER_KRW") or 0.0),
-        candidate_regime_policy=None,
-    )
-
-
-def _reevaluate_sma_policy_with_research_position(
-    *,
-    event: ResearchDecisionEvent,
-    dataset: DatasetSnapshot,
-    candle_index: int,
-    position: PositionSnapshot,
-    parameter_values: dict[str, Any],
-    fee_rate: float,
-    slippage_bps: float,
-    exit_policy_config: ExitPolicyConfig,
-    buy_fraction: float = 0.0,
-    rule_sources: dict[str, str] | None = None,
-) -> StrategyDecisionV2 | None:
-    event_extra = event.extra_payload if isinstance(event.extra_payload, dict) else {}
-    entry_decision = event_extra.get("entry_decision")
-    if entry_decision is None:
-        return None
-    candles = dataset.candles[: candle_index + 1]
-    prev_above = event_extra.get("prev_above")
-    previous_cross_state = "unknown" if prev_above is None else "above" if bool(prev_above) else "below"
-    market = MarketWindow(
-        pair=dataset.market,
-        interval=dataset.interval,
-        candle_ts=int(event.candle_ts),
-        closes=tuple(float(item.close) for item in candles),
-        prev_s=float(event_extra.get("prev_s", 0.0) or 0.0),
-        prev_l=float(event_extra.get("prev_l", 0.0) or 0.0),
-        curr_s=float(event_extra.get("curr_s", 0.0) or 0.0),
-        curr_l=float(event_extra.get("curr_l", 0.0) or 0.0),
-        gap_ratio=float(getattr(entry_decision, "gap_ratio", 0.0) or 0.0),
-        volatility_ratio=float(getattr(entry_decision, "volatility_ratio", 0.0) or 0.0),
-        overextended_ratio=float(getattr(entry_decision, "overextended_ratio", 0.0) or 0.0),
-        market_regime_snapshot=dict(event_extra.get("regime_snapshot") or {}),
-        entry_decision=entry_decision,
-        through_ts_ms=int(event.candle_ts),
-        previous_cross_state=previous_cross_state,
-        allow_initial_cross=False,
-    )
-    config = _sma_policy_config_from_research_parameters(
-        strategy_name=event.strategy_name,
-        parameter_values=parameter_values,
-        fee_rate=fee_rate,
-        slippage_bps=slippage_bps,
-        default_buy_fraction=buy_fraction,
-    )
-    execution_context = ExecutionConstraintSnapshot(
-        fee_rate_for_decision=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-        fee_authority=_research_fee_authority_context(
-            pair=dataset.market,
-            fee_rate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-        ),
-        order_rules=_research_order_rules_snapshot(pair=dataset.market),
-    )
-    return evaluate_sma_final_decision(
-        market=market,
-        position=position,
-        config=config,
-        execution_context=execution_context,
-        exit_policy_config=exit_policy_config,
-        rule_sources=rule_sources,
-    )
-
-
-def _exit_policy_config_from_materialized_policy(
-    active_exit_policy: dict[str, Any],
-    *,
-    parameter_values: dict[str, Any],
-    fee_rate: float,
-) -> ExitPolicyConfig:
-    strategy_specific_policy = active_exit_policy.get("strategy_specific", {})
-    return ExitPolicyConfig(
-        rule_names=tuple(active_exit_policy.get("rules") or ()),
-        stop_loss_ratio=float(
-            active_exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)
-        ),
-        max_holding_sec=float(
-            active_exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)
-        )
-        * 60.0,
-        min_take_profit_ratio=float(
-            strategy_specific_policy.get("min_take_profit_ratio", 0.0)
-        ),
-        small_loss_tolerance_ratio=float(
-            strategy_specific_policy.get("small_loss_tolerance_ratio", 0.0)
-        ),
-        live_fee_rate_estimate=float(parameter_values.get("LIVE_FEE_RATE_ESTIMATE") or fee_rate),
-    )
-
-
-def _exit_rule_sources_for_policy(active_exit_policy: dict[str, Any]) -> dict[str, str]:
-    common_exit_rule_names = set(active_exit_policy.get("common_rules") or ())
-    strategy_exit_rule_names = set(active_exit_policy.get("strategy_rules") or ())
-    return {
-        name: _exit_rule_source(
-            rule_name=name,
-            common_exit_rule_names=common_exit_rule_names,
-            strategy_exit_rule_names=strategy_exit_rule_names,
-        )
-        for name in active_exit_policy.get("rules") or ()
-    }
-
-
-def _allows_legacy_sma_event_first_exit_policy(event: ResearchDecisionEvent) -> bool:
-    return "research_runtime_contract.v2" not in str(event.strategy_version or "")
-
-
-def _research_fee_authority_context(*, pair: str, fee_rate: float) -> dict[str, object]:
-    from bithumb_bot.runtime_sma_context import (
-        fee_authority_context,
-        resolve_strategy_fee_authority,
-    )
-
-    return fee_authority_context(
-        resolve_strategy_fee_authority(
-            pair=pair,
-            config_fallback_fee_rate=float(fee_rate),
-        )
-    )
-
-
-def _research_order_rules_snapshot(*, pair: str) -> dict[str, object]:
-    from bithumb_bot.canonical_decision import order_rules_snapshot_payload
-    from bithumb_bot.runtime_sma_context import get_effective_order_rules
-
-    return order_rules_snapshot_payload(get_effective_order_rules(pair), pair=pair)
-
-
 @dataclass(frozen=True)
 class BacktestKernel:
     """Stable common-kernel API for decision-event backtests."""
@@ -870,23 +673,23 @@ def _run_decision_event_backtest_impl(
     cash = starting_cash
     qty = float(policy.initial_position_qty)
     buy_fraction = float(policy.position_sizing.buy_fraction)
-    accumulator = _BacktestAccumulator(
+    accumulator = support.BacktestAccumulator(
         context=run_context,
         total_candles=len(candles),
         diagnostics_namespace=strategy_plugin.diagnostics_namespace,
     )
     if not candles:
-        audit_trace_index = _complete_audit_trace(run_context, status="completed")
+        audit_trace_index = support.complete_audit_trace(run_context, status="completed")
         return BacktestRun(
-            metrics=_empty_metrics(parameter_stability_score),
-            metrics_v2=_empty_metrics_v2(starting_cash=starting_cash, initial_position_qty=qty),
+            metrics=support.empty_metrics(parameter_stability_score),
+            metrics_v2=support.empty_metrics_v2(starting_cash=starting_cash, initial_position_qty=qty),
             trades=(),
             candle_count=0,
             warnings=("not_enough_candles",),
             execution_event_summary=empty_execution_event_summary(),
             resource_usage=accumulator.resource_usage(candles_processed=0),
             strategy_diagnostics=accumulator.strategy_diagnostics(trades=[]),
-            retained_detail_summary=_retained_detail_summary(accumulator, retained_regime_snapshot_count=0),
+            retained_detail_summary=support.retained_detail_summary(accumulator, retained_regime_snapshot_count=0),
             audit_trace_index=audit_trace_index,
         )
 
@@ -895,7 +698,7 @@ def _run_decision_event_backtest_impl(
     trades: list[dict[str, object]] = []
     decisions: list[dict[str, object]] = []
     equity_curve: list[EquityPoint] = []
-    pending_fills: list[_PendingFill] = []
+    pending_fills: list[support.PendingFill] = []
     warnings: list[str] = []
     closed_pnls: list[float] = []
     entry_cost_basis = 0.0
@@ -911,7 +714,7 @@ def _run_decision_event_backtest_impl(
     peak = starting_cash
     max_drawdown = 0.0
     regime_snapshots: list[dict[str, object]] = []
-    regime_coverage_accumulator = _RegimeCoverageAccumulator()
+    regime_coverage_accumulator = support.RegimeCoverageAccumulator()
 
     first = candles[0]
     first_ts = candle_close_ts(first, interval=dataset.interval)
@@ -919,7 +722,7 @@ def _run_decision_event_backtest_impl(
     if retain_initial_equity:
         equity_curve.append(EquityPoint(ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty))
     accumulator.update_equity(retained=retain_initial_equity, ts=first_ts, asset_qty=qty)
-    _trace_equity_mark(run_context, ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty)
+    support.trace_equity_mark(run_context, ts=first_ts, equity=starting_cash, cash=cash, asset_qty=qty)
 
     for event_number, event in enumerate(decision_events, start=1):
         if event.strategy_name != strategy_plugin.name:
@@ -943,7 +746,7 @@ def _run_decision_event_backtest_impl(
             entry_slippage,
             fee_total,
             slippage_total,
-        ) = _apply_pending_fills(
+        ) = support.apply_pending_fills(
             pending_fills=pending_fills,
             trades=trades,
             boundary_ts=mark_boundary_ts,
@@ -976,7 +779,7 @@ def _run_decision_event_backtest_impl(
             entry_slippage,
             fee_total,
             slippage_total,
-        ) = _apply_pending_fills(
+        ) = support.apply_pending_fills(
             pending_fills=pending_fills,
             trades=trades,
             boundary_ts=decision_boundary_ts,
@@ -1035,17 +838,12 @@ def _run_decision_event_backtest_impl(
             candle_ts=int(candle.ts),
             market_price=float(candle.close),
         )
-        sma_exit_policy_config = _exit_policy_config_from_materialized_policy(
-            active_exit_policy,
-            parameter_values=parameter_values,
-            fee_rate=fee_rate,
-        )
         evaluates_exit_policy = bool(
             isinstance(event.exit_intent, dict)
             and str(event.exit_intent.get("mode") or "") == "evaluate_exit_policy"
         )
         policy_decision = (
-            _reevaluate_sma_policy_with_research_position(
+            strategy_plugin.research_policy_decision_builder(
                 event=event,
                 dataset=dataset,
                 candle_index=index,
@@ -1053,25 +851,20 @@ def _run_decision_event_backtest_impl(
                 parameter_values=parameter_values,
                 fee_rate=fee_rate,
                 slippage_bps=slippage_bps,
+                active_exit_policy=active_exit_policy,
                 buy_fraction=float(buy_fraction),
-                exit_policy_config=sma_exit_policy_config,
-                rule_sources=_exit_rule_sources_for_policy(active_exit_policy),
             )
-            if strategy_plugin.name == "sma_with_filter"
+            if strategy_plugin.research_policy_decision_builder is not None
             else None
         )
-        sma_policy_unsupported_reason = ""
+        policy_unsupported_reason = ""
+        allows_legacy_event_first_exit_policy = "research_runtime_contract.v2" not in str(event.strategy_version or "")
         if (
-            strategy_plugin.name == "sma_with_filter"
+            strategy_plugin.research_policy_decision_builder is not None
             and policy_decision is None
-            and not (
-                evaluates_exit_policy
-                and _allows_legacy_sma_event_first_exit_policy(event)
-            )
+            and not (evaluates_exit_policy and allows_legacy_event_first_exit_policy)
         ):
-            sma_policy_unsupported_reason = (
-                "sma_with_filter_policy_decision_missing_not_comparable"
-            )
+            policy_unsupported_reason = "research_policy_decision_missing_not_comparable"
         if policy_decision is not None:
             entry_decision = policy_decision.entry_decision
             raw_signal = str(policy_decision.raw_signal or "HOLD").upper()
@@ -1098,26 +891,26 @@ def _run_decision_event_backtest_impl(
         requested_action = str(event.final_signal or "HOLD").upper()
         if policy_decision is not None:
             requested_action = str(policy_decision.final_signal or "HOLD").upper()
-        elif sma_policy_unsupported_reason:
+        elif policy_unsupported_reason:
             requested_action = "HOLD"
         action = requested_action
-        blocked = bool(sma_policy_unsupported_reason)
+        blocked = bool(policy_unsupported_reason)
         block_reason = (
             str(policy_decision.final_reason)
             if policy_decision is not None
-            else sma_policy_unsupported_reason or event.reason
+            else policy_unsupported_reason or event.reason
         )
         exit_evaluations: list[dict[str, object]] = []
         exit_rule = str((event.exit_intent or {}).get("exit_rule") or "") if event.exit_intent else ""
         exit_reason = str((event.exit_intent or {}).get("exit_reason") or "") if event.exit_intent else ""
         if (
             evaluates_exit_policy
-            and not (strategy_plugin.name == "sma_with_filter" and policy_decision is not None)
-            and not sma_policy_unsupported_reason
+            and policy_decision is None
+            and not policy_unsupported_reason
         ):
             action = "BUY" if requested_action == "BUY" else "HOLD"
             if sellable_qty > 1e-12:
-                position = _ResearchPositionContext(
+                position = support.ResearchPositionContext(
                     in_position=True,
                     entry_ts=entry_ts,
                     entry_price=entry_price,
@@ -1138,92 +931,60 @@ def _run_decision_event_backtest_impl(
                         else 0.0
                     ),
                 )
-                if strategy_plugin.name == "sma_with_filter":
+                common_exit_rules = support.create_exit_rules(
+                    rule_names=list(active_exit_policy.get("common_rules") or ()),
+                    stop_loss_ratio=float(active_exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)),
+                    max_holding_sec=float(
+                        active_exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)
+                    )
+                    * 60.0,
+                )
+                strategy_exit_rules = []
+                if strategy_plugin.exit_rule_factory is not None:
+                    strategy_exit_rules = strategy_plugin.exit_rule_factory(
+                        active_exit_policy,
+                        parameter_values,
+                        fee_rate,
+                    )
+                exit_rules = merge_exit_rules(common_exit_rules, strategy_exit_rules)
+                common_exit_rule_names = {rule.name for rule in common_exit_rules}
+                strategy_exit_rule_names = {rule.name for rule in strategy_exit_rules}
+                for rule in exit_rules:
                     strategy_signal_context = (
                         strategy_plugin.exit_signal_context_builder(event)
                         if strategy_plugin.exit_signal_context_builder is not None
                         else {}
                     )
-                    exit_decision = evaluate_sma_exit_policy(
-                        position=policy_position,
-                        market=MarketWindow(
-                            pair=dataset.market,
-                            interval=dataset.interval,
-                            candle_ts=int(candle.ts),
-                            closes=(float(candle.close),),
-                            prev_s=float(event_extra.get("prev_s", 0.0) or 0.0),
-                            prev_l=float(event_extra.get("prev_l", 0.0) or 0.0),
-                            curr_s=float(event_extra.get("curr_s", 0.0) or 0.0),
-                            curr_l=float(event_extra.get("curr_l", 0.0) or 0.0),
-                        ),
-                        raw_signal=raw_signal,
-                        raw_reason=raw_reason,
-                        entry_signal=entry_signal,
-                        exit_signal=event.exit_signal or raw_signal,
-                        config=sma_exit_policy_config,
-                        signal_context_extra=strategy_signal_context,
-                        rule_sources=_exit_rule_sources_for_policy(active_exit_policy),
+                    result = rule.evaluate(
+                        position=position,
+                        candle_ts=int(candle.ts),
+                        market_price=float(candle.close),
+                        signal_context={
+                            "base_signal": raw_signal,
+                            "base_reason": raw_reason,
+                            "entry_signal": entry_signal,
+                            "exit_signal": event.exit_signal or raw_signal,
+                            **strategy_signal_context,
+                        },
                     )
-                    exit_evaluations = [dict(item) for item in exit_decision.evaluations]
-                    if exit_decision.triggered:
+                    exit_evaluations.append(
+                        {
+                            "rule": rule.name,
+                            "rule_source": _exit_rule_source(
+                                rule_name=rule.name,
+                                common_exit_rule_names=common_exit_rule_names,
+                                strategy_exit_rule_names=strategy_exit_rule_names,
+                            ),
+                            "triggered": bool(result.should_exit),
+                            "reason": result.reason,
+                            "context": result.context,
+                        }
+                    )
+                    if result.should_exit:
                         action = "SELL"
-                        exit_rule = str(exit_decision.rule or "")
-                        exit_reason = exit_decision.reason
-                else:
-                    common_exit_rules = _create_exit_rules(
-                        rule_names=list(active_exit_policy.get("common_rules") or ()),
-                        stop_loss_ratio=float(active_exit_policy.get("stop_loss", {}).get("stop_loss_ratio", 0.0)),
-                        max_holding_sec=float(
-                            active_exit_policy.get("max_holding_time", {}).get("max_holding_min", 0.0)
-                        )
-                        * 60.0,
-                    )
-                    strategy_exit_rules = []
-                    if strategy_plugin.exit_rule_factory is not None:
-                        strategy_exit_rules = strategy_plugin.exit_rule_factory(
-                            active_exit_policy,
-                            parameter_values,
-                            fee_rate,
-                        )
-                    exit_rules = merge_exit_rules(common_exit_rules, strategy_exit_rules)
-                    common_exit_rule_names = {rule.name for rule in common_exit_rules}
-                    strategy_exit_rule_names = {rule.name for rule in strategy_exit_rules}
-                    for rule in exit_rules:
-                        strategy_signal_context = (
-                            strategy_plugin.exit_signal_context_builder(event)
-                            if strategy_plugin.exit_signal_context_builder is not None
-                            else {}
-                        )
-                        result = rule.evaluate(
-                            position=position,
-                            candle_ts=int(candle.ts),
-                            market_price=float(candle.close),
-                            signal_context={
-                                "base_signal": raw_signal,
-                                "base_reason": raw_reason,
-                                "entry_signal": entry_signal,
-                                "exit_signal": event.exit_signal or raw_signal,
-                                **strategy_signal_context,
-                            },
-                        )
-                        exit_evaluations.append(
-                            {
-                                "rule": rule.name,
-                                "rule_source": _exit_rule_source(
-                                    rule_name=rule.name,
-                                    common_exit_rule_names=common_exit_rule_names,
-                                    strategy_exit_rule_names=strategy_exit_rule_names,
-                                ),
-                                "triggered": bool(result.should_exit),
-                                "reason": result.reason,
-                                "context": result.context,
-                            }
-                        )
-                        if result.should_exit:
-                            action = "SELL"
-                            exit_rule = rule.name
-                            exit_reason = result.reason
-                            break
+                        exit_rule = rule.name
+                        exit_reason = result.reason
+                        break
         if action == "BUY" and (qty > 1e-12 or pending_buy_qty > 1e-12):
             action = "HOLD"
             blocked = True
@@ -1236,10 +997,10 @@ def _run_decision_event_backtest_impl(
             raise ValueError(f"unsupported_decision_event_final_signal:{event.final_signal}")
         allow_execution_compatibility_fallback = bool(
             policy_decision is None
-            and not sma_policy_unsupported_reason
+            and not policy_unsupported_reason
             and (
-                strategy_plugin.name != "sma_with_filter"
-                or _allows_legacy_sma_event_first_exit_policy(event)
+                strategy_plugin.research_policy_decision_builder is None
+                or allows_legacy_event_first_exit_policy
             )
         )
         execution_plan_bundle = _research_execution_plan_bundle(
@@ -1264,7 +1025,7 @@ def _run_decision_event_backtest_impl(
             exit_filter_suppression_prevented = bool(
                 policy_decision.exit_filter_suppression_prevented
             )
-        elif sma_policy_unsupported_reason:
+        elif policy_unsupported_reason:
             protective_exit_overrode_entry = False
             entry_blocked = False
             exit_filter_suppression_prevented = False
@@ -1281,7 +1042,7 @@ def _run_decision_event_backtest_impl(
                 and sellable_qty > 1e-12
                 and bool(exit_evaluations)
             )
-        decision_payload = _research_decision_payload(
+        decision_payload = support.research_decision_payload(
             dataset=dataset,
             dataset_content_hash=dataset_content_hash,
             parameter_values=parameter_values,
@@ -1345,9 +1106,9 @@ def _run_decision_event_backtest_impl(
                 "exit_intent": dict(event.exit_intent) if event.exit_intent is not None else None,
                 "research_policy_position_terminal_state": policy_position.terminal_state,
                 "research_policy_recomputed_with_simulated_position": policy_decision is not None,
-                "research_policy_unsupported": bool(sma_policy_unsupported_reason),
-                "research_policy_unsupported_reason": sma_policy_unsupported_reason,
-                "research_policy_comparable": not bool(sma_policy_unsupported_reason),
+                "research_policy_unsupported": bool(policy_unsupported_reason),
+                "research_policy_unsupported_reason": policy_unsupported_reason,
+                "research_policy_comparable": not bool(policy_unsupported_reason),
                 **_execution_plan_evidence(execution_plan_bundle),
             }
         )
@@ -1382,7 +1143,7 @@ def _run_decision_event_backtest_impl(
         if retain_decision:
             decisions.append(decision_payload)
         accumulator.update_decision(decision_payload, retained=retain_decision)
-        _trace_decision(run_context, decision_payload)
+        support.trace_decision(run_context, decision_payload)
 
         if action in {"BUY", "SELL"}:
             if submit_plan is None:
@@ -1402,14 +1163,14 @@ def _run_decision_event_backtest_impl(
                 signal=signal,
                 signal_index=index,
                 policy=timing_policy,
-                model_latency_ms=_model_latency_ms(model),
+                model_latency_ms=support.model_latency_ms(model),
             )
             execution_service = ResearchVirtualExecutionService(
                 execution_model=model,
                 fee_rate=fee_rate,
             )
-            timing_fields = _timing_request_fields(signal, reference, timing_policy)
-            depth_fields = _depth_request_fields(
+            timing_fields = support.timing_request_fields(signal, reference, timing_policy)
+            depth_fields = support.depth_request_fields(
                 dataset=dataset,
                 reference=reference,
                 model=model,
@@ -1422,7 +1183,7 @@ def _run_decision_event_backtest_impl(
                 depth_fields=depth_fields,
             )
             if reference.fill_reference_price is None:
-                fill = _failed_fill(
+                fill = support.failed_fill(
                     model=model,
                     signal=signal,
                     reference=reference,
@@ -1454,31 +1215,31 @@ def _run_decision_event_backtest_impl(
                         f"research_typed_execution_service_no_fill:{submit_plan.block_reason or 'none'}"
                     )
                     continue
-            warnings.extend(_execution_reference_warnings(fill))
+            warnings.extend(support.execution_reference_warnings(fill))
             if fill.fill_status == "failed" or fill.avg_fill_price is None or fill.filled_qty <= 0.0:
-                trades.append(_trade_from_fill(fill, cash=cash, asset_qty=qty, pnl=None))
-                _trace_execution(run_context, trades[-1])
+                trades.append(support.trade_from_fill(fill, cash=cash, asset_qty=qty, pnl=None))
+                support.trace_execution(run_context, trades[-1])
             elif side == "BUY":
                 exec_price = float(fill.avg_fill_price)
                 fee = float(fill.fee)
                 received_qty = float(fill.filled_qty)
                 actual_spend = (exec_price * received_qty) + fee
                 buy_slippage = max(0.0, (exec_price - float(fill.reference_price)) * received_qty)
-                pending = _PendingFill(
+                pending = support.PendingFill(
                     fill=fill,
                     trade_index=len(trades),
                     side="BUY",
-                    effective_ts=_fill_effective_ts(fill),
+                    effective_ts=support.fill_effective_ts(fill),
                     qty=received_qty,
                     fee=fee,
                     slippage=buy_slippage,
                     cash_delta=-actual_spend,
                     entry_regime_snapshot=regime_snapshot,
                 )
-                trades.append(_pending_trade_from_fill(fill, cash=cash, asset_qty=qty))
+                trades.append(support.pending_trade_from_fill(fill, cash=cash, asset_qty=qty))
                 trades[-1]["entry_decision_hash"] = decision_payload.get("replay_fingerprint_hash")
-                _trace_execution(run_context, trades[-1])
-                if _fill_applies_to_mark(fill=pending.fill, effective_ts=pending.effective_ts, mark_boundary_ts=mark_boundary_ts):
+                support.trace_execution(run_context, trades[-1])
+                if support.fill_applies_to_mark(fill=pending.fill, effective_ts=pending.effective_ts, mark_boundary_ts=mark_boundary_ts):
                     mark_cash += pending.cash_delta
                     mark_qty += pending.qty
                 pending_fills.append(pending)
@@ -1488,11 +1249,11 @@ def _run_decision_event_backtest_impl(
                 gross = sell_qty * exec_price
                 fee = float(fill.fee)
                 sell_slippage = max(0.0, (float(fill.reference_price) - exec_price) * sell_qty)
-                pending = _PendingFill(
+                pending = support.PendingFill(
                     fill=fill,
                     trade_index=len(trades),
                     side="SELL",
-                    effective_ts=_fill_effective_ts(fill),
+                    effective_ts=support.fill_effective_ts(fill),
                     qty=sell_qty,
                     fee=fee,
                     slippage=sell_slippage,
@@ -1500,9 +1261,9 @@ def _run_decision_event_backtest_impl(
                     entry_regime_snapshot=entry_regime_snapshot,
                     exit_regime_snapshot=regime_snapshot,
                 )
-                trades.append(_pending_trade_from_fill(fill, cash=cash, asset_qty=qty))
+                trades.append(support.pending_trade_from_fill(fill, cash=cash, asset_qty=qty))
                 trades[-1].update(
-                    _closed_trade_diagnostics(
+                    support.closed_trade_diagnostics(
                         entry_ts=entry_ts,
                         exit_ts=int(candle.ts),
                         entry_price=entry_price,
@@ -1516,8 +1277,8 @@ def _run_decision_event_backtest_impl(
                         exit_decision_hash=str(decision_payload.get("replay_fingerprint_hash") or ""),
                     )
                 )
-                _trace_execution(run_context, trades[-1])
-                if _fill_applies_to_mark(fill=pending.fill, effective_ts=pending.effective_ts, mark_boundary_ts=mark_boundary_ts):
+                support.trace_execution(run_context, trades[-1])
+                if support.fill_applies_to_mark(fill=pending.fill, effective_ts=pending.effective_ts, mark_boundary_ts=mark_boundary_ts):
                     mark_cash += pending.cash_delta
                     mark_qty = max(0.0, mark_qty - pending.qty)
                 pending_fills.append(pending)
@@ -1534,7 +1295,7 @@ def _run_decision_event_backtest_impl(
                 entry_slippage,
                 fee_total,
                 slippage_total,
-            ) = _apply_pending_fills(
+            ) = support.apply_pending_fills(
                 pending_fills=pending_fills,
                 trades=trades,
                 boundary_ts=decision_boundary_ts,
@@ -1554,7 +1315,7 @@ def _run_decision_event_backtest_impl(
             )
 
         retain_equity = accumulator.retain_equity_point()
-        peak, max_drawdown = _record_equity_mark(
+        peak, max_drawdown = support.record_equity_mark(
             equity_curve=equity_curve,
             ts=mark_boundary_ts,
             cash=mark_cash,
@@ -1565,7 +1326,7 @@ def _run_decision_event_backtest_impl(
             retain=retain_equity,
         )
         accumulator.update_equity(retained=retain_equity, ts=mark_boundary_ts, asset_qty=mark_qty)
-        _trace_equity_mark(
+        support.trace_equity_mark(
             run_context,
             ts=mark_boundary_ts,
             equity=mark_cash + mark_qty * float(candle.close),
@@ -1590,7 +1351,7 @@ def _run_decision_event_backtest_impl(
         entry_slippage,
         fee_total,
         slippage_total,
-    ) = _apply_pending_fills(
+    ) = support.apply_pending_fills(
         pending_fills=pending_fills,
         trades=trades,
         boundary_ts=last_mark_ts,
@@ -1609,15 +1370,15 @@ def _run_decision_event_backtest_impl(
         closed_pnls=closed_pnls,
     )
 
-    _mark_pending_fills_at_end(pending_fills=pending_fills, trades=trades, final_mark_ts=last_mark_ts)
+    support.mark_pending_fills_at_end(pending_fills=pending_fills, trades=trades, final_mark_ts=last_mark_ts)
     final_equity = cash + qty * float(last.close)
     retain_final_equity = accumulator.retain_equity_point()
     if retain_final_equity:
         equity_curve.append(EquityPoint(ts=last_mark_ts, equity=final_equity, cash=cash, asset_qty=qty))
     accumulator.update_equity(retained=retain_final_equity, ts=last_mark_ts, asset_qty=qty)
-    _trace_equity_mark(run_context, ts=last_mark_ts, equity=final_equity, cash=cash, asset_qty=qty)
+    support.trace_equity_mark(run_context, ts=last_mark_ts, equity=final_equity, cash=cash, asset_qty=qty)
     return_pct = ((final_equity / starting_cash) - 1.0) * 100.0 if starting_cash > 0.0 else 0.0
-    metrics = _metrics(
+    metrics = support.metrics(
         return_pct=return_pct,
         max_drawdown_pct=max_drawdown * 100.0,
         closed_pnls=closed_pnls,
@@ -1625,7 +1386,7 @@ def _run_decision_event_backtest_impl(
         slippage_total=slippage_total,
         parameter_stability_score=parameter_stability_score,
     )
-    position_intervals, closed_trade_records, execution_records, derived_open_cost_basis = _metrics_v2_ledgers_from_trades(
+    position_intervals, closed_trade_records, execution_records, derived_open_cost_basis = support.metrics_v2_ledgers_from_trades(
         trades=trades,
     )
     coverage = (
@@ -1657,8 +1418,8 @@ def _run_decision_event_backtest_impl(
                 sorted(set(metrics_v2.limitation_reasons) | {"bounded_detail_equity_curve_not_retained"})
             ),
         )
-    audit_trace_index = _complete_audit_trace(run_context, status="completed")
-    accumulator.trade_ledger_hash_material = [_trade_hash_payload(trade) for trade in trades]
+    audit_trace_index = support.complete_audit_trace(run_context, status="completed")
+    accumulator.trade_ledger_hash_material = [support.trade_hash_payload(trade) for trade in trades]
     accumulator.equity_curve_hash_material = [
         {
             "ts": int(point.ts),
@@ -1686,7 +1447,7 @@ def _run_decision_event_backtest_impl(
         closed_trades=closed_trade_records,
         resource_usage=resource_usage,
         strategy_diagnostics=strategy_diagnostics,
-        retained_detail_summary=_retained_detail_summary(
+        retained_detail_summary=support.retained_detail_summary(
             accumulator,
             retained_regime_snapshot_count=len(regime_snapshots),
         ),

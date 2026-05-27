@@ -16,8 +16,8 @@ from .execution_service import (
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
-from .core.sma_policy import StrategyDecisionV2
 from .runtime_readiness import compute_runtime_readiness_snapshot
+from .strategy_policy_contract import StrategyDecisionV2
 from .strategy_performance import evaluate_strategy_performance_gate
 from .target_position import (
     TARGET_POLICY_ADOPT_EXISTING_BROKER_POSITION,

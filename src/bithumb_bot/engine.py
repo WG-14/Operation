@@ -36,6 +36,7 @@ from .db_core import (
 )
 from .db_core import record_strategy_decision
 from .decision_envelope import DecisionEnvelope
+from .execution_service import build_execution_decision_summary
 from .runtime_data_access import (
     count_open_orders as _count_open_orders,
     latest_order_identifiers as _latest_order_identifiers,

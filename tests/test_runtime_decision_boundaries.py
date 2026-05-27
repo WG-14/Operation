@@ -1056,5 +1056,5 @@ def test_research_kernel_marks_missing_sma_policy_metadata_non_comparable() -> N
     assert decision["research_policy_unsupported"] is True
     assert decision["research_policy_comparable"] is False
     assert decision["research_policy_unsupported_reason"] == (
-        "sma_with_filter_policy_decision_missing_not_comparable"
+        "research_policy_decision_missing_not_comparable"
     )

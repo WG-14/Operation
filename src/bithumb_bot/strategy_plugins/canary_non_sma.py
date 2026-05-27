@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from bithumb_bot.canonical_decision import canonical_payload_hash
-from bithumb_bot.core.sma_policy import PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.decision_equivalence import sha256_prefixed
 from bithumb_bot.research.strategy_registry import (
     ResearchStrategyPlugin,
@@ -13,6 +12,7 @@ from bithumb_bot.research.strategy_registry import (
 )
 from bithumb_bot.research.strategy_spec import StrategySpec, materialize_strategy_parameters
 from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
+from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
 
 CANARY_NON_SMA_STRATEGY_NAME = "canary_non_sma"

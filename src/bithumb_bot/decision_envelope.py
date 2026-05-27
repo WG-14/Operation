@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .core.sma_policy import StrategyDecisionV2
 from .decision_equivalence import sha256_prefixed
 from .runtime_decision_contract import RuntimeStrategyPolicyHashes
 from .runtime_strategy_decision import RuntimeStrategyDecisionResult
+from .strategy_policy_contract import StrategyDecisionV2
 
 
 def _freeze_value(value: Any) -> object:

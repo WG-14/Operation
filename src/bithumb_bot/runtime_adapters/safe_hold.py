@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bithumb_bot.config import settings
-from bithumb_bot.core.sma_policy import PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.decision_equivalence import sha256_prefixed
 from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
 from bithumb_bot.runtime_strategy_decision import RuntimeStrategyDecisionResult
+from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
 
 SAFE_HOLD_STRATEGY_NAME = "safe_hold"
