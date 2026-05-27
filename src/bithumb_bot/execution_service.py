@@ -426,9 +426,6 @@ def validate_execution_submit_plan_payload(
         content_hash = str(plan.get("content_hash") or "")
         if not content_hash:
             raise ValueError(f"{field_name}_schema_missing_content_hash")
-        expected_hash = execution_submit_plan_payload_hash(plan)
-        if content_hash != expected_hash:
-            raise ValueError(f"{field_name}_schema_content_hash_mismatch")
     side = str(plan.get("side") or "").upper()
     if side not in {"BUY", "SELL", "HOLD", "NONE"}:
         raise ValueError(f"{field_name}_schema_invalid_side:{side or 'missing'}")
@@ -446,6 +443,10 @@ def validate_execution_submit_plan_payload(
     block_reason = str(plan.get("block_reason") or "")
     if not block_reason:
         raise ValueError(f"{field_name}_schema_missing_block_reason")
+    if require_final_payload:
+        expected_hash = execution_submit_plan_payload_hash(plan)
+        if content_hash != expected_hash:
+            raise ValueError(f"{field_name}_schema_content_hash_mismatch")
 
 
 def _log_live_submit_plan_block(
@@ -492,7 +493,7 @@ def _live_submit_plan_schema_valid(
         validate_execution_submit_plan_payload(
             plan,
             field_name=field_name,
-            require_final_payload=True,
+            require_final_payload=_live_real_order_submit_plan_required(),
         )
     except ValueError as exc:
         _log_live_submit_plan_block(
@@ -1992,7 +1993,20 @@ class LiveSignalExecutionService:
             field_name="buy_submit_plan",
         ):
             return None
-        if _execution_engine() == "target_delta":
+        if _execution_engine() == "target_delta" and str(settings.MODE).lower() != "live" and target_plan:
+            plan_side = str(target_plan.get("side") or request.signal).upper()
+            return self.executor(
+                self.broker,
+                plan_side,
+                request.ts,
+                request.market_price,
+                strategy_name=request.strategy_name,
+                decision_id=request.decision_id,
+                decision_reason=request.decision_reason,
+                exit_rule_name=request.exit_rule_name,
+                execution_submit_plan=target_plan,
+            )
+        if _execution_engine() == "target_delta" and str(settings.MODE).lower() == "live":
             if not target_plan:
                 _block_live_submit_plan(
                     reason="target_delta_missing_target_submit_plan",

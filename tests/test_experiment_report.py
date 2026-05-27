@@ -103,7 +103,9 @@ def test_experiment_report_metrics_and_warnings(tmp_path, monkeypatch):
     assert len(summary.time_bucket_rows) >= 1
 
 
-def test_experiment_report_command_writes_report_and_prints_warning(tmp_path, monkeypatch, capsys):
+def test_experiment_report_command_writes_report_and_prints_warning(
+    tmp_path, monkeypatch, managed_runtime_env, capsys
+):
     db_path = str(tmp_path / "experiment-report-cmd.sqlite")
     monkeypatch.setenv("DB_PATH", db_path)
     object.__setattr__(settings, "DB_PATH", db_path)
@@ -163,7 +165,9 @@ def test_experiment_report_command_writes_report_and_prints_warning(tmp_path, mo
     assert "concentrated pnl" in out
     assert "regime_pnl_skew_ratio" in out
 
-    report_path = PATH_MANAGER.report_path("experiment_report")
+    from bithumb_bot.config import PATH_MANAGER as current_path_manager
+
+    report_path = current_path_manager.report_path("experiment_report")
     assert report_path.exists()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["attribution_quality"]["total_trade_count"] == 2
@@ -179,7 +183,7 @@ def test_experiment_report_command_writes_report_and_prints_warning(tmp_path, mo
     )
 
 
-def test_experiment_report_cli_subcommand(tmp_path, monkeypatch, capsys):
+def test_experiment_report_cli_subcommand(tmp_path, monkeypatch, managed_runtime_env, capsys):
     db_path = str(tmp_path / "experiment-report-cli.sqlite")
     monkeypatch.setenv("DB_PATH", db_path)
     object.__setattr__(settings, "DB_PATH", db_path)

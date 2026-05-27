@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 
 import pytest
@@ -8,11 +9,23 @@ from bithumb_bot import runtime_state
 from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.engine import _close_guard_ms, _is_closed_candle, _select_latest_closed_candle, run_loop
+from bithumb_bot.execution_service import ExecutionDecisionSummary, ExecutionSubmitPlan
+from bithumb_bot.run_loop_execution_planner import ExecutionPlanBundle
+from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.strategy.sma import compute_signal
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path):
+    from bithumb_bot.config import settings as current_settings
+    import bithumb_bot.db_core as db_core_module
+    import bithumb_bot.engine as engine_settings_module
+    import bithumb_bot.runtime_state as runtime_state_module
+
+    globals()["settings"] = current_settings
+    db_core_module.settings = current_settings
+    engine_settings_module.settings = current_settings
+    runtime_state_module.settings = current_settings
     old_db_path = settings.DB_PATH
     old_mode = settings.MODE
     old_env_db_path = os.environ.get("DB_PATH")
@@ -35,13 +48,13 @@ def _isolated_db(tmp_path):
 
     yield
 
+    runtime_state.enable_trading()
     object.__setattr__(settings, "DB_PATH", old_db_path)
     object.__setattr__(settings, "MODE", old_mode)
     if old_env_db_path is None:
         os.environ.pop("DB_PATH", None)
     else:
         os.environ["DB_PATH"] = old_env_db_path
-    runtime_state.enable_trading()
 
 
 def _insert_candle(ts_ms: int, close: float) -> None:
@@ -57,6 +70,129 @@ def _insert_candle(ts_ms: int, close: float) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+@dataclass
+class _RuntimeDecisionResult:
+    decision: StrategyDecisionV2
+    base_context: dict[str, object]
+    candle_ts: int
+    market_price: float
+    replay_fingerprint: dict[str, object]
+    boundary: dict[str, object]
+    policy_hashes: None = None
+
+    def as_legacy_dict(self) -> dict[str, object]:
+        return dict(self.base_context)
+
+
+def _runtime_handoff(*, candle_ts: int, price: float, final_signal: str) -> _RuntimeDecisionResult:
+    execution_intent = None
+    if final_signal == "BUY":
+        execution_intent = EntryExecutionIntent(
+            side="BUY",
+            intent="enter",
+            pair=settings.PAIR,
+            requires_execution_sizing=True,
+            budget_fraction_of_cash=1.0,
+            max_budget_krw=float(settings.MAX_ORDER_KRW),
+        )
+    decision = StrategyDecisionV2(
+        strategy_name=str(settings.STRATEGY_NAME),
+        raw_signal=final_signal,
+        raw_reason=f"unit {final_signal.lower()}",
+        entry_signal=final_signal,
+        entry_reason=f"unit {final_signal.lower()}",
+        exit_signal=final_signal,
+        exit_reason=f"unit {final_signal.lower()}",
+        final_signal=final_signal,
+        final_reason=f"unit {final_signal.lower()}",
+        blocked_filters=(),
+        entry_blocked=False,
+        entry_block_reason=None,
+        exit_rule=None,
+        exit_evaluations=(),
+        protective_exit_overrode_entry=False,
+        exit_filter_suppression_prevented=False,
+        position_snapshot=PositionSnapshot(in_position=False, entry_allowed=True, exit_allowed=False),
+        execution_intent=execution_intent,
+        entry_decision=object(),
+        trace={"final_signal": final_signal},
+        policy_hash="sha256:candle-stability-policy",
+        policy_contract_hash="sha256:candle-stability-contract",
+        policy_input_hash="sha256:candle-stability-input",
+        policy_decision_hash="sha256:candle-stability-decision",
+    )
+    return _RuntimeDecisionResult(
+        decision=decision,
+        base_context={
+            "market_price": price,
+            "last_close": price,
+            "position_state": {"normalized_exposure": {"sellable_executable_lot_count": 0}},
+        },
+        candle_ts=candle_ts,
+        market_price=price,
+        replay_fingerprint={"schema_version": 1, "candle_ts": candle_ts},
+        boundary={"decision_boundary_phase": "unit_closed_candle"},
+    )
+
+
+def _buy_execution_plan() -> ExecutionPlanBundle:
+    plan = ExecutionSubmitPlan(
+        side="BUY",
+        source="target_delta",
+        authority="canonical_target_delta_sizing",
+        final_action="ENTER_STRATEGY_POSITION",
+        qty=0.02,
+        notional_krw=2.0,
+        target_exposure_krw=2.0,
+        current_effective_exposure_krw=0.0,
+        delta_krw=2.0,
+        submit_expected=True,
+        pre_submit_proof_status="passed",
+        block_reason="none",
+        idempotency_key="unit-closed-candle-buy",
+    )
+    summary = ExecutionDecisionSummary(
+        raw_signal="BUY",
+        final_signal="BUY",
+        final_action="ENTER_STRATEGY_POSITION",
+        submit_expected=True,
+        pre_submit_proof_status="passed",
+        block_reason="none",
+        strategy_sell_candidate=None,
+        residual_sell_candidate=None,
+        target_exposure_krw=2.0,
+        current_effective_exposure_krw=0.0,
+        tracked_residual_exposure_krw=None,
+        buy_delta_krw=2.0,
+        residual_live_sell_mode="telemetry",
+        residual_buy_sizing_mode="telemetry",
+        residual_submit_plan=None,
+        buy_submit_plan=plan,
+        target_shadow_decision=None,
+        target_submit_plan=None,
+    )
+    return ExecutionPlanBundle(
+        summary=summary,
+        submit_plan=plan,
+        persistence_context={
+            "ts": 0,
+            "last_close": 100.0,
+            "execution_decision": summary.as_dict(),
+            "final_action": "ENTER_STRATEGY_POSITION",
+            "submit_expected": True,
+            "pre_submit_proof_status": "passed",
+            "execution_plan_bundle_present": True,
+            "submit_plan_source": plan.source,
+            "submit_plan_authority": plan.authority,
+            "decision_authority_source": "DecisionEnvelope.strategy_decision",
+            "decision_envelope_present": True,
+            "persistence_context_authoritative": 0,
+        },
+        readiness_payload={},
+        target_policy_metadata={},
+    )
 
 
 def test_last_processed_candle_ts_persists_to_bot_health() -> None:
@@ -239,13 +375,11 @@ def test_run_loop_processes_latest_closed_candle_and_persists_it(monkeypatch, ca
     monkeypatch.setattr("bithumb_bot.engine.parse_interval_sec", lambda _: 60)
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda _conn, _short, _long, *, through_ts_ms=None: {
-            "ts": through_ts_ms,
-            "last_close": 100.0,
-            "curr_s": 1.0,
-            "curr_l": 1.0,
-            "signal": "HOLD",
-        },
+        lambda _conn, _short, _long, *, through_ts_ms=None, strategy_name=None: _runtime_handoff(
+            candle_ts=through_ts_ms,
+            price=100.0,
+            final_signal="HOLD",
+        ),
     )
 
     times = iter([64.0, 65.0, 65.0])
@@ -280,13 +414,7 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
 
     def _compute_signal(_conn, _short, _long, *, through_ts_ms=None, strategy_name=None):
         assert through_ts_ms == closed_ts
-        return {
-            "ts": through_ts_ms,
-            "last_close": 100.0,
-            "curr_s": 1.0,
-            "curr_l": 1.0,
-            "signal": "BUY",
-        }
+        return _runtime_handoff(candle_ts=through_ts_ms, price=100.0, final_signal="BUY")
 
     monkeypatch.setattr("bithumb_bot.engine.compute_signal", _compute_signal)
     monkeypatch.setattr(
@@ -320,6 +448,16 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
             raise KeyboardInterrupt
 
     monkeypatch.setattr("bithumb_bot.engine.time.sleep", _sleep)
+    plan_bundle = _buy_execution_plan()
+
+    class _Planner:
+        def plan_envelope(self, *_args, **_kwargs):
+            return plan_bundle
+
+        def plan_runtime_strategy_results(self, *_args, **_kwargs):
+            return plan_bundle
+
+    monkeypatch.setattr("bithumb_bot.engine.run_loop_execution_planner", lambda **_kwargs: _Planner())
 
     with caplog.at_level("INFO", logger="bithumb_bot.run"):
         run_loop(5, 20)

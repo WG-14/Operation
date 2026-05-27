@@ -41,6 +41,7 @@ from .runtime_sma_context import (
 )
 from .strategy.base import PositionContext, StrategyDecision
 from .strategy.exit_rules import ExitPolicyConfig
+from .strategy.sma_policy_strategy import SmaWithFilterStrategy
 
 
 @dataclass(frozen=True)
@@ -463,6 +464,31 @@ def _build_sma_with_filter_runtime_decision_from_normalized_db_readonly_impl(
 
     if int(strategy.short_n) >= int(strategy.long_n):
         raise ValueError("short는 long보다 작아야 해. 예: short=7 long=30")
+    strategy = SmaWithFilterStrategy(
+        short_n=int(strategy.short_n),
+        long_n=int(strategy.long_n),
+        pair=str(strategy.pair),
+        interval=str(strategy.interval),
+        min_gap_ratio=float(strategy.min_gap_ratio),
+        volatility_window=int(strategy.volatility_window),
+        min_volatility_ratio=float(strategy.min_volatility_ratio),
+        overextended_lookback=int(strategy.overextended_lookback),
+        overextended_max_return_ratio=float(strategy.overextended_max_return_ratio),
+        slippage_bps=float(strategy.slippage_bps),
+        live_fee_rate_estimate=float(strategy.live_fee_rate_estimate),
+        entry_edge_buffer_ratio=float(strategy.entry_edge_buffer_ratio),
+        cost_edge_enabled=bool(strategy.cost_edge_enabled),
+        cost_edge_min_ratio=float(strategy.cost_edge_min_ratio),
+        market_regime_enabled=bool(strategy.market_regime_enabled),
+        exit_rule_names=list(strategy.exit_rule_names),
+        exit_stop_loss_ratio=float(strategy.exit_stop_loss_ratio),
+        exit_max_holding_min=int(strategy.exit_max_holding_min),
+        exit_min_take_profit_ratio=float(strategy.exit_min_take_profit_ratio),
+        exit_small_loss_tolerance_ratio=float(strategy.exit_small_loss_tolerance_ratio),
+        buy_fraction=float(strategy.buy_fraction),
+        max_order_krw=float(strategy.max_order_krw),
+        candidate_regime_policy=strategy.candidate_regime_policy,
+    )
 
     min_rows = max(
         int(strategy.long_n) + 2,

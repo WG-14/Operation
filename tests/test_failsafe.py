@@ -26,11 +26,29 @@ from bithumb_bot.execution_service import (
 )
 from bithumb_bot.marketdata import _get_with_retry
 from bithumb_bot.public_api_orderbook import BestQuote
+from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.target_position import TargetPositionState
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path):
+    from bithumb_bot.config import settings as current_settings
+    import bithumb_bot.db_core as db_core_module
+    import bithumb_bot.engine as engine_settings_module
+    import bithumb_bot.execution_service as execution_service_module
+    import bithumb_bot.operator_commands as operator_commands_module
+    import bithumb_bot.run_loop_execution_planner as run_loop_execution_planner_module
+    import bithumb_bot.runtime_state as runtime_state_module
+    import bithumb_bot.broker.balance_source as balance_source_module
+
+    globals()["settings"] = current_settings
+    balance_source_module.settings = current_settings
+    db_core_module.settings = current_settings
+    engine_settings_module.settings = current_settings
+    execution_service_module.settings = current_settings
+    operator_commands_module.settings = current_settings
+    run_loop_execution_planner_module.settings = current_settings
+    runtime_state_module.settings = current_settings
     old_settings = {
         "DB_PATH": settings.DB_PATH,
         "MODE": settings.MODE,
@@ -66,6 +84,11 @@ def _isolated_db(tmp_path):
 
     yield
 
+    runtime_state.enable_trading()
+    runtime_state.set_error_count(0)
+    runtime_state.set_last_candle_age_sec(None)
+    runtime_state.set_startup_gate_reason(None)
+
     for key, value in old_settings.items():
         object.__setattr__(settings, key, value)
 
@@ -73,11 +96,6 @@ def _isolated_db(tmp_path):
         os.environ.pop("DB_PATH", None)
     else:
         os.environ["DB_PATH"] = old_env_db_path
-
-    runtime_state.enable_trading()
-    runtime_state.set_error_count(0)
-    runtime_state.set_last_candle_age_sec(None)
-    runtime_state.set_startup_gate_reason(None)
 
 
 def _set_tmp_db(tmp_path, monkeypatch: pytest.MonkeyPatch | None = None):
@@ -348,6 +366,86 @@ class _Rows:
         return [self._row]
 
 
+class _RuntimeDecisionResult:
+    def __init__(
+        self,
+        *,
+        signal: str = "BUY",
+        candle_ts: int = 9000,
+        price: float = 100.0,
+        reason: str | None = None,
+        base_context: dict[str, object] | None = None,
+    ):
+        execution_intent = None
+        if signal == "BUY":
+            execution_intent = EntryExecutionIntent(
+                side="BUY",
+                intent="enter",
+                pair=settings.PAIR,
+                requires_execution_sizing=True,
+                budget_fraction_of_cash=1.0,
+                max_budget_krw=float(settings.MAX_ORDER_KRW),
+            )
+        self.decision = StrategyDecisionV2(
+            strategy_name=str(settings.STRATEGY_NAME),
+            raw_signal=signal,
+            raw_reason=reason or f"unit {signal.lower()}",
+            entry_signal=signal,
+            entry_reason=reason or f"unit {signal.lower()}",
+            exit_signal=signal,
+            exit_reason=reason or f"unit {signal.lower()}",
+            final_signal=signal,
+            final_reason=reason or f"unit {signal.lower()}",
+            blocked_filters=(),
+            entry_blocked=False,
+            entry_block_reason=None,
+            exit_rule=None,
+            exit_evaluations=(),
+            protective_exit_overrode_entry=False,
+            exit_filter_suppression_prevented=False,
+            position_snapshot=PositionSnapshot(in_position=False, entry_allowed=True, exit_allowed=False),
+            execution_intent=execution_intent,
+            entry_decision=object(),
+            trace={"final_signal": signal},
+            policy_hash="sha256:failsafe-policy",
+            policy_contract_hash="sha256:failsafe-contract",
+            policy_input_hash="sha256:failsafe-input",
+            policy_decision_hash="sha256:failsafe-decision",
+        )
+        self.base_context = {
+            "market_price": price,
+            "last_close": price,
+            "position_state": {"normalized_exposure": {"sellable_executable_lot_count": 0}},
+        }
+        if base_context is not None:
+            self.base_context.update(base_context)
+        self.candle_ts = candle_ts
+        self.market_price = price
+        self.replay_fingerprint = {"schema_version": 1, "candle_ts": candle_ts}
+        self.boundary = {"decision_boundary_phase": "unit_failsafe"}
+        self.policy_hashes = None
+
+    def as_legacy_dict(self) -> dict[str, object]:
+        return dict(self.base_context)
+
+
+def _runtime_result_from_payload(payload: dict[str, object]) -> _RuntimeDecisionResult:
+    signal = str(payload.get("signal") or payload.get("final_signal") or "HOLD").upper()
+    candle_ts = int(payload.get("ts") or 9000)
+    price = float(payload.get("last_close") or payload.get("market_price") or 100.0)
+    reason = str(payload.get("reason") or f"unit {signal.lower()}")
+    base_context = dict(payload)
+    base_context["market_price"] = price
+    base_context["last_close"] = price
+    return _RuntimeDecisionResult(
+        signal=signal,
+        candle_ts=candle_ts,
+        price=price,
+        reason=reason,
+        base_context=base_context,
+    )
+
+
 class _DummyBroker:
     def get_open_orders(self):
         return []
@@ -415,13 +513,7 @@ def _prepare_run_loop(
     )
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda conn, s, l: {
-            "ts": 9000,
-            "last_close": 100.0,
-            "curr_s": 1.0,
-            "curr_l": 0.5,
-            "signal": "BUY",
-        },
+        lambda conn, s, l, **_kwargs: _RuntimeDecisionResult(signal="BUY", candle_ts=9000),
     )
 
     loop_conn = _LoopConn(
@@ -430,6 +522,7 @@ def _prepare_run_loop(
         target_state=target_state,
     )
     monkeypatch.setattr("bithumb_bot.engine.ensure_db", lambda: loop_conn)
+    monkeypatch.setattr("bithumb_bot.runtime_data_access.ensure_db", lambda: loop_conn)
     monkeypatch.setattr("bithumb_bot.flatten.ensure_db", lambda: loop_conn)
     monkeypatch.setattr("bithumb_bot.flatten.init_portfolio", lambda _conn: None)
     monkeypatch.setattr("bithumb_bot.engine.BithumbBroker", lambda: _DummyBroker())
@@ -731,24 +824,26 @@ def test_run_loop_live_harmless_dust_sell_suppresses_before_live_execution(monke
 
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda conn, s, l: {
-            "ts": 1000,
-            "last_close": 100_000_000.0,
-            "curr_s": 1.0,
-            "curr_l": 0.5,
-            "signal": "SELL",
-            "position_state": {
-                "normalized_exposure": {
-                    "raw_total_asset_qty": 0.00009193,
-                    "open_exposure_qty": 0.0,
-                    "dust_tracking_qty": 0.00009193,
-                    "sellable_executable_qty": 0.0,
-                    "sellable_executable_lot_count": 0,
-                    "exit_allowed": False,
-                    "exit_block_reason": "dust_only_remainder",
-                }
-            },
-        },
+        lambda conn, s, l, **_kwargs: _runtime_result_from_payload(
+            {
+                "ts": 1000,
+                "last_close": 100_000_000.0,
+                "curr_s": 1.0,
+                "curr_l": 0.5,
+                "signal": "SELL",
+                "position_state": {
+                    "normalized_exposure": {
+                        "raw_total_asset_qty": 0.00009193,
+                        "open_exposure_qty": 0.0,
+                        "dust_tracking_qty": 0.00009193,
+                        "sellable_executable_qty": 0.0,
+                        "sellable_executable_lot_count": 0,
+                        "exit_allowed": False,
+                        "exit_block_reason": "dust_only_remainder",
+                    }
+                },
+            }
+        ),
     )
 
     suppression_calls: list[dict[str, object]] = []
@@ -810,24 +905,26 @@ def test_run_loop_live_sell_does_not_presuppress_when_canonical_sell_authority_i
 
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda conn, s, l: {
-            "ts": 1000,
-            "last_close": 100_000_000.0,
-            "curr_s": 1.0,
-            "curr_l": 0.5,
-            "signal": "SELL",
-            "position_state": {
-                "normalized_exposure": {
-                    "raw_total_asset_qty": 0.00049193,
-                    "open_exposure_qty": 0.0004,
-                    "dust_tracking_qty": 0.00009193,
-                    "sellable_executable_qty": 0.0004,
-                    "sellable_executable_lot_count": 1,
-                    "exit_allowed": True,
-                    "exit_block_reason": "none",
-                }
-            },
-        },
+        lambda conn, s, l, **_kwargs: _runtime_result_from_payload(
+            {
+                "ts": 1000,
+                "last_close": 100_000_000.0,
+                "curr_s": 1.0,
+                "curr_l": 0.5,
+                "signal": "SELL",
+                "position_state": {
+                    "normalized_exposure": {
+                        "raw_total_asset_qty": 0.00049193,
+                        "open_exposure_qty": 0.0004,
+                        "dust_tracking_qty": 0.00009193,
+                        "sellable_executable_qty": 0.0004,
+                        "sellable_executable_lot_count": 1,
+                        "exit_allowed": True,
+                        "exit_block_reason": "none",
+                    }
+                },
+            }
+        ),
     )
 
     suppression_calls: list[dict[str, object]] = []
@@ -1249,12 +1346,23 @@ def test_target_delta_live_service_uses_target_plan_without_residual_mode() -> N
         executor=_standard_pipeline_executor,
         harmless_dust_recorder=lambda **_k: False,
     )
+    execution_decision = decision.as_dict()
+    target_submit_plan = execution_decision["target_submit_plan"]
+    assert isinstance(target_submit_plan, dict)
+    target_submit_plan.update(
+        {
+            "portfolio_target_authoritative": True,
+            "portfolio_target_hash": "sha256:unit-portfolio-target",
+            "allocation_decision_hash": "sha256:unit-allocation",
+            "strategy_contribution_hash": "sha256:unit-contribution",
+        }
+    )
     trade = service.execute(
         SignalExecutionRequest(
             signal="SELL",
             ts=123,
             market_price=115_000_000.0,
-            decision_context={"execution_decision": decision.as_dict()},
+            decision_context={"execution_decision": execution_decision},
         )
     )
 
@@ -1960,18 +2068,20 @@ def test_run_loop_target_delta_persisted_target_state_reaches_live_execution(
     monkeypatch.setattr("bithumb_bot.engine.evaluate_startup_safety_gate", lambda: None)
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda _conn, _short, _long, **_kwargs: {
-            "ts": 9000,
-            "last_close": 100_000_000.0,
-            "curr_s": 1.0,
-            "curr_l": 1.0,
-            "signal": "HOLD",
-            "raw_signal": "HOLD",
-            "reason": case_id,
-        },
+        lambda _conn, _short, _long, **_kwargs: _runtime_result_from_payload(
+            {
+                "ts": 9000,
+                "last_close": 100_000_000.0,
+                "curr_s": 1.0,
+                "curr_l": 1.0,
+                "signal": "HOLD",
+                "raw_signal": "HOLD",
+                "reason": case_id,
+            }
+        ),
     )
     monkeypatch.setattr(
-        "bithumb_bot.engine.compute_runtime_readiness_snapshot",
+        "bithumb_bot.runtime_service_factories.compute_runtime_readiness_snapshot",
         lambda _conn: SimpleNamespace(
             as_dict=lambda: _target_delta_readiness(
                 broker_qty=broker_qty,
@@ -2058,18 +2168,20 @@ def test_run_loop_target_delta_missing_target_holding_btc_adopts_without_closeou
     monkeypatch.setattr("bithumb_bot.engine.evaluate_startup_safety_gate", lambda: None)
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda _conn, _short, _long, **_kwargs: {
-            "ts": 9000,
-            "last_close": 114_120_000.0,
-            "curr_s": 1.0,
-            "curr_l": 1.0,
-            "signal": "HOLD",
-            "raw_signal": "HOLD",
-            "reason": "regression missing target must not close broker btc",
-        },
+        lambda _conn, _short, _long, **_kwargs: _runtime_result_from_payload(
+            {
+                "ts": 9000,
+                "last_close": 114_120_000.0,
+                "curr_s": 1.0,
+                "curr_l": 1.0,
+                "signal": "HOLD",
+                "raw_signal": "HOLD",
+                "reason": "regression missing target must not close broker btc",
+            }
+        ),
     )
     monkeypatch.setattr(
-        "bithumb_bot.engine.compute_runtime_readiness_snapshot",
+        "bithumb_bot.runtime_service_factories.compute_runtime_readiness_snapshot",
         lambda _conn: SimpleNamespace(as_dict=lambda: _target_delta_readiness(broker_qty=0.0004998)),
     )
 
@@ -2128,18 +2240,20 @@ def test_run_loop_target_delta_adopted_target_strategy_sell_submits_delta_sell(m
     monkeypatch.setattr("bithumb_bot.engine.evaluate_startup_safety_gate", lambda: None)
     monkeypatch.setattr(
         "bithumb_bot.engine.compute_signal",
-        lambda _conn, _short, _long, **_kwargs: {
-            "ts": 9000,
-            "last_close": 100_000_000.0,
-            "curr_s": 0.5,
-            "curr_l": 1.0,
-            "signal": "SELL",
-            "raw_signal": "SELL",
-            "reason": "strategy sell after adoption",
-        },
+        lambda _conn, _short, _long, **_kwargs: _runtime_result_from_payload(
+            {
+                "ts": 9000,
+                "last_close": 100_000_000.0,
+                "curr_s": 0.5,
+                "curr_l": 1.0,
+                "signal": "SELL",
+                "raw_signal": "SELL",
+                "reason": "strategy sell after adoption",
+            }
+        ),
     )
     monkeypatch.setattr(
-        "bithumb_bot.engine.compute_runtime_readiness_snapshot",
+        "bithumb_bot.runtime_service_factories.compute_runtime_readiness_snapshot",
         lambda _conn: SimpleNamespace(as_dict=lambda: _target_delta_readiness(broker_qty=0.0004998)),
     )
     executor_calls: list[dict[str, object]] = []

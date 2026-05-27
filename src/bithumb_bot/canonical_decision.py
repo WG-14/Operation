@@ -947,7 +947,17 @@ def export_runtime_replay_decisions(
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for through_ts_ms in through_ts_list:
-        if hasattr(strategy, "decide_runtime_snapshot"):
+        if str(getattr(strategy, "name", "") or "").strip().lower() == "sma_with_filter":
+            from .runtime_sma_snapshot import decide_sma_with_filter_snapshot_from_db
+
+            decision = decide_sma_with_filter_snapshot_from_db(
+                conn,
+                strategy,
+                through_ts_ms=int(through_ts_ms),
+            )
+            execution_plan_bundle = None
+            runtime_replay_planning_error = ""
+        elif hasattr(strategy, "decide_runtime_snapshot"):
             runtime_result = strategy.decide_runtime_snapshot(
                 conn,
                 through_ts_ms=int(through_ts_ms),

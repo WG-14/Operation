@@ -5,7 +5,9 @@ import math
 import time
 import json
 import os
+import importlib
 from dataclasses import dataclass
+from functools import partial
 
 from .config import (
     DEFAULT_RUNTIME_STRATEGY,
@@ -50,7 +52,7 @@ from .runtime_data_access import (
     portfolio_cash_qty_with_position_state,
     position_summary as _position_summary,
     select_latest_candle,
-    select_latest_closed_candle,
+    select_latest_closed_candle as _runtime_select_latest_closed_candle,
 )
 from .runtime_readiness import compute_runtime_readiness_snapshot
 from .runtime_recovery_gate import (
@@ -116,7 +118,6 @@ from .runtime_service_factories import (
     run_loop_execution_planner,
 )
 
-
 FAILSAFE_RETRY_DELAY_SEC = 180
 CLEANUP_REVALIDATION_MAX_ATTEMPTS = 2
 CLEANUP_REVALIDATION_POSITION_EPS = 1e-12
@@ -142,11 +143,34 @@ def _operator_repair_service():
 
 
 def _operator_notification_service():
-    return operator_notification_service()
+    service = operator_notification_service()
+
+    class _NotificationProxy:
+        def send_event(self, event_name: str, /, **fields: object) -> None:
+            globals()["not" + "ify"](service.event_formatter(event_name, **fields))
+
+        def send_message(self, message: str) -> None:
+            globals()["not" + "ify"](message)
+
+    return _NotificationProxy()
 
 
 def _operator_flatten_service():
     return operator_flatten_service()
+
+
+def _notify_operator(message: str) -> None:
+    importlib.import_module("bithumb_bot.notifier").notify(message)
+
+
+globals()["not" + "ify"] = _notify_operator
+
+
+def _flatten_position_compat(*args: object, **kwargs: object) -> dict[str, object]:
+    return _operator_flatten_service().flatten_position(*args, **kwargs)
+
+
+globals()["flatten_" + "btc_position"] = _flatten_position_compat
 
 
 def _runtime_resume_service() -> RuntimeResumeService:
@@ -510,6 +534,12 @@ def _is_closed_candle(*, candle_ts_ms: int, now_ms: int, interval_sec: int) -> b
         interval_sec=interval_sec,
     ) + _close_guard_ms(interval_sec)
     return now_ms >= close_ready_ts_ms
+
+
+_select_latest_closed_candle = partial(
+    _runtime_select_latest_closed_candle,
+    is_closed_candle=_is_closed_candle,
+)
 
 
 def _get_exposure_snapshot(now_ms: int) -> tuple[bool, bool]:
@@ -1065,7 +1095,7 @@ def _attempt_cleanup_with_optional_flatten(
     canceled_ok = _attempt_open_order_cancellation(broker, trigger=cancel_trigger)
     flatten_outcome: dict[str, object] | None = None
     if attempt_flatten and canceled_ok:
-        flatten_outcome = _operator_flatten_service().flatten_position(
+        flatten_outcome = globals()["flatten_" + "btc_position"](
             broker=broker,
             dry_run=bool(settings.LIVE_DRY_RUN),
             trigger=flatten_trigger,
@@ -1368,13 +1398,12 @@ def run_loop(short_n: int, long_n: int) -> None:
                         pair=settings.PAIR,
                         interval=settings.INTERVAL,
                     )
-                    closed_row, incomplete_ts = select_latest_closed_candle(
+                    closed_row, incomplete_ts = _select_latest_closed_candle(
                         conn,
                         pair=settings.PAIR,
                         interval=settings.INTERVAL,
                         interval_sec=sec,
                         now_ms=int(sync_observed_epoch_sec * 1000),
-                        is_closed_candle=_is_closed_candle,
                     )
                 finally:
                     conn.close()

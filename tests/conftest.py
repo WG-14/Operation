@@ -7,16 +7,49 @@ from pathlib import Path
 
 import pytest
 
+import bithumb_bot.config as _config_module
 from bithumb_bot.config import settings
-from bithumb_bot.paths import PathManager
+from bithumb_bot.paths import PathConfig, PathManager
 
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SRC = _ROOT / "src"
+def _path_manager_for_runtime_root(runtime_root: Path) -> PathManager:
+    return PathManager(
+        project_root=_ROOT.resolve(),
+        config=PathConfig(
+            mode="paper",
+            env_root=runtime_root / "env",
+            run_root=runtime_root / "run",
+            data_root=runtime_root / "data",
+            log_root=runtime_root / "logs",
+            backup_root=runtime_root / "backup",
+            archive_root=runtime_root / "archive",
+        ),
+    )
+
+
+_BASE_RUNTIME_ROOT = Path("/tmp/bithumb-bot-pytest-runtime").resolve()
+_BASE_PATH_MANAGER = _path_manager_for_runtime_root(_BASE_RUNTIME_ROOT)
 if _SRC.is_dir():
     src_path = str(_SRC)
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
+
+
+def _sync_config_singletons(path_manager=None) -> None:
+    manager = _BASE_PATH_MANAGER if path_manager is None else path_manager
+    _config_module.settings = settings
+    _config_module.PATH_MANAGER = manager
+    for module_name, module in tuple(sys.modules.items()):
+        if (
+            module_name.startswith("bithumb_bot")
+            and getattr(module, "settings", None) is not settings
+            and hasattr(module, "settings")
+        ):
+            setattr(module, "settings", settings)
+        if getattr(module, "PATH_MANAGER", None) is not manager and hasattr(module, "PATH_MANAGER"):
+            setattr(module, "PATH_MANAGER", manager)
 
 
 try:
@@ -99,6 +132,8 @@ def managed_runtime_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
     manager = PathManager.from_env(project_root=project_root)
     db_path = manager.primary_db_path()
     monkeypatch.setenv("DB_PATH", str(db_path))
+    object.__setattr__(settings, "DB_PATH", str(db_path))
+    _sync_config_singletons(manager)
 
     return {
         "project_root": str(project_root),
@@ -127,7 +162,7 @@ def relaxed_test_order_rules() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _restore_settings_state():
+def _restore_global_settings_state(tmp_path: Path):
     """Keep direct settings mutations from leaking across test modules."""
     from bithumb_bot.broker import order_rules as _order_rules
 
@@ -172,11 +207,16 @@ def _restore_settings_state():
         "BUY_PRICE_NONE_MARKET_TO_PRICE_ALIAS_ENABLED",
         "PAIR",
     ]
+    test_path_manager = _path_manager_for_runtime_root((tmp_path / "runtime-default").resolve())
+    _sync_config_singletons(test_path_manager)
+    object.__setattr__(settings, "DB_PATH", str(test_path_manager.primary_db_path()))
     original = {key: getattr(settings, key) for key in keys if hasattr(settings, key)}
     _order_rules._cached_rules.clear()
     try:
         yield
     finally:
+        _sync_config_singletons(test_path_manager)
         for key, value in original.items():
             object.__setattr__(settings, key, value)
+        _sync_config_singletons(test_path_manager)
         _order_rules._cached_rules.clear()

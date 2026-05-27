@@ -16,6 +16,15 @@ FORBIDDEN_RESULT_KEY_PARTS = ("pnl", "drawdown", "fee_drag", "profit", "loss")
 
 @pytest.fixture
 def configured_db(tmp_path, monkeypatch):
+    from bithumb_bot.config import settings as current_settings
+    import bithumb_bot.db_core as db_core_module
+    import bithumb_bot.operator_commands as operator_commands_module
+    import bithumb_bot.strategy_config as strategy_config_module
+
+    globals()["settings"] = current_settings
+    db_core_module.settings = current_settings
+    operator_commands_module.settings = current_settings
+    strategy_config_module.settings = current_settings
     original = {
         "DB_PATH": settings.DB_PATH,
         "MODE": settings.MODE,
@@ -50,7 +59,9 @@ def configured_db(tmp_path, monkeypatch):
         yield db_path
     finally:
         for name, value in original.items():
-            object.__setattr__(settings, name, value)
+            if name != "MODE":
+                object.__setattr__(settings, name, value)
+        object.__setattr__(settings, "MODE", "paper")
 
 
 def _insert_candles(closes: list[float]) -> None:
@@ -147,9 +158,10 @@ def test_strategy_sweep_cli_json_returns_deterministic_attribution_rows(
 
 
 def test_strategy_sweep_cli_json_stdout_is_parseable_when_live_contract_logs(
-    configured_db, capsys
+    configured_db, monkeypatch, capsys
 ) -> None:
     _insert_candles([10.0, 10.0, 10.0, 10.0, 11.0])
+    monkeypatch.setenv("MODE", "live")
     object.__setattr__(settings, "MODE", "live")
     configure_runtime_logging()
 
@@ -320,6 +332,7 @@ def test_strategy_sweep_cli_live_requires_execution_boundary(
         called = True
 
     object.__setattr__(settings, "MODE", "live")
+    monkeypatch.setenv("MODE", "live")
     monkeypatch.setattr("bithumb_bot.operator_commands.cmd_strategy_sweep", fail_if_called)
 
     with pytest.raises(SystemExit):
