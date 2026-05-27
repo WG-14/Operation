@@ -27,6 +27,7 @@ from .runtime_strategy_decision import (
     compute_strategy_decision_after_normalization,
     compute_strategy_decision_snapshot,
     is_runtime_strategy_decision_result,
+    legacy_db_strategy_fallback_allowed,
     normalize_position_state_before_strategy_decision,
     normalize_position_state_for_runtime_decision,
     promotion_grade_typed_runtime_decision_required,
@@ -250,6 +251,10 @@ def _legacy_context_planning_allowed_for_run_loop(
         signal_handoff_fn=signal_handoff_fn,
         runtime_handoff_fn=compute_signal_runtime_handoff,
     )
+
+
+def _legacy_db_strategy_fallback_allowed(*, selected_strategy_name: str) -> bool:
+    return legacy_db_strategy_fallback_allowed(selected_strategy_name=selected_strategy_name)
 
 
 READINESS_CONTEXT_KEYS = (
