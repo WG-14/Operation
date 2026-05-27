@@ -16,6 +16,13 @@ from .execution_service import (
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
+from .portfolio_allocation import (
+    PortfolioAllocationInput,
+    PortfolioAllocator,
+    PortfolioAllocatorConfig,
+    SignalAggregator,
+)
+from .strategy_preference import strategy_decision_to_preference
 from .runtime_readiness import compute_runtime_readiness_snapshot
 from .strategy_policy_contract import StrategyDecisionV2
 from .strategy_performance import evaluate_strategy_performance_gate
@@ -187,6 +194,40 @@ class ExecutionAuthorityEnvelope:
             target=self.target,
             observability_context=self.observability_context,
         )
+
+
+def _allocator_target_exposure_krw() -> float:
+    explicit = getattr(settings, "TARGET_EXPOSURE_KRW", None)
+    if explicit is not None:
+        try:
+            return max(0.0, float(explicit))
+        except (TypeError, ValueError):
+            pass
+    return max(0.0, float(getattr(settings, "MAX_ORDER_KRW", 0.0) or 0.0))
+
+
+def _allocation_context_fields(decision) -> dict[str, object]:
+    target = decision.target_for_pair(str(settings.PAIR))
+    target_payload = None if target is None else target.as_dict()
+    return {
+        "portfolio_target_present": target is not None,
+        "portfolio_target_authoritative": False if target is None else bool(target.authoritative),
+        "portfolio_target_hash": "" if target is None else target.content_hash(),
+        "allocation_decision_hash": decision.content_hash(),
+        "allocator_config_hash": decision.allocator_config_hash,
+        "strategy_contribution_hash": decision.strategy_contribution_hash,
+        "allocator_policy": (
+            ""
+            if target is None
+            else f"{target.allocator_policy_name}:{target.allocator_policy_version}"
+        ),
+        "allocator_reason": decision.reason,
+        "allocation_conflict_count": int(decision.conflict_resolution.get("conflict_count") or 0),
+        "allocation_primary_block_reason": decision.primary_block_reason,
+        "allocation_contributions": [item.as_dict() for item in decision.contributions],
+        "portfolio_target": target_payload,
+        "portfolio_allocation_decision": decision.as_dict(),
+    }
 
 
 def run_loop_uses_target_delta() -> bool:
@@ -421,11 +462,36 @@ class ExecutionPlanner:
                 conn,
                 readiness_payload=readiness_payload,
                 reference_price=reference_price,
-                raw_signal=planning_input.raw_signal,
-                updated_ts=int(updated_ts),
-            )
+            raw_signal=planning_input.final_signal,
+            updated_ts=int(updated_ts),
+        )
             previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
             target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
+            allocation_config = PortfolioAllocatorConfig(
+                target_exposure_krw=_allocator_target_exposure_krw(),
+            )
+            strategy_preference = strategy_decision_to_preference(
+                planning_input.strategy_decision,
+                pair=str(settings.PAIR),
+                desired_exposure_krw=_allocator_target_exposure_krw(),
+            )
+            preference_set = SignalAggregator().aggregate((strategy_preference,))
+            allocation_input = PortfolioAllocationInput(
+                preference_set=preference_set,
+                allocator_config=allocation_config,
+                previous_target_exposure_krw=(
+                    None
+                    if previous_target_exposure_krw is None
+                    else float(previous_target_exposure_krw)
+                ),
+                reference_price=(
+                    None if reference_price is None else float(reference_price)
+                ),
+            )
+            allocation_decision = PortfolioAllocator(allocation_config).allocate(allocation_input)
+            portfolio_target = allocation_decision.target_for_pair(str(settings.PAIR))
+            allocation_context = _allocation_context_fields(allocation_decision)
+            context.update(allocation_context)
             readiness_payload = {**readiness_payload, **target_policy_metadata}
             authority = ExecutionAuthorityEnvelope(
                 planning_input=planning_input,
@@ -439,6 +505,11 @@ class ExecutionPlanner:
                         if previous_target_exposure_krw is None
                         else float(previous_target_exposure_krw)
                     ),
+                    portfolio_target=portfolio_target,
+                    portfolio_target_hash="" if portfolio_target is None else portfolio_target.content_hash(),
+                    allocation_decision_hash=allocation_decision.content_hash(),
+                    allocator_config_hash=allocation_decision.allocator_config_hash,
+                    strategy_contribution_hash=allocation_decision.strategy_contribution_hash,
                 ),
                 target_policy_metadata=target_policy_metadata,
                 performance_gate_result=strategy_performance_gate,

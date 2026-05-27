@@ -87,6 +87,15 @@ def _valid_target_submit_plan() -> dict[str, object]:
         "pre_submit_proof_status": "passed",
         "block_reason": "none",
         "idempotency_key": "target-plan-key",
+        "portfolio_target_authoritative": True,
+        "portfolio_target_hash": "sha256:portfolio-target",
+        "allocation_decision_hash": "sha256:allocation-decision",
+        "allocator_config_hash": "sha256:allocator-config",
+        "strategy_contribution_hash": "sha256:strategy-contribution",
+        "allocator_policy": "deterministic_priority_target_v1:1",
+        "allocator_reason": "buy_target_from_allocator",
+        "allocation_conflict_count": 0,
+        "allocation_primary_block_reason": "none",
     }
 
 
@@ -127,6 +136,21 @@ def _valid_buy_submit_plan() -> dict[str, object]:
 
 
 def _typed_plan(payload: dict[str, object]) -> ExecutionSubmitPlan:
+    required = {
+        "side",
+        "source",
+        "authority",
+        "final_action",
+        "qty",
+        "notional_krw",
+        "target_exposure_krw",
+        "current_effective_exposure_krw",
+        "delta_krw",
+        "submit_expected",
+        "pre_submit_proof_status",
+        "block_reason",
+        "idempotency_key",
+    }
     return ExecutionSubmitPlan(
         side=str(payload["side"]),
         source=str(payload["source"]),
@@ -141,6 +165,7 @@ def _typed_plan(payload: dict[str, object]) -> ExecutionSubmitPlan:
         pre_submit_proof_status=str(payload["pre_submit_proof_status"]),
         block_reason=str(payload["block_reason"]),
         idempotency_key=payload["idempotency_key"],  # type: ignore[arg-type]
+        extra_payload={key: value for key, value in payload.items() if key not in required},
     )
 
 

@@ -370,6 +370,7 @@ def build_target_position_decision(
     order_rules: dict[str, object] | None,
     reference_price: float | None,
     settings: TargetPositionSettings,
+    authoritative_target_exposure_krw: float | None = None,
 ) -> TargetPositionDecision:
     payload = dict(readiness_payload or {})
     current_snapshot = dict(current_position_snapshot or {})
@@ -448,7 +449,9 @@ def build_target_position_decision(
     def _decision(**overrides: object) -> TargetPositionDecision:
         return TargetPositionDecision(**{**base, **overrides})
 
-    if signal == "BUY":
+    if authoritative_target_exposure_krw is not None:
+        target_exposure = max(0.0, float(authoritative_target_exposure_krw))
+    elif signal == "BUY":
         target_exposure = _configured_target_exposure(settings)
     elif signal == "SELL":
         target_exposure = 0.0

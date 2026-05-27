@@ -13,6 +13,7 @@ from .execution_order_rules import resolve_execution_order_rules
 from .observability import format_log_kv
 from .oms import build_order_intent_key
 from .order_sizing import build_target_delta_execution_sizing
+from .portfolio_target import PortfolioTarget
 from .pre_trade_economics import build_pre_trade_economics_snapshot
 from .strategy_policy_contract import StrategyDecisionV2
 from .target_position import TargetPositionSettings, build_target_position_decision
@@ -114,6 +115,11 @@ class ExecutionReadinessPlanningInput:
 @dataclass(frozen=True)
 class ExecutionTargetPlanningInput:
     previous_target_exposure_krw: float | None = None
+    portfolio_target: PortfolioTarget | None = None
+    portfolio_target_hash: str = ""
+    allocation_decision_hash: str = ""
+    allocator_config_hash: str = ""
+    strategy_contribution_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -216,6 +222,47 @@ class TypedExecutionPlanningInput:
         execution_intent = decision.execution_intent
         if execution_intent is not None and hasattr(execution_intent, "as_dict"):
             payload["execution_intent"] = execution_intent.as_dict()
+            payload["execution_intent_authority"] = "non_authoritative_strategy_hint"
+        if self.target.portfolio_target is not None:
+            target_payload = self.target.portfolio_target.as_dict()
+            payload.update(
+                {
+                    "portfolio_target": target_payload,
+                    "portfolio_target_present": True,
+                    "portfolio_target_authoritative": bool(
+                        self.target.portfolio_target.authoritative
+                    ),
+                    "portfolio_target_hash": self.target.portfolio_target_hash
+                    or self.target.portfolio_target.content_hash(),
+                    "allocation_decision_hash": self.target.allocation_decision_hash,
+                    "allocator_config_hash": self.target.allocator_config_hash,
+                    "strategy_contribution_hash": self.target.strategy_contribution_hash,
+                    "allocator_policy": (
+                        f"{self.target.portfolio_target.allocator_policy_name}:"
+                        f"{self.target.portfolio_target.allocator_policy_version}"
+                    ),
+                    "allocator_reason": self.target.portfolio_target.reason,
+                    "allocation_conflict_count": int(
+                        self.target.portfolio_target.conflict_resolution.get("conflict_count") or 0
+                    ),
+                    "allocation_primary_block_reason": self.target.portfolio_target.fail_closed_reason,
+                }
+            )
+        else:
+            payload.update(
+                {
+                    "portfolio_target_present": False,
+                    "portfolio_target_authoritative": False,
+                    "portfolio_target_hash": self.target.portfolio_target_hash,
+                    "allocation_decision_hash": self.target.allocation_decision_hash,
+                    "allocator_config_hash": self.target.allocator_config_hash,
+                    "strategy_contribution_hash": self.target.strategy_contribution_hash,
+                    "allocator_policy": "",
+                    "allocator_reason": "portfolio_target_missing",
+                    "allocation_conflict_count": 0,
+                    "allocation_primary_block_reason": "portfolio_target_missing",
+                }
+            )
         return payload
 
 
@@ -980,6 +1027,34 @@ def _residual_block_reason(
     )
 
 
+def _portfolio_target_authority_error(
+    *,
+    portfolio_target: PortfolioTarget | None,
+    portfolio_target_hash: str,
+    required: bool,
+) -> str | None:
+    if not required:
+        return None
+    if portfolio_target is None:
+        return "portfolio_target_missing"
+    if not isinstance(portfolio_target, PortfolioTarget):
+        return "portfolio_target_not_typed"
+    if not bool(portfolio_target.authoritative):
+        return str(portfolio_target.fail_closed_reason or "portfolio_target_not_authoritative")
+    expected_hash = portfolio_target.content_hash()
+    if not str(portfolio_target_hash or "").strip():
+        return "portfolio_target_hash_missing"
+    if str(portfolio_target_hash) != expected_hash:
+        return "portfolio_target_hash_mismatch"
+    if not str(portfolio_target.allocation_input_hash or "").strip():
+        return "allocator_input_hash_missing"
+    if not str(portfolio_target.strategy_contribution_hash or "").strip():
+        return "strategy_contribution_hash_missing"
+    if portfolio_target.target_exposure_krw is None:
+        return "portfolio_target_exposure_missing"
+    return None
+
+
 def build_typed_execution_decision_summary(
     *,
     typed_input: TypedExecutionPlanningInput,
@@ -992,6 +1067,9 @@ def build_typed_execution_decision_summary(
         final_signal=typed_input.strategy_decision.final_signal,
         final_reason=typed_input.strategy_decision.final_reason,
         previous_target_exposure_krw=typed_input.target.previous_target_exposure_krw,
+        portfolio_target=typed_input.target.portfolio_target,
+        portfolio_target_hash=typed_input.target.portfolio_target_hash,
+        portfolio_target_required=True,
         strategy_performance_gate=strategy_performance_gate,
     )
 
@@ -1034,6 +1112,9 @@ def _build_execution_decision_summary_from_authority_payload(
     final_signal: str | None = None,
     final_reason: str | None = None,
     previous_target_exposure_krw: float | None = None,
+    portfolio_target: PortfolioTarget | None = None,
+    portfolio_target_hash: str = "",
+    portfolio_target_required: bool = False,
     strategy_performance_gate: object | None = None,
 ) -> ExecutionDecisionSummary:
     payload: dict[str, object] = dict(authority_payload)
@@ -1098,6 +1179,16 @@ def _build_execution_decision_summary_from_authority_payload(
 
     if bool(getattr(settings, "TARGET_EXECUTION_SHADOW", False)) or execution_engine == "target_delta":
         execution_order_rules = resolve_execution_order_rules(payload, market=str(settings.PAIR))
+        target_authority_error = _portfolio_target_authority_error(
+            portfolio_target=portfolio_target,
+            portfolio_target_hash=portfolio_target_hash,
+            required=execution_engine == "target_delta" and bool(portfolio_target_required),
+        )
+        authoritative_target_exposure_krw = (
+            None
+            if portfolio_target is None or target_authority_error is not None
+            else portfolio_target.target_exposure_krw
+        )
         target_decision = build_target_position_decision(
             raw_signal=raw,
             previous_target_exposure_krw=previous_target_exposure_krw,
@@ -1112,12 +1203,24 @@ def _build_execution_decision_summary_from_authority_payload(
                 max_order_krw=float(getattr(settings, "MAX_ORDER_KRW", 0.0) or 0.0),
                 hold_policy=str(getattr(settings, "TARGET_HOLD_POLICY", "maintain_previous_target")),
             ),
+            authoritative_target_exposure_krw=authoritative_target_exposure_krw,
         )
         target_shadow_decision = target_decision.as_dict()
+        if target_authority_error is not None:
+            target_shadow_decision.update(
+                {
+                    "portfolio_target_present": portfolio_target is not None,
+                    "portfolio_target_authoritative": False
+                    if portfolio_target is None
+                    else bool(portfolio_target.authoritative),
+                    "portfolio_target_hash": portfolio_target_hash,
+                    "allocation_primary_block_reason": target_authority_error,
+                }
+            )
         if execution_engine == "target_delta":
             target_sizing = None
             target_sizing_dict: dict[str, object] | None = None
-            if target_decision.delta_side in {"BUY", "SELL"}:
+            if target_authority_error is None and target_decision.delta_side in {"BUY", "SELL"}:
                 target_sizing = build_target_delta_execution_sizing(
                     pair=str(settings.PAIR),
                     side=str(target_decision.delta_side),
@@ -1146,6 +1249,8 @@ def _build_execution_decision_summary_from_authority_payload(
                 else str(target_sizing.block_reason)
             )
             submit_allowed = bool(target_decision.would_submit and target_sizing is not None and target_sizing.allowed)
+            if target_authority_error is not None:
+                submit_allowed = False
             performance_gate_blocks_buy = bool(
                 submit_allowed
                 and _target_delta_buy_blocked_by_performance_gate(
@@ -1164,6 +1269,9 @@ def _build_execution_decision_summary_from_authority_payload(
                 "REBALANCE_TO_TARGET"
                 if submit_allowed
                 else (
+                    "BLOCK_PORTFOLIO_TARGET_AUTHORITY"
+                    if target_authority_error is not None
+                    else (
                     "BLOCK_STRATEGY_PERFORMANCE_GATE"
                     if performance_gate_blocks_buy
                     else (
@@ -1171,9 +1279,12 @@ def _build_execution_decision_summary_from_authority_payload(
                         if target_decision.block_reason == "delta_below_exchange_min"
                         else "BLOCK_TARGET_DELTA"
                     )
+                    )
                 )
             )
-            target_block_reason = str(sizing_block_reason or target_decision.block_reason)
+            target_block_reason = str(
+                target_authority_error or sizing_block_reason or target_decision.block_reason
+            )
             target_plan_extra = {
                 "intent_type": "target_delta_rebalance",
                 "strategy_context": "target_delta",
@@ -1220,6 +1331,22 @@ def _build_execution_decision_summary_from_authority_payload(
                 "target_missing_state_resolution": target_decision.target_missing_state_resolution,
                 "target_closeout_requested": target_decision.target_closeout_requested,
                 "target_strategy_signal_source": target_decision.target_strategy_signal_source,
+                "portfolio_target_present": bool(portfolio_target is not None),
+                "portfolio_target_authoritative": (
+                    False if portfolio_target is None else bool(portfolio_target.authoritative)
+                ),
+                "portfolio_target_hash": portfolio_target_hash,
+                "allocation_decision_hash": str(payload.get("allocation_decision_hash") or ""),
+                "allocator_config_hash": str(payload.get("allocator_config_hash") or ""),
+                "strategy_contribution_hash": str(payload.get("strategy_contribution_hash") or ""),
+                "allocator_policy": str(payload.get("allocator_policy") or ""),
+                "allocator_reason": str(payload.get("allocator_reason") or ""),
+                "allocation_conflict_count": int(payload.get("allocation_conflict_count") or 0),
+                "allocation_primary_block_reason": str(
+                    target_authority_error
+                    or payload.get("allocation_primary_block_reason")
+                    or "none"
+                ),
             }
             if performance_gate_fields and str(target_decision.delta_side) == "BUY":
                 target_plan_extra.update(performance_gate_fields)
@@ -1823,6 +1950,38 @@ class LiveSignalExecutionService:
                     field_name="target_submit_plan",
                     source=execution_decision.get("source"),
                     side=request.signal,
+                )
+                return None
+            if not bool(target_plan.get("portfolio_target_authoritative")):
+                _block_live_submit_plan(
+                    reason="target_delta_missing_authoritative_portfolio_target",
+                    field_name="target_submit_plan",
+                    source=target_plan.get("source"),
+                    side=target_plan.get("side"),
+                )
+                return None
+            if not str(target_plan.get("portfolio_target_hash") or "").strip():
+                _block_live_submit_plan(
+                    reason="target_delta_missing_portfolio_target_hash",
+                    field_name="target_submit_plan",
+                    source=target_plan.get("source"),
+                    side=target_plan.get("side"),
+                )
+                return None
+            if not str(target_plan.get("allocation_decision_hash") or "").strip():
+                _block_live_submit_plan(
+                    reason="target_delta_missing_allocation_decision_hash",
+                    field_name="target_submit_plan",
+                    source=target_plan.get("source"),
+                    side=target_plan.get("side"),
+                )
+                return None
+            if not str(target_plan.get("strategy_contribution_hash") or "").strip():
+                _block_live_submit_plan(
+                    reason="target_delta_missing_strategy_contribution_hash",
+                    field_name="target_submit_plan",
+                    source=target_plan.get("source"),
+                    side=target_plan.get("side"),
                 )
                 return None
             if str(target_plan.get("source")) != "target_delta":
