@@ -7,7 +7,8 @@ from typing import Any, Mapping
 
 from .core.sma_policy import StrategyDecisionV2
 from .decision_equivalence import sha256_prefixed
-from .runtime_sma_snapshot_builder import RuntimeSmaDecisionResult, RuntimeSmaPolicyHashes
+from .runtime_strategy_decision import RuntimeStrategyDecisionResult
+from .runtime_sma_snapshot_builder import RuntimeSmaPolicyHashes
 
 
 def _freeze_value(value: Any) -> object:
@@ -42,11 +43,13 @@ class DecisionEnvelope:
     candle_ts: int
     market_price: float
     base_context: Mapping[str, object]
-    policy_hashes: RuntimeSmaPolicyHashes | None
+    policy_hashes: RuntimeSmaPolicyHashes | Mapping[str, object] | None
     replay_fingerprint: Mapping[str, object]
     boundary: Mapping[str, object]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.strategy_decision, StrategyDecisionV2):
+            raise TypeError("strategy_decision_must_be_typed")
         object.__setattr__(self, "candle_ts", int(self.candle_ts))
         object.__setattr__(self, "market_price", float(self.market_price))
         object.__setattr__(self, "base_context", _frozen_mapping(self.base_context))
@@ -54,7 +57,9 @@ class DecisionEnvelope:
         object.__setattr__(self, "boundary", _frozen_mapping(self.boundary))
 
     @classmethod
-    def from_runtime_result(cls, result: RuntimeSmaDecisionResult) -> "DecisionEnvelope":
+    def from_runtime_result(cls, result: RuntimeStrategyDecisionResult) -> "DecisionEnvelope":
+        if not isinstance(result.decision, StrategyDecisionV2):
+            raise TypeError("runtime_result_decision_must_be_typed")
         return cls(
             strategy_decision=result.decision,
             candle_ts=result.candle_ts,
@@ -64,6 +69,17 @@ class DecisionEnvelope:
             replay_fingerprint=result.replay_fingerprint,
             boundary=result.boundary,
         )
+
+    def _policy_hashes_as_dict(self) -> dict[str, object]:
+        if self.policy_hashes is None:
+            return {}
+        if isinstance(self.policy_hashes, Mapping):
+            return _thaw_mapping(self.policy_hashes)
+        if hasattr(self.policy_hashes, "as_dict"):
+            value = self.policy_hashes.as_dict()
+            if isinstance(value, Mapping):
+                return dict(value)
+        raise TypeError("policy_hashes_must_be_mapping_or_as_dict")
 
     def as_persistence_context(self) -> dict[str, object]:
         """Serialize observability material; this dict is not execution authority."""
@@ -94,16 +110,13 @@ class DecisionEnvelope:
                 "non_authoritative_observability_payload": True,
             }
         )
-        if self.policy_hashes is not None:
-            context.update(self.policy_hashes.as_dict())
+        context.update(self._policy_hashes_as_dict())
         if decision.execution_intent is not None:
             context["execution_intent"] = decision.execution_intent.as_dict()
         return context
 
     def observability_fields(self) -> dict[str, object]:
-        policy_hashes: dict[str, object] = (
-            {} if self.policy_hashes is None else self.policy_hashes.as_dict()
-        )
+        policy_hashes: dict[str, object] = self._policy_hashes_as_dict()
         return {
             "decision_authority_source": "DecisionEnvelope.strategy_decision",
             "decision_envelope_present": True,

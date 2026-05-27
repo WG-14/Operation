@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,36 @@ def _runtime_result(*, strategy_name: str = "sma_with_filter") -> RuntimeSmaDeci
         market_price=10.0,
         replay_fingerprint={"schema_version": 1, "candle_ts": 1_700_003_000_000},
         boundary={"decision_boundary_phase": "post_normalization_decision"},
+    )
+
+
+@dataclass
+class _GenericRuntimeDecisionResult:
+    decision: StrategyDecisionV2
+    base_context: dict[str, object]
+    candle_ts: int
+    market_price: float
+    replay_fingerprint: dict[str, object]
+    boundary: dict[str, object]
+    policy_hashes: dict[str, object] | None = None
+
+    def as_legacy_dict(self) -> dict[str, object]:
+        return dict(self.base_context)
+
+
+def _generic_runtime_result(*, strategy_name: str = "unit_promotion") -> _GenericRuntimeDecisionResult:
+    return _GenericRuntimeDecisionResult(
+        decision=_typed_decision(strategy_name=strategy_name),
+        base_context={
+            "market_price": 10.0,
+            "last_close": 10.0,
+            "position_state": {"normalized_exposure": {"sellable_executable_lot_count": 0}},
+        },
+        candle_ts=1_700_003_000_000,
+        market_price=10.0,
+        replay_fingerprint={"schema_version": 1, "candle_ts": 1_700_003_000_000},
+        boundary={"decision_boundary_phase": "unit_generic_decision"},
+        policy_hashes={"unit_policy_hash": "sha256:unit"},
     )
 
 
@@ -390,12 +421,26 @@ def test_sma_with_filter_approved_profile_runtime_requires_typed_handoff() -> No
 
 
 def test_engine_promotion_runtime_path_has_no_concrete_sma_branch() -> None:
-    source = Path("src/bithumb_bot/engine.py").read_text()
+    source = Path("src/bithumb_bot/engine.py").read_text(encoding="utf-8-sig")
+    tree = ast.parse(source)
 
     assert 'selected_strategy_name == "sma_with_filter"' not in source
     assert "SmaWithFilterStrategy" not in source
     assert "isinstance(strategy, SmaWithFilterStrategy)" not in source
     assert "decide_sma_with_filter_runtime_snapshot_from_db" not in source
+    imported_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "SmaWithFilterStrategy" not in imported_names
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "decide_sma_with_filter_runtime_snapshot_from_db" not in called_names
 
 
 def test_runtime_decision_adapter_registry_drives_promotion_path_without_engine_branch(
@@ -408,7 +453,7 @@ def test_runtime_decision_adapter_registry_drives_promotion_path_without_engine_
 
         def decide(self, conn, *, short_n, long_n, through_ts_ms=None):
             calls.append((short_n, long_n, through_ts_ms))
-            return _runtime_result(strategy_name=self.strategy_name)
+            return _generic_runtime_result(strategy_name=self.strategy_name)
 
         def typed_authority_required(self) -> bool:
             return True
@@ -427,10 +472,31 @@ def test_runtime_decision_adapter_registry_drives_promotion_path_without_engine_
         strategy_name="unit_promotion",
     )
 
-    assert isinstance(result, RuntimeSmaDecisionResult)
+    assert isinstance(result, _GenericRuntimeDecisionResult)
     assert result.decision.strategy_name == "unit_promotion"
     assert calls == [(5, 20, 1_700_003_000_000)]
     assert "unit_promotion" not in Path("src/bithumb_bot/engine.py").read_text()
+
+
+def test_generic_runtime_result_flows_through_envelope_and_planner() -> None:
+    result = _generic_runtime_result(strategy_name="unit_non_sma")
+
+    assert runtime_strategy_decision.is_runtime_strategy_decision_result(result)
+
+    envelope = DecisionEnvelope.from_runtime_result(result)
+    assert envelope.strategy_decision.strategy_name == "unit_non_sma"
+    assert envelope.observability_fields()["unit_policy_hash"] == "sha256:unit"
+
+    bundle = _planner().plan_envelope(None, envelope, updated_ts=1_700_003_060_000)
+
+    assert bundle.summary is not None
+    assert bundle.persistence_context["decision_authority_source"] == "DecisionEnvelope.strategy_decision"
+    assert bundle.persistence_context["unit_policy_hash"] == "sha256:unit"
+    assert bundle.persistence_context["pure_policy_hash"] == "sha256:pure"
+    assert bundle.persistence_context["policy_contract_hash"] == "sha256:contract"
+    assert bundle.persistence_context["policy_input_hash"] == "sha256:input"
+    assert bundle.persistence_context["policy_decision_hash"] == "sha256:decision"
+    assert bundle.persistence_context["replay_fingerprint_hash"]
 
 
 def test_generic_promotion_adapter_dict_handoff_fails_closed_when_typed_required(

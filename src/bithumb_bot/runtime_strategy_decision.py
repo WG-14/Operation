@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Protocol
+from typing import Callable, Protocol, runtime_checkable
 
 from .config import settings, validate_live_strategy_selection
+from .core.sma_policy import StrategyDecisionV2
 from .runtime_position_state_normalizer import PositionStateNormalizer
 from .runtime_sma_snapshot import decide_sma_with_filter_runtime_snapshot_from_db
 from .runtime_sma_snapshot_builder import (
@@ -15,11 +16,15 @@ from .strategy import create_legacy_strategy, create_strategy_policy
 from .strategy.sma_policy_strategy import SmaWithFilterStrategy
 
 
+@runtime_checkable
 class RuntimeStrategyDecisionResult(Protocol):
     decision: object
     base_context: dict[str, object]
     candle_ts: int
     market_price: float
+    policy_hashes: object | None
+    replay_fingerprint: dict[str, object]
+    boundary: dict[str, object]
 
     def as_legacy_dict(self) -> dict[str, object]: ...
 
@@ -68,7 +73,9 @@ def get_runtime_decision_adapter(name: str) -> RuntimeDecisionAdapter | None:
 
 
 def is_runtime_strategy_decision_result(value: object) -> bool:
-    return isinstance(value, RuntimeSmaDecisionResult)
+    if not isinstance(value, RuntimeStrategyDecisionResult):
+        return False
+    return isinstance(getattr(value, "decision", None), StrategyDecisionV2)
 
 
 def _normalization_boundary_label() -> str:

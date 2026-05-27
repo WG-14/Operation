@@ -131,9 +131,7 @@ class ExecutionPlanningInput:
             base_observability_context=envelope.base_context,
             replay_fingerprint=envelope.replay_fingerprint,
             boundary=envelope.boundary,
-            policy_hashes=(
-                envelope.policy_hashes.as_dict() if envelope.policy_hashes is not None else {}
-            ),
+            policy_hashes=envelope._policy_hashes_as_dict(),
         )
 
     @property

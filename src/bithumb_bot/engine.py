@@ -51,6 +51,7 @@ from .fee_gap_repair import build_fee_gap_accounting_repair_preview
 from .lifecycle import summarize_position_lots, summarize_reserved_exit_qty
 from .manual_flat_repair import build_manual_flat_accounting_repair_preview
 from .runtime_readiness import compute_runtime_readiness_snapshot
+from .runtime_recovery_gate import RuntimeRecoveryGateService
 from .strategy_performance import evaluate_strategy_performance_gate
 from .dust import (
     DustClassification,
@@ -114,6 +115,18 @@ STALE_RISK_STATE_MISMATCH_CLEAR_RECONCILE_REASON_CODES = {
     "RECENT_FILL_APPLIED",
     "RECONCILE_OK",
 }
+
+
+def _runtime_recovery_gate_service() -> RuntimeRecoveryGateService:
+    return RuntimeRecoveryGateService(
+        startup_gate_evaluator=evaluate_startup_safety_gate,
+        stale_initial_reconcile_halt_clearer=maybe_clear_stale_initial_reconcile_halt,
+        stale_live_execution_broker_halt_clearer=maybe_clear_stale_live_execution_broker_halt,
+        stale_risk_state_mismatch_halt_clearer=maybe_clear_stale_risk_state_mismatch_halt,
+        state_snapshot=runtime_state.snapshot,
+        startup_gate_reason_classifier=_classify_startup_gate_reason,
+        resume_blocker_factory=_resume_blocker,
+    )
 
 
 def _run_loop_uses_target_delta() -> bool:
@@ -1455,11 +1468,9 @@ def evaluate_startup_safety_gate() -> str | None:
 
 def evaluate_resume_eligibility() -> tuple[bool, list[ResumeBlocker]]:
     """Returns whether operator resume may proceed and structured blockers."""
-    maybe_clear_stale_initial_reconcile_halt()
-    startup_gate_reason = evaluate_startup_safety_gate()
-    maybe_clear_stale_live_execution_broker_halt(startup_gate_reason=startup_gate_reason)
-    maybe_clear_stale_risk_state_mismatch_halt(startup_gate_reason=startup_gate_reason)
-    startup_gate_reason = evaluate_startup_safety_gate()
+    recovery_gate = _runtime_recovery_gate_service()
+    resume_preparation = recovery_gate.prepare_resume_gate()
+    startup_gate_reason = resume_preparation.startup_gate_reason
     state = runtime_state.snapshot()
 
     reasons: list[ResumeBlocker] = []
@@ -1499,20 +1510,7 @@ def evaluate_resume_eligibility() -> tuple[bool, list[ResumeBlocker]]:
                 )
             )
 
-    if startup_gate_reason:
-        startup_blocker_reason_code, startup_blocker_summary = _classify_startup_gate_reason(
-            startup_gate_reason,
-            state=state,
-        )
-        reasons.append(
-            _resume_blocker(
-                code="STARTUP_SAFETY_GATE_BLOCKED",
-                detail=startup_gate_reason,
-                reason_code=startup_blocker_reason_code,
-                summary=startup_blocker_summary,
-                overridable=False,
-            )
-        )
+    reasons.extend(recovery_gate.startup_safety_resume_blockers(startup_gate_reason))
 
     if state.emergency_flatten_blocked:
         reasons.append(
@@ -1528,21 +1526,7 @@ def evaluate_resume_eligibility() -> tuple[bool, list[ResumeBlocker]]:
             )
         )
 
-    if startup_gate_reason and state.last_reconcile_status == "ok":
-        startup_blocker_reason_code, startup_blocker_summary = _classify_startup_gate_reason(
-            startup_gate_reason,
-            state=state,
-        )
-        if startup_blocker_reason_code != "FEE_GAP_RECOVERY_REQUIRED":
-            reasons.append(
-                _resume_blocker(
-                    code="LAST_RECONCILE_DID_NOT_CLEAR_BLOCKERS",
-                    detail="latest reconcile reported ok but startup safety gate still blocks resume",
-                    reason_code=startup_blocker_reason_code,
-                    summary=startup_blocker_summary,
-                    overridable=False,
-                )
-            )
+    reasons.extend(recovery_gate.reconcile_ok_did_not_clear_blockers(startup_gate_reason))
 
     dust_context_for_halt = _reconcile_dust_context(state.last_reconcile_metadata)
     dust_resume_blocker = _dust_residual_resume_blocker(dust_context_for_halt)
