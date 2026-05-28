@@ -823,8 +823,9 @@ def test_backtest_kernel_delegates_decision_event_implementation_to_pipeline() -
     assert "BacktestKernel().run(" in source
     assert "DefaultBacktestPipeline" in inspect.getsource(backtest_kernel.BacktestKernel)
     assert "from .backtest_engine import _run_decision_event_backtest_impl" not in source
-    assert "Execute strategy decision events through the shared research backtest kernel" in implementation_source
-    assert "resolve_research_strategy_plugin(strategy_name)" in implementation_source
+    assert "Compatibility shim" in implementation_source
+    assert "DefaultBacktestPipeline().run(" in implementation_source
+    assert "resolve_research_strategy_plugin(strategy_name)" not in implementation_source
     assert "backtest_loop._run_decision_event_backtest_impl" not in implementation_source
 
 
@@ -915,8 +916,8 @@ def test_backtest_kernel_does_not_own_sma_specific_exit_rule_names() -> None:
     implementation_source = inspect.getsource(backtest_pipeline._run_decision_event_backtest_impl)
 
     assert "opposite_cross" not in implementation_source
-    assert "strategy_plugin.exit_rule_factory" in implementation_source
-    assert "common_rules" in implementation_source
+    assert "strategy_plugin.exit_rule_factory" not in implementation_source
+    assert "common_rules" not in implementation_source
 
 
 def test_backtest_engine_public_entrypoint_delegates_to_kernel_boundary() -> None:

@@ -210,24 +210,12 @@ class DefaultMetricsCollector:
 
 @dataclass
 class DefaultExperimentRecorder:
-    """Final stage that executes the concrete stage-composed backtest run."""
+    """Final observability stage for injected stage pipelines."""
 
     def run(self, state: BacktestPipelineState) -> BacktestRun:
-        return _run_decision_event_backtest_impl(
-            dataset=state.dataset,
-            strategy_name=state.strategy_name,
-            parameter_values=state.parameter_values,
-            fee_rate=state.fee_rate,
-            slippage_bps=state.slippage_bps,
-            decision_events=state.decision_events,
-            parameter_stability_score=state.parameter_stability_score,
-            execution_model=state.execution_model,
-            execution_timing_policy=state.execution_timing_policy,
-            portfolio_policy=state.portfolio_policy,
-            context=state.context,
-            prepared_ticks=state.ticks,
-            prepared_ledger=state.ledger,
-        )
+        if state.result is None:
+            raise RuntimeError("experiment_recorder_missing_backtest_result")
+        return state.result
 
     def record_stage(
         self,
@@ -262,8 +250,7 @@ class DefaultBacktestPipeline:
         portfolio_policy: PortfolioPolicy | None = None,
         context: BacktestRunContext | None = None,
     ) -> BacktestRun:
-        stages = self.injected_stages or self.stages.ordered()
-        if stages:
+        if self.injected_stages:
             return self._run_injected_stages(
                 state=BacktestPipelineState(
                     dataset=dataset,
@@ -278,9 +265,23 @@ class DefaultBacktestPipeline:
                     portfolio_policy=portfolio_policy,
                     context=context,
                 ),
-                stages=stages,
+                stages=self.injected_stages,
             )
-        raise RuntimeError("default_backtest_pipeline_has_no_stages")
+        return self._run_default_stages(
+            BacktestPipelineState(
+                dataset=dataset,
+                strategy_name=strategy_name,
+                parameter_values=parameter_values,
+                fee_rate=fee_rate,
+                slippage_bps=slippage_bps,
+                decision_events=decision_events,
+                parameter_stability_score=parameter_stability_score,
+                execution_model=execution_model,
+                execution_timing_policy=execution_timing_policy,
+                portfolio_policy=portfolio_policy,
+                context=context,
+            )
+        )
 
     def _run_injected_stages(self, **payload: object) -> BacktestRun:
         stages = tuple(payload.pop("stages"))
@@ -294,6 +295,55 @@ class DefaultBacktestPipeline:
             else:
                 state = runner(state)
         return state  # type: ignore[return-value]
+
+    def _run_default_stages(self, state: BacktestPipelineState) -> BacktestRun:
+        if self.stages.market_clock is None:
+            raise RuntimeError("default_backtest_pipeline_missing_market_clock")
+        if self.stages.portfolio_ledger is None:
+            raise RuntimeError("default_backtest_pipeline_missing_portfolio_ledger")
+        if self.stages.strategy_evaluator is None:
+            raise RuntimeError("default_backtest_pipeline_missing_strategy_evaluator")
+        if self.stages.risk_gate is None:
+            raise RuntimeError("default_backtest_pipeline_missing_risk_gate")
+        if self.stages.execution_simulator is None:
+            raise RuntimeError("default_backtest_pipeline_missing_execution_simulator")
+        if self.stages.metrics_collector is None:
+            raise RuntimeError("default_backtest_pipeline_missing_metrics_collector")
+        if self.stages.experiment_recorder is None:
+            raise RuntimeError("default_backtest_pipeline_missing_experiment_recorder")
+
+        prepared = self.stages.market_clock.run(state)  # type: ignore[attr-defined]
+        prepared = self.stages.portfolio_ledger.run(prepared)  # type: ignore[attr-defined]
+        for stage in (
+            self.stages.strategy_evaluator,
+            self.stages.risk_gate,
+            self.stages.execution_simulator,
+            self.stages.metrics_collector,
+        ):
+            runner = getattr(stage, "run", None)
+            if runner is not None:
+                prepared = runner(prepared)
+        result = _run_stage_composed_decision_event_backtest(
+            dataset=prepared.dataset,
+            strategy_name=prepared.strategy_name,
+            parameter_values=prepared.parameter_values,
+            fee_rate=prepared.fee_rate,
+            slippage_bps=prepared.slippage_bps,
+            decision_events=prepared.decision_events,
+            parameter_stability_score=prepared.parameter_stability_score,
+            execution_model=prepared.execution_model,
+            execution_timing_policy=prepared.execution_timing_policy,
+            portfolio_policy=prepared.portfolio_policy,
+            context=prepared.context,
+            prepared_ticks=prepared.ticks,
+            prepared_ledger=prepared.ledger,
+            strategy_evaluator=self.stages.strategy_evaluator,
+            risk_gate=self.stages.risk_gate,
+            execution_simulator=self.stages.execution_simulator,
+            metrics_collector=self.stages.metrics_collector,
+            experiment_recorder=self.stages.experiment_recorder,
+        )
+        return self.stages.experiment_recorder.run(replace(prepared, result=result))  # type: ignore[attr-defined]
 
 
 def run_decision_event_backtest(
@@ -310,7 +360,7 @@ def run_decision_event_backtest(
     portfolio_policy: PortfolioPolicy | None = None,
     context: BacktestRunContext | None = None,
 ) -> BacktestRun:
-    return _run_decision_event_backtest_impl(
+    return DefaultBacktestPipeline().run(
         dataset=dataset,
         strategy_name=strategy_name,
         parameter_values=parameter_values,
@@ -340,6 +390,59 @@ def _run_decision_event_backtest_impl(
     context: BacktestRunContext | None = None,
     prepared_ticks: tuple[ReplayTick, ...] | None = None,
     prepared_ledger: PortfolioLedger | None = None,
+) -> BacktestRun:
+    """Compatibility shim; the default authority path is DefaultBacktestPipeline.run()."""
+    if prepared_ticks is not None or prepared_ledger is not None:
+        return _run_stage_composed_decision_event_backtest(
+            dataset=dataset,
+            strategy_name=strategy_name,
+            parameter_values=parameter_values,
+            fee_rate=fee_rate,
+            slippage_bps=slippage_bps,
+            decision_events=decision_events,
+            parameter_stability_score=parameter_stability_score,
+            execution_model=execution_model,
+            execution_timing_policy=execution_timing_policy,
+            portfolio_policy=portfolio_policy,
+            context=context,
+            prepared_ticks=prepared_ticks,
+            prepared_ledger=prepared_ledger,
+        )
+    return DefaultBacktestPipeline().run(
+        dataset=dataset,
+        strategy_name=strategy_name,
+        parameter_values=parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        decision_events=decision_events,
+        parameter_stability_score=parameter_stability_score,
+        execution_model=execution_model,
+        execution_timing_policy=execution_timing_policy,
+        portfolio_policy=portfolio_policy,
+        context=context,
+    )
+
+
+def _run_stage_composed_decision_event_backtest(
+    *,
+    dataset: DatasetSnapshot,
+    strategy_name: str,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    decision_events: tuple[ResearchDecisionEvent, ...],
+    parameter_stability_score: float | None = None,
+    execution_model: ExecutionModel | None = None,
+    execution_timing_policy: ExecutionTimingPolicy | None = None,
+    portfolio_policy: PortfolioPolicy | None = None,
+    context: BacktestRunContext | None = None,
+    prepared_ticks: tuple[ReplayTick, ...] | None = None,
+    prepared_ledger: PortfolioLedger | None = None,
+    strategy_evaluator: StrategyEvaluator | None = None,
+    risk_gate: RiskGate | None = None,
+    execution_simulator: ExecutionSimulator | None = None,
+    metrics_collector: MetricsCollector | None = None,
+    experiment_recorder: ExperimentRecorder | None = None,
 ) -> BacktestRun:
     """Execute strategy decision events through the shared research backtest kernel stages."""
     from bithumb_bot.execution_service import SignalExecutionRequest
