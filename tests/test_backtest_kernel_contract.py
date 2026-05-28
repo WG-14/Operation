@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bithumb_bot.canonical_decision import canonical_payload_hash
-from bithumb_bot.research import backtest_engine, backtest_kernel, backtest_support
+from bithumb_bot.research import backtest_engine, backtest_kernel, backtest_pipeline, backtest_support
 import bithumb_bot.research.strategy_registry as strategy_registry
 from bithumb_bot.research.backtest_engine import BacktestRunContext
 from bithumb_bot.research.backtest_kernel import BacktestKernel, run_decision_event_backtest
@@ -117,11 +117,7 @@ def test_decision_event_backtest_uses_typed_execution_service_boundary(monkeypat
             calls["execute"] += 1
             return super().execute(*args, **kwargs)
 
-    monkeypatch.setattr(
-        backtest_kernel,
-        "ResearchVirtualExecutionService",
-        SpyResearchVirtualExecutionService,
-    )
+    monkeypatch.setattr(backtest_pipeline, "ResearchVirtualExecutionService", SpyResearchVirtualExecutionService)
 
     result = run_decision_event_backtest(
         dataset=dataset,
@@ -292,7 +288,7 @@ def test_promotion_grade_backtest_final_consumer_rejects_missing_submit_plan(mon
             reason_code="unit_forced_missing_submit_plan",
         )
 
-    monkeypatch.setattr(backtest_kernel, "_research_execution_plan_bundle", _missing_submit_plan_bundle)
+    monkeypatch.setattr(backtest_pipeline, "_research_execution_plan_bundle", _missing_submit_plan_bundle)
 
     with pytest.raises(ValueError, match="research_submit_plan_missing"):
         run_decision_event_backtest(
@@ -348,7 +344,7 @@ def test_exploratory_backtest_final_consumer_can_warn_on_missing_submit_plan(mon
             reason_code="unit_forced_missing_submit_plan",
         )
 
-    monkeypatch.setattr(backtest_kernel, "_research_execution_plan_bundle", _missing_submit_plan_bundle)
+    monkeypatch.setattr(backtest_pipeline, "_research_execution_plan_bundle", _missing_submit_plan_bundle)
 
     result = run_decision_event_backtest(
         dataset=dataset,
@@ -642,11 +638,80 @@ def test_backtest_kernel_class_preserves_decision_event_api_behavior() -> None:
     assert via_class.resource_usage["trade_ledger_hash"] == via_function.resource_usage["trade_ledger_hash"]
 
 
-def test_backtest_kernel_module_owns_decision_event_implementation() -> None:
-    source = inspect.getsource(backtest_kernel.run_decision_event_backtest)
-    implementation_source = inspect.getsource(backtest_kernel._run_decision_event_backtest_impl)
+def test_backtest_kernel_can_inject_pipeline_facade() -> None:
+    calls: list[str] = []
+    expected = object()
 
-    assert "_run_decision_event_backtest_impl(" in source
+    class FakePipeline:
+        def run(self, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(str(kwargs["strategy_name"]))
+            return expected
+
+    result = BacktestKernel(pipeline=FakePipeline()).run(  # type: ignore[arg-type]
+        dataset=object(),  # type: ignore[arg-type]
+        strategy_name="unit_strategy",
+        parameter_values={},
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        decision_events=(),
+    )
+
+    assert result is expected
+    assert calls == ["unit_strategy"]
+
+
+def test_default_backtest_pipeline_invokes_injected_stage_interfaces_in_order() -> None:
+    calls: list[str] = []
+    expected = object()
+
+    class FakeStage:
+        def __init__(self, name: str, result: object | None = None) -> None:
+            self.name = name
+            self.result = result
+
+        def run(self, state: object) -> object:
+            calls.append(self.name)
+            return state if self.result is None else self.result
+
+    pipeline = backtest_pipeline.DefaultBacktestPipeline(
+        injected_stages=(
+            FakeStage("MarketReplayClock"),
+            FakeStage("PortfolioLedger"),
+            FakeStage("StrategyEvaluator"),
+            FakeStage("RiskGate"),
+            FakeStage("ExecutionSimulator"),
+            FakeStage("MetricsCollector"),
+            FakeStage("ExperimentRecorder", expected),
+        )
+    )
+
+    result = pipeline.run(
+        dataset=object(),  # type: ignore[arg-type]
+        strategy_name="unit_strategy",
+        parameter_values={},
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        decision_events=(),
+    )
+
+    assert result is expected
+    assert calls == [
+        "MarketReplayClock",
+        "PortfolioLedger",
+        "StrategyEvaluator",
+        "RiskGate",
+        "ExecutionSimulator",
+        "MetricsCollector",
+        "ExperimentRecorder",
+    ]
+
+
+def test_backtest_kernel_delegates_decision_event_implementation_to_pipeline() -> None:
+    source = inspect.getsource(backtest_kernel.run_decision_event_backtest)
+    implementation_source = inspect.getsource(backtest_pipeline._run_decision_event_backtest_impl)
+
+    assert "BacktestKernel().run(" in source
+    assert "DefaultBacktestPipeline" in inspect.getsource(backtest_kernel.BacktestKernel)
     assert "from .backtest_engine import _run_decision_event_backtest_impl" not in source
     assert "Execute strategy decision events through the shared research backtest kernel" in implementation_source
     assert "resolve_research_strategy_plugin(strategy_name)" in implementation_source
@@ -671,7 +736,7 @@ def test_backtest_kernel_has_no_sma_specific_dependencies_or_branches() -> None:
 
     for text in forbidden:
         assert text not in source
-    assert "research_policy_decision_builder" in source
+    assert "DefaultBacktestPipeline" in source
     assert "from . import backtest_engine as _engine" not in source
     assert "=_engine." not in source.replace(" ", "")
 
@@ -736,7 +801,7 @@ def test_strategy_registry_keeps_sma_helper_bodies_out_of_common_registry() -> N
 
 
 def test_backtest_kernel_does_not_own_sma_specific_exit_rule_names() -> None:
-    implementation_source = inspect.getsource(backtest_kernel._run_decision_event_backtest_impl)
+    implementation_source = inspect.getsource(backtest_pipeline._run_decision_event_backtest_impl)
 
     assert "opposite_cross" not in implementation_source
     assert "strategy_plugin.exit_rule_factory" in implementation_source

@@ -26,8 +26,25 @@ def test_backtest_kernel_stays_strategy_neutral() -> None:
     )
     assert all(token not in source for token in forbidden)
     assert "ResearchDecisionEvent" in source
-    assert "StrategyDecisionV2" in source
-    assert "ExecutionSubmitPlan" in source
+    assert "DefaultBacktestPipeline" in source
+
+
+def test_backtest_kernel_is_orchestration_facade_not_transaction_script() -> None:
+    source = _source("src/bithumb_bot/research/backtest_kernel.py")
+
+    forbidden = (
+        "apply_pending_fills(",
+        "research_policy_decision_builder(",
+        "merge_exit_rules(",
+        "build_typed_execution_decision_summary(",
+        "SignalExecutionRequest(",
+        "pending_trade_from_fill(",
+        "record_equity_mark(",
+        "build_metrics_v2(",
+    )
+
+    assert all(token not in source for token in forbidden)
+    assert "BacktestKernel().run(" in source
 
 
 def test_production_strategy_decisions_go_through_canonical_service() -> None:
