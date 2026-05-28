@@ -7,36 +7,10 @@ from typing import Any
 from bithumb_bot.canonical_decision import canonical_payload_hash
 from bithumb_bot.market_regime import RegimeCoverageRow
 
-from .backtest_engine import (
+from .backtest_types import (
+    BacktestResourceLimitExceeded,
     BacktestRun,
     BacktestRunContext,
-    apply_pending_fills,
-    closed_trade_diagnostics,
-    complete_audit_trace,
-    create_exit_rules,
-    depth_request_fields,
-    empty_execution_event_summary,
-    empty_metrics,
-    empty_metrics_v2,
-    execution_event_summary,
-    execution_reference_warnings,
-    failed_fill,
-    fill_applies_to_mark,
-    fill_effective_ts,
-    mark_pending_fills_at_end,
-    metrics,
-    metrics_v2_ledgers_from_trades,
-    model_latency_ms,
-    pending_trade_from_fill,
-    record_equity_mark,
-    research_decision_payload,
-    retained_detail_summary,
-    timing_request_fields,
-    trace_decision,
-    trace_equity_mark,
-    trace_execution,
-    trade_from_fill,
-    trade_hash_payload,
 )
 from .execution_model import ExecutionFill
 
@@ -219,8 +193,6 @@ class BacktestAccumulator:
         }
 
     def check_limits(self, *, candles_processed: int, trades: list[dict[str, object]]) -> None:
-        from .backtest_engine import BacktestResourceLimitExceeded
-
         self.update_trades(trades)
         limits = self.context.resource_limits
         reasons: list[str] = []
@@ -508,3 +480,138 @@ def _trade_is_effective(trade: dict[str, object]) -> bool:
         status = str(execution.get("fill_status") or "")
         return float(execution.get("filled_qty") or 0.0) > 0.0 and status in {"filled", "partial"}
     return float(trade.get("qty") or 0.0) > 0.0
+
+
+def create_exit_rules(**kwargs: Any):
+    from .backtest_common import create_exit_rules as impl
+    return impl(**kwargs)
+
+
+def retained_detail_summary(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import retained_detail_summary as impl
+    return impl(*args, **kwargs)
+
+
+def trade_hash_payload(trade: dict[str, object]) -> dict[str, object]:
+    from .backtest_common import trade_hash_payload as impl
+    return impl(trade)
+
+
+def trace_decision(*args: Any, **kwargs: Any) -> None:
+    from .backtest_common import trace_decision as impl
+    return impl(*args, **kwargs)
+
+
+def trace_equity_mark(*args: Any, **kwargs: Any) -> None:
+    from .backtest_common import trace_equity_mark as impl
+    return impl(*args, **kwargs)
+
+
+def trace_execution(*args: Any, **kwargs: Any) -> None:
+    from .backtest_common import trace_execution as impl
+    return impl(*args, **kwargs)
+
+
+def complete_audit_trace(*args: Any, **kwargs: Any) -> dict[str, object] | None:
+    from .backtest_common import complete_audit_trace as impl
+    return impl(*args, **kwargs)
+
+
+def record_equity_mark(*args: Any, **kwargs: Any):
+    from .backtest_common import record_equity_mark as impl
+    return impl(*args, **kwargs)
+
+
+def fill_applies_to_mark(*args: Any, **kwargs: Any) -> bool:
+    from .backtest_common import fill_applies_to_mark as impl
+    return impl(*args, **kwargs)
+
+
+def apply_pending_fills(*args: Any, **kwargs: Any):
+    from .backtest_common import apply_pending_fills as impl
+    return impl(*args, **kwargs)
+
+
+def timing_request_fields(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import timing_request_fields as impl
+    return impl(*args, **kwargs)
+
+
+def depth_request_fields(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import depth_request_fields as impl
+    return impl(*args, **kwargs)
+
+
+def research_decision_payload(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import research_decision_payload as impl
+    return impl(*args, **kwargs)
+
+
+def model_latency_ms(*args: Any, **kwargs: Any) -> int:
+    from .backtest_common import model_latency_ms as impl
+    return impl(*args, **kwargs)
+
+
+def failed_fill(*args: Any, **kwargs: Any):
+    from .backtest_common import failed_fill as impl
+    return impl(*args, **kwargs)
+
+
+def trade_from_fill(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import trade_from_fill as impl
+    return impl(*args, **kwargs)
+
+
+def pending_trade_from_fill(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import pending_trade_from_fill as impl
+    return impl(*args, **kwargs)
+
+
+def fill_effective_ts(*args: Any, **kwargs: Any) -> int:
+    from .backtest_common import fill_effective_ts as impl
+    return impl(*args, **kwargs)
+
+
+def mark_pending_fills_at_end(*args: Any, **kwargs: Any) -> None:
+    from .backtest_common import mark_pending_fills_at_end as impl
+    return impl(*args, **kwargs)
+
+
+def execution_event_summary(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import execution_event_summary as impl
+    return impl(*args, **kwargs)
+
+
+def empty_execution_event_summary() -> dict[str, object]:
+    from .backtest_common import empty_execution_event_summary as impl
+    return impl()
+
+
+def empty_metrics_v2(*args: Any, **kwargs: Any):
+    from .backtest_common import empty_metrics_v2 as impl
+    return impl(*args, **kwargs)
+
+
+def metrics_v2_ledgers_from_trades(*args: Any, **kwargs: Any):
+    from .backtest_common import metrics_v2_ledgers_from_trades as impl
+    return impl(*args, **kwargs)
+
+
+def closed_trade_diagnostics(*args: Any, **kwargs: Any):
+    from .backtest_common import closed_trade_diagnostics as impl
+    return impl(*args, **kwargs)
+
+
+def execution_reference_warnings(*args: Any, **kwargs: Any):
+    from .backtest_common import execution_reference_warnings as impl
+    return impl(*args, **kwargs)
+
+
+def empty_metrics(*args: Any, **kwargs: Any):
+    from .backtest_common import empty_metrics as impl
+    return impl(*args, **kwargs)
+
+
+def metrics(*args: Any, **kwargs: Any):
+    from .backtest_common import metrics as impl
+    return impl(*args, **kwargs)

@@ -652,6 +652,7 @@ def test_non_sma_executable_plugin_runs_buy_sell_custom_exit_with_typed_intent(m
         required_data=spec.required_data,
         optional_data=spec.optional_data,
         runner=_runner,
+        research_event_builder=lambda **_: (),
         runtime_replay_builder=None,
         runtime_parameter_adapter=None,
         decision_contract_version=spec.decision_contract_version,

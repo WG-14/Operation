@@ -20,7 +20,7 @@ from bithumb_bot.core.sma_policy import (
 )
 from bithumb_bot.canonical_decision import export_runtime_replay_decisions
 from bithumb_bot.market_regime import MARKET_REGIME_VERSION
-from bithumb_bot.research.backtest_engine import SmaWithFilterDecisionAdapter
+from bithumb_bot.strategy_plugins.sma_with_filter_events import SmaWithFilterDecisionAdapter
 from bithumb_bot.research.backtest_engine import run_sma_backtest
 from bithumb_bot.research import backtest_kernel
 from bithumb_bot.research import sma_with_filter_plugin

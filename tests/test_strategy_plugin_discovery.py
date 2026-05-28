@@ -116,6 +116,7 @@ def _dynamic_plugin(
         required_data=spec.required_data,
         optional_data=spec.optional_data,
         runner=_dynamic_runner,
+        research_event_builder=lambda **_: (),
         runtime_replay_builder=_dynamic_runtime_replay_builder if runtime_supported else None,
         runtime_parameter_adapter=(
             RuntimeParameterAdapter(

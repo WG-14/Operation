@@ -479,30 +479,22 @@ def _canary_runtime_parameters_from_settings(_cfg: object) -> dict[str, Any]:
     return _normalize_canary_parameters({})
 
 
-def run_canary_non_sma_backtest(
+def build_canary_non_sma_research_events(
+    *,
     dataset: Any,
     parameter_values: dict[str, Any],
     fee_rate: float,
     slippage_bps: float,
-    parameter_stability_score: float | None = None,
-    execution_model: Any | None = None,
-    execution_timing_policy: Any | None = None,
+    execution_timing_policy: Any,
     portfolio_policy: Any | None = None,
     context: Any | None = None,
-) -> Any:
-    del portfolio_policy
-    from bithumb_bot.research.backtest_kernel import run_decision_event_backtest
+) -> tuple[Any, ...]:
+    del fee_rate, slippage_bps, portfolio_policy, context
     from bithumb_bot.research.decision_event import ResearchDecisionEvent
     from bithumb_bot.research.execution_timing import candle_close_ts
     from bithumb_bot.research.experiment_manifest import ExecutionTimingPolicy
 
-    effective_parameters = materialize_strategy_parameters(
-        CANARY_NON_SMA_STRATEGY_NAME,
-        parameter_values,
-        fee_rate=fee_rate,
-        slippage_bps=slippage_bps,
-    )
-    canary_parameters = _normalize_canary_parameters(effective_parameters)
+    canary_parameters = _normalize_canary_parameters(parameter_values)
     start_index = max(0, int(canary_parameters["CANARY_ORDER_START_INDEX"]))
     side = str(canary_parameters["CANARY_ORDER_SIDE"])
     reason = str(canary_parameters["CANARY_ORDER_REASON"])
@@ -576,17 +568,32 @@ def run_canary_non_sma_backtest(
                 },
             )
         )
-    return run_decision_event_backtest(
+    return tuple(events)
+
+
+def run_canary_non_sma_backtest(
+    dataset: Any,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    parameter_stability_score: float | None = None,
+    execution_model: Any | None = None,
+    execution_timing_policy: Any | None = None,
+    portfolio_policy: Any | None = None,
+    context: Any | None = None,
+) -> Any:
+    from bithumb_bot.research.backtest_runner import run_plugin_backtest
+
+    return run_plugin_backtest(
+        plugin=CANARY_NON_SMA_PLUGIN,
         dataset=dataset,
-        strategy_name=CANARY_NON_SMA_STRATEGY_NAME,
-        parameter_values=effective_parameters,
+        parameter_values=parameter_values,
         fee_rate=fee_rate,
         slippage_bps=slippage_bps,
-        decision_events=tuple(events),
         parameter_stability_score=parameter_stability_score,
         execution_model=execution_model,
-        execution_timing_policy=timing_policy,
-        portfolio_policy=None,
+        execution_timing_policy=execution_timing_policy,
+        portfolio_policy=portfolio_policy,
         context=context,
     )
 
@@ -635,6 +642,7 @@ CANARY_NON_SMA_PLUGIN = ResearchStrategyPlugin(
     required_data=CANARY_NON_SMA_SPEC.required_data,
     optional_data=CANARY_NON_SMA_SPEC.optional_data,
     runner=run_canary_non_sma_backtest,
+    research_event_builder=build_canary_non_sma_research_events,
     runtime_replay_builder=_build_canary_runtime_replay_strategy,
     runtime_parameter_adapter=RuntimeParameterAdapter(
         from_env=_canary_runtime_parameters_from_env,

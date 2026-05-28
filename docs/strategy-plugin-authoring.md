@@ -9,6 +9,13 @@ strategy policies and legacy DB-bound strategy construction.
 
 ## Required Path
 
+The supported research architecture is:
+
+`StrategySpec` -> `ResearchStrategyPlugin` -> plugin-owned
+`research_event_builder` -> `research.backtest_runner.run_plugin_backtest` ->
+strategy-neutral `research.backtest_kernel` -> runtime replay, promotion, and
+live capability gates.
+
 1. Create a `StrategySpec`.
    - Include accepted, required, behavior-affecting, metadata-only, and
      research-only parameter names.
@@ -19,6 +26,12 @@ strategy policies and legacy DB-bound strategy construction.
    - The plugin name is the strategy identity used by research, replay,
      profiles, runtime strategy sets, and runtime decision requests.
    - The plugin contract hash is part of runtime reproducibility evidence.
+   - Declare `research_event_builder` for every research-runnable strategy.
+     The builder owns deterministic historical `ResearchDecisionEvent`
+     construction from the dataset, materialized parameters, fee/slippage,
+     timing policy, portfolio policy, and run context needed by the strategy.
+   - Runtime-only strategies must set the explicit non-runnable contract rather
+     than relying on a missing research runner as an implicit signal.
 
 3. Declare explicit `StrategyRuntimeCapabilities`.
    - Runtime capability is never inferred from adapter presence.
@@ -44,9 +57,16 @@ strategy policies and legacy DB-bound strategy construction.
    - Return only parameters accepted by `StrategySpec`.
    - Keep research-only parameters out of runtime-bound behavior.
 
-7. Implement the research runner.
+7. Use the generic research runner.
    - Research execution should consume manifest-backed datasets and declared
-     parameter values.
+     parameter values through `run_plugin_backtest`.
+   - Strategy-specific historical feature and event generation belongs in the
+     plugin layer, not in `research/backtest_kernel.py`,
+     `research/backtest_engine.py`, or strategy-neutral registry internals.
+   - `research/backtest_engine.py` is deprecated compatibility-only. New call
+     sites should import the generic runner or kernel directly.
+   - New strategy PRs should normally modify plugin, spec, and test files. They
+     should not add strategy-specific branches to common research files.
    - Do not couple research experiments directly to live runtime state.
 
 8. Add tests.
@@ -56,8 +76,17 @@ strategy policies and legacy DB-bound strategy construction.
    - Dynamic plugin discovery through entry points when applicable.
    - A non-SMA canary path proving generic platform files do not need
      strategy-specific branches.
+   - Architecture guards preventing strategy-specific event generation from
+     re-entering common research modules.
 
 9. Keep compatibility code isolated.
    - `strategy.registry` is legacy/smoke compatibility only.
+   - `research.backtest_engine` is compatibility-only for old import paths.
    - Do not use compatibility registry APIs as promotion, replay, or runtime
      decision authority.
+
+Promotion-bound strategies must provide replay/runtime/capability evidence
+through the plugin contract. Production-bound manifests still fail closed when
+runtime-bound behavior parameters, replay support, runtime adapters, or approved
+profile evidence are missing; exploratory defaults are not promotion-grade
+evidence.

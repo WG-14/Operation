@@ -5,14 +5,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .backtest_engine import (
-    BacktestRun,
-    BacktestRunContext,
-    run_buy_and_hold_baseline_backtest,
-    run_noop_baseline_backtest,
-    run_sma_backtest,
-)
+from .backtest_types import BacktestRun, BacktestRunContext
 from .dataset_snapshot import DatasetSnapshot
+from .decision_event import ResearchDecisionEvent
 from .execution_model import ExecutionModel
 from .experiment_manifest import ExecutionTimingPolicy, PortfolioPolicy
 from .hashing import sha256_prefixed
@@ -23,6 +18,9 @@ from .strategy_spec import (
     StrategySpec,
     materialize_strategy_parameters,
 )
+
+
+ResearchEventBuilder = Callable[..., tuple[ResearchDecisionEvent, ...]]
 
 
 ResearchStrategyRunner = Callable[
@@ -239,6 +237,7 @@ class ResearchStrategyPlugin:
     runtime_parameter_adapter: RuntimeParameterAdapter | None
     decision_contract_version: str
     diagnostics_namespace: str
+    research_event_builder: ResearchEventBuilder | None = None
     decision_payload_adapter: DecisionPayloadAdapter | None = None
     exit_signal_context_builder: ExitSignalContextBuilder | None = None
     exit_rule_factory: ExitRuleFactory | None = None
@@ -248,10 +247,13 @@ class ResearchStrategyPlugin:
     single_replay_bundle_builder: SingleReplayBundleBuilder | None = None
     policy_assembly_factory: Callable[[], Any] | None = None
     runtime_capabilities: StrategyRuntimeCapabilities | None = None
+    research_runnable: bool = True
 
     def __post_init__(self) -> None:
         if self.runtime_capabilities is None:
             raise ValueError(f"strategy runtime capabilities must be explicit: {self.name}")
+        if bool(self.research_runnable) and self.research_event_builder is None:
+            raise ValueError(f"research event builder missing: {self.name}")
         if self.runtime_capabilities.runtime_replay_supported != (self.runtime_replay_builder is not None):
             raise ValueError(f"strategy runtime replay capability mismatch: {self.name}")
         if (
@@ -279,6 +281,14 @@ class ResearchStrategyPlugin:
             "behavior_affecting_parameter_names": list(self.spec.behavior_affecting_parameter_names),
             "runner_module": self.runner.__module__,
             "runner_qualname": self.runner.__qualname__,
+            "research_runnable": bool(self.research_runnable),
+            "research_event_builder_supported": self.research_event_builder is not None,
+            "research_event_builder_module": (
+                self.research_event_builder.__module__ if self.research_event_builder is not None else None
+            ),
+            "research_event_builder_qualname": (
+                self.research_event_builder.__qualname__ if self.research_event_builder is not None else None
+            ),
             "runtime_replay_supported": self.runtime_replay_builder is not None,
             "runtime_replay_builder_module": (
                 self.runtime_replay_builder.__module__ if self.runtime_replay_builder is not None else None
@@ -493,6 +503,11 @@ def resolve_research_strategy(strategy_name: str) -> ResearchStrategyRunner:
 
 
 from . import sma_with_filter_plugin
+from bithumb_bot.strategy_plugins.baseline_events import (
+    build_buy_and_hold_baseline_events,
+    build_noop_baseline_events,
+)
+from bithumb_bot.strategy_plugins.sma_with_filter_events import build_sma_with_filter_research_events
 
 SAFE_HOLD_STRATEGY_NAME = "safe_hold"
 SAFE_HOLD_POLICY_CONTRACT_VERSION = "safe_hold_runtime_policy_v1"
@@ -569,6 +584,35 @@ def _assert_runtime_parameters_accepted(
         raise ResearchStrategyRegistryError(f"runtime parameter extraction returned unsupported keys:{plugin.name}:{joined}")
 
 
+def _run_plugin_backtest_by_name(
+    strategy_name: str,
+    *,
+    dataset: DatasetSnapshot,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    parameter_stability_score: float | None = None,
+    execution_model: ExecutionModel | None = None,
+    execution_timing_policy: ExecutionTimingPolicy | None = None,
+    portfolio_policy: PortfolioPolicy | None = None,
+    context: BacktestRunContext | None = None,
+) -> BacktestRun:
+    from .backtest_runner import run_plugin_backtest
+
+    return run_plugin_backtest(
+        plugin=resolve_research_strategy_plugin(strategy_name),
+        dataset=dataset,
+        parameter_values=parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        parameter_stability_score=parameter_stability_score,
+        execution_model=execution_model,
+        execution_timing_policy=execution_timing_policy,
+        portfolio_policy=portfolio_policy,
+        context=context,
+    )
+
+
 def _run_sma_with_filter(
     dataset: DatasetSnapshot,
     parameter_values: dict[str, Any],
@@ -582,7 +626,8 @@ def _run_sma_with_filter(
 ) -> BacktestRun:
     _require_parameter(parameter_values, "SMA_SHORT")
     _require_parameter(parameter_values, "SMA_LONG")
-    return run_sma_backtest(
+    return _run_plugin_backtest_by_name(
+        "sma_with_filter",
         dataset=dataset,
         parameter_values=parameter_values,
         fee_rate=fee_rate,
@@ -606,7 +651,8 @@ def _run_noop_baseline(
     portfolio_policy: PortfolioPolicy | None = None,
     context: BacktestRunContext | None = None,
 ) -> BacktestRun:
-    return run_noop_baseline_backtest(
+    return _run_plugin_backtest_by_name(
+        "noop_baseline",
         dataset=dataset,
         parameter_values=parameter_values,
         fee_rate=fee_rate,
@@ -630,7 +676,8 @@ def _run_buy_and_hold_baseline(
     portfolio_policy: PortfolioPolicy | None = None,
     context: BacktestRunContext | None = None,
 ) -> BacktestRun:
-    return run_buy_and_hold_baseline_backtest(
+    return _run_plugin_backtest_by_name(
+        "buy_and_hold_baseline",
         dataset=dataset,
         parameter_values=parameter_values,
         fee_rate=fee_rate,
@@ -680,6 +727,7 @@ _SMA_WITH_FILTER_PLUGIN = ResearchStrategyPlugin(
     required_data=SMA_WITH_FILTER_SPEC.required_data,
     optional_data=SMA_WITH_FILTER_SPEC.optional_data,
     runner=_run_sma_with_filter,
+    research_event_builder=build_sma_with_filter_research_events,
     runtime_replay_builder=sma_with_filter_plugin.build_runtime_replay_strategy,
     runtime_parameter_adapter=RuntimeParameterAdapter(
         from_env=sma_with_filter_plugin.runtime_parameters_from_env,
@@ -735,6 +783,7 @@ _NOOP_BASELINE_PLUGIN = ResearchStrategyPlugin(
     required_data=NOOP_BASELINE_SPEC.required_data,
     optional_data=NOOP_BASELINE_SPEC.optional_data,
     runner=_run_noop_baseline,
+    research_event_builder=build_noop_baseline_events,
     runtime_replay_builder=None,
     runtime_parameter_adapter=None,
     decision_contract_version=NOOP_BASELINE_SPEC.decision_contract_version,
@@ -758,6 +807,7 @@ _BUY_AND_HOLD_BASELINE_PLUGIN = ResearchStrategyPlugin(
     required_data=BUY_AND_HOLD_BASELINE_SPEC.required_data,
     optional_data=BUY_AND_HOLD_BASELINE_SPEC.optional_data,
     runner=_run_buy_and_hold_baseline,
+    research_event_builder=build_buy_and_hold_baseline_events,
     runtime_replay_builder=None,
     runtime_parameter_adapter=None,
     decision_contract_version=BUY_AND_HOLD_BASELINE_SPEC.decision_contract_version,
@@ -796,11 +846,13 @@ _SAFE_HOLD_PLUGIN = ResearchStrategyPlugin(
     required_data=_SAFE_HOLD_SPEC.required_data,
     optional_data=_SAFE_HOLD_SPEC.optional_data,
     runner=_run_safe_hold_research_placeholder,
+    research_event_builder=None,
     runtime_replay_builder=None,
     runtime_parameter_adapter=None,
     decision_contract_version=_SAFE_HOLD_SPEC.decision_contract_version,
     diagnostics_namespace=SAFE_HOLD_STRATEGY_NAME,
     runtime_decision_adapter_factory=_safe_hold_runtime_decision_adapter_factory,
+    research_runnable=False,
     runtime_capabilities=StrategyRuntimeCapabilities(
         promotion_runtime_decisions_supported=True,
         runtime_replay_supported=False,

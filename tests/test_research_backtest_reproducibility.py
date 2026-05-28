@@ -13,6 +13,7 @@ from bithumb_bot.paths import PathManager
 from bithumb_bot.canonical_decision import export_research_decisions, export_runtime_replay_decisions
 from bithumb_bot.decision_equivalence import compare_decision_equivalence
 from bithumb_bot.research import backtest_engine, backtest_kernel, strategy_registry
+from bithumb_bot.strategy_plugins import sma_with_filter_events
 from bithumb_bot.research.backtest_engine import (
     BacktestHeartbeatPolicy,
     BacktestResourceLimitExceeded,
@@ -2378,14 +2379,14 @@ def test_sma_backtest_attaches_entry_and_exit_regime_snapshots() -> None:
 def test_sma_backtest_uses_bounded_regime_fast_path(monkeypatch) -> None:
     snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
     calls: list[int] = []
-    original = backtest_engine.classify_market_regime_from_arrays
+    original = sma_with_filter_events.classify_market_regime_from_arrays
 
     def counting_classifier(**kwargs):
         calls.append(int(kwargs["index"]))
         assert len(kwargs["closes"]) == len(snapshot.candles)
         return original(**kwargs)
 
-    monkeypatch.setattr(backtest_engine, "classify_market_regime_from_arrays", counting_classifier)
+    monkeypatch.setattr(sma_with_filter_events, "classify_market_regime_from_arrays", counting_classifier)
 
     result = run_sma_backtest(
         dataset=snapshot,
@@ -2517,15 +2518,7 @@ def test_sma_backtest_event_adapter_does_not_precompute_policy_authority(monkeyp
         raise AssertionError("_sma should not be called from run_sma_backtest")
 
     calls = 0
-    original = backtest_engine.evaluate_sma_entry_decision_from_features
-
-    def counting_feature_decision(**kwargs):
-        nonlocal calls
-        calls += 1
-        return original(**kwargs)
-
-    monkeypatch.setattr(backtest_engine, "_sma", fail_sma)
-    monkeypatch.setattr(backtest_engine, "evaluate_sma_entry_decision_from_features", counting_feature_decision)
+    monkeypatch.setattr(sma_with_filter_events, "_sma", fail_sma)
 
     result = run_sma_backtest(
         dataset=snapshot,
@@ -2544,7 +2537,7 @@ def test_sma_backtest_event_adapter_does_not_precompute_policy_authority(monkeyp
 
 def test_sma_decision_adapter_emits_deterministic_strategy_events() -> None:
     snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
-    adapter = backtest_engine.SmaWithFilterDecisionAdapter(
+    adapter = sma_with_filter_events.SmaWithFilterDecisionAdapter(
         parameter_values={
             "SMA_SHORT": 2,
             "SMA_LONG": 4,
@@ -2590,14 +2583,14 @@ def test_sma_decision_adapter_emits_deterministic_strategy_events() -> None:
 def test_sma_backtest_consumes_sma_decision_adapter_events(monkeypatch) -> None:
     snapshot = _snapshot_from_closes([100, 99, 98, 97, 99, 102, 105, 104, 103, 100, 98, 96])
     calls = 0
-    original = backtest_engine.SmaWithFilterDecisionAdapter.build_events
+    original = sma_with_filter_events.SmaWithFilterDecisionAdapter.build_events
 
     def counting_build_events(self, dataset):
         nonlocal calls
         calls += 1
         return original(self, dataset)
 
-    monkeypatch.setattr(backtest_engine.SmaWithFilterDecisionAdapter, "build_events", counting_build_events)
+    monkeypatch.setattr(sma_with_filter_events.SmaWithFilterDecisionAdapter, "build_events", counting_build_events)
 
     result = run_sma_backtest(
         dataset=snapshot,
@@ -2638,12 +2631,11 @@ def test_sma_backtest_enters_common_kernel_through_public_boundary(monkeypatch) 
 
 
 def test_sma_backtest_source_has_no_growing_prefix_or_hot_loop_sma_calls() -> None:
-    source = inspect.getsource(backtest_engine.run_sma_backtest_via_kernel)
+    source = inspect.getsource(sma_with_filter_events.build_sma_with_filter_research_events)
 
     assert "closes[: index + 1]" not in source
     assert "_sma(" not in source
     assert "SmaWithFilterDecisionAdapter" in source
-    assert "run_decision_event_backtest" in source
 
 
 def test_sma_common_kernel_has_no_legacy_execution_runner() -> None:
@@ -2808,7 +2800,7 @@ def test_sma_common_kernel_insufficient_data_uses_kernel_compatible_empty_result
     assert result.decisions == ()
     assert result.warnings == ("not_enough_candles",)
     assert result.execution_event_summary == backtest_engine.empty_execution_event_summary()
-    assert result.metrics_v2.as_dict() == backtest_engine._empty_metrics_v2(
+    assert result.metrics_v2.as_dict() == backtest_engine.empty_metrics_v2(
         starting_cash=1_000_000.0,
         initial_position_qty=0.0,
     ).as_dict()
@@ -2822,9 +2814,9 @@ def test_precomputed_sma_values_match_legacy_sma() -> None:
     values = [100.0, 99.5, 101.25, 102.0, 100.75, 99.0]
 
     for window in (1, 2, 3, 5):
-        rolling = backtest_engine._rolling_sma_values(values, window)
+        rolling = sma_with_filter_events._rolling_sma_values(values, window)
         for end in range(window, len(values) + 1):
-            assert rolling[end] == pytest.approx(backtest_engine._sma(values, window, end))
+            assert rolling[end] == pytest.approx(sma_with_filter_events._sma(values, window, end))
 
 
 def test_sma_backtest_caches_dataset_content_hash(monkeypatch) -> None:
