@@ -285,7 +285,13 @@ class RuntimeDecisionRequestBuilder:
                 raise
             plugin = None
         cfg = replace(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
-        approved_profile_path = spec.approved_profile_path or approved_profile_path_from_env() or None
+        approved_profile_path = (
+            spec.approved_profile_path
+            or str(getattr(self.settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
+            or str(getattr(self.settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+            or approved_profile_path_from_env()
+            or None
+        )
         profile = None
         if approved_profile_path:
             profile = load_approved_profile(approved_profile_path)

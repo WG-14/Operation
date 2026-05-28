@@ -1579,6 +1579,31 @@ def test_approved_profile_requires_every_runtime_bound_behavior_key(
         validate_approved_profile(profile)
 
 
+@pytest.mark.parametrize(
+    "parameter_name",
+    sorted(
+        set(strategy_spec_for_name("sma_with_filter").behavior_affecting_parameter_names)
+        - set(strategy_spec_for_name("sma_with_filter").research_only_parameter_names)
+    ),
+)
+def test_approved_profile_requires_every_effective_runtime_bound_behavior_key(
+    tmp_path: Path,
+    parameter_name: str,
+) -> None:
+    promotion_path = tmp_path / "promotion.json"
+    write_json_atomic(promotion_path, _promotion())
+    profile = _profile(str(promotion_path))
+    profile["effective_strategy_parameters"].pop(parameter_name)
+    profile["effective_strategy_parameters_hash"] = sha256_prefixed(profile["effective_strategy_parameters"])
+    profile["profile_content_hash"] = compute_approved_profile_hash(profile)
+
+    with pytest.raises(
+        ApprovedProfileError,
+        match=f"effective_profile_missing_required_runtime_bound_parameter:{parameter_name}",
+    ):
+        validate_approved_profile(profile)
+
+
 def test_runtime_profile_diff_rejects_missing_behavior_affecting_runtime_key(tmp_path: Path) -> None:
     promotion_path = tmp_path / "promotion.json"
     write_json_atomic(promotion_path, _promotion())

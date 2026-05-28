@@ -1,18 +1,21 @@
 ﻿from __future__ import annotations
 
+import json
 import math
 import os
 from pathlib import Path
 
 import pytest
 
-from bithumb_bot.approved_profile import build_approved_profile
+from bithumb_bot.approved_profile import build_approved_profile, compute_approved_profile_hash
 from bithumb_bot import config
 from bithumb_bot.config import settings
 from bithumb_bot.execution_reality_contract import build_execution_reality_contract
 from bithumb_bot.research.hashing import content_hash_payload, sha256_prefixed
 from bithumb_bot.research.promotion_gate import build_candidate_profile
 from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
+from bithumb_bot.research.strategy_spec import materialized_strategy_parameters_hash
+from bithumb_bot.runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
 from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.broker import order_rules
 from bithumb_bot.markets import MarketInfo, MarketRegistry
@@ -407,6 +410,25 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
     return path
 
 
+def _write_incomplete_live_profile(
+    tmp_path: Path,
+    *,
+    mode: str,
+    missing_parameter: str = "SMA_FILTER_OVEREXT_LOOKBACK",
+) -> Path:
+    profile_path = _write_live_profile(tmp_path, mode=mode)
+    profile = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+    profile["strategy_parameters"].pop(missing_parameter)
+    profile["effective_strategy_parameters"].pop(missing_parameter)
+    profile["effective_strategy_parameters_hash"] = materialized_strategy_parameters_hash(
+        profile["effective_strategy_parameters"]
+    )
+    profile["profile_content_hash"] = compute_approved_profile_hash(profile)
+    incomplete_path = tmp_path / f"{mode}_profile_missing_{missing_parameter}.json"
+    write_json_atomic(incomplete_path, profile)
+    return incomplete_path
+
+
 def _select_small_live_profile(tmp_path: Path) -> None:
     profile_path = _write_live_profile(tmp_path, mode="small_live")
     object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
@@ -442,6 +464,42 @@ def test_live_real_order_execution_preflight_accepts_armed_live(monkeypatch: pyt
     object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
 
     config.validate_live_real_order_execution_preflight(settings)
+
+
+def test_live_real_order_preflight_rejects_incomplete_approved_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_valid_live_defaults(monkeypatch)
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    profile_path = _write_incomplete_live_profile(tmp_path, mode="small_live")
+    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
+
+    with pytest.raises(config.LiveModeValidationError) as exc:
+        config.validate_live_real_order_execution_preflight(settings)
+
+    assert "profile_missing_required_runtime_bound_parameter:SMA_FILTER_OVEREXT_LOOKBACK" in str(exc.value)
+
+
+def test_live_real_order_request_builder_rejects_incomplete_approved_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_valid_live_defaults(monkeypatch)
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    profile_path = _write_incomplete_live_profile(tmp_path, mode="small_live")
+    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
+
+    with pytest.raises(
+        ValueError,
+        match="profile_missing_required_runtime_bound_parameter:SMA_FILTER_OVEREXT_LOOKBACK",
+    ):
+        RuntimeDecisionRequestBuilder().build_for_spec(
+            RuntimeStrategySpec("sma_with_filter", pair="KRW-BTC", interval=str(settings.INTERVAL)),
+            through_ts_ms=1_700_000_180_000,
+        )
 
 
 def test_live_real_order_execution_preflight_rejects_armed_live_without_approved_profile(
@@ -569,6 +627,38 @@ def test_live_dry_run_startup_rejects_small_live_profile(
         config.validate_live_dry_run_loop_startup_contract(settings)
 
     assert "profile_mode_mismatch" in str(exc.value)
+
+
+def test_live_dry_run_startup_rejects_incomplete_approved_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_valid_live_defaults(monkeypatch)
+    profile_path = _write_incomplete_live_profile(tmp_path, mode="live_dry_run")
+    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
+
+    with pytest.raises(config.LiveModeValidationError) as exc:
+        config.validate_live_dry_run_loop_startup_contract(settings)
+
+    assert "profile_missing_required_runtime_bound_parameter:SMA_FILTER_OVEREXT_LOOKBACK" in str(exc.value)
+
+
+def test_live_dry_run_request_builder_rejects_incomplete_approved_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _set_valid_live_defaults(monkeypatch)
+    profile_path = _write_incomplete_live_profile(tmp_path, mode="live_dry_run")
+    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
+
+    with pytest.raises(
+        ValueError,
+        match="profile_missing_required_runtime_bound_parameter:SMA_FILTER_OVEREXT_LOOKBACK",
+    ):
+        RuntimeDecisionRequestBuilder().build_for_spec(
+            RuntimeStrategySpec("sma_with_filter", pair="KRW-BTC", interval=str(settings.INTERVAL)),
+            through_ts_ms=1_700_000_180_000,
+        )
 
 
 def test_live_dry_run_startup_accepts_live_dry_run_profile(
