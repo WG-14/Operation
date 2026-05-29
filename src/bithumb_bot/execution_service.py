@@ -91,6 +91,7 @@ class TypedExecutionRequest:
     exit_rule_name: str | None = None
     execution_decision_summary: "ExecutionDecisionSummary | None" = None
     execution_plan_bundle: object | None = None
+    observability_payload: ExecutionObservabilityPayload | None = None
     research_execution_context: object | None = None
 
     def __post_init__(self) -> None:
@@ -98,6 +99,17 @@ class TypedExecutionRequest:
             self.execution_decision_summary, ExecutionDecisionSummary
         ):
             raise TypeError("execution_decision_summary_must_be_typed")
+        if _live_real_order_submit_plan_required():
+            typed_summary = self.execution_decision_summary or getattr(
+                self.execution_plan_bundle, "summary", None
+            )
+            if typed_summary is None:
+                raise TypeError("live_real_order_missing_typed_execution_summary")
+            if not isinstance(typed_summary, ExecutionDecisionSummary):
+                raise TypeError("live_real_order_invalid_typed_execution_summary")
+            bundle_plan = getattr(self.execution_plan_bundle, "submit_plan", None)
+            if bundle_plan is not None and not isinstance(bundle_plan, ExecutionSubmitPlan):
+                raise TypeError("live_real_order_invalid_execution_plan_bundle_submit_plan")
 
 
 @dataclass(frozen=True)
@@ -106,11 +118,25 @@ class SignalExecutionRequest(TypedExecutionRequest):
     # observability material and must not be used as live submit authority.
     decision_context: dict[str, object] | None = None
     observability_context: dict[str, object] | None = None
-    observability_payload: dict[str, object] | ExecutionObservabilityPayload | None = None
 
     def __post_init__(self) -> None:
-        # Compatibility adapter: service boundaries validate and fail closed so
-        # old callers can still be rejected without construction-time crashes.
+        if _live_real_order_submit_plan_required():
+            typed_summary = self.execution_decision_summary or getattr(
+                self.execution_plan_bundle,
+                "summary",
+                None,
+            )
+            for field_name, payload in (
+                ("decision_context", self.decision_context),
+                ("observability_context", self.observability_context),
+            ):
+                if (
+                    typed_summary is None
+                    and isinstance(payload, dict)
+                    and "execution_decision" in payload
+                ):
+                    raise TypeError(f"{field_name}_not_execution_authority")
+        super().__post_init__()
         return None
 
     @classmethod
@@ -135,8 +161,8 @@ class SignalExecutionRequest(TypedExecutionRequest):
             exit_rule_name=typed_request.exit_rule_name,
             execution_decision_summary=typed_request.execution_decision_summary,
             execution_plan_bundle=typed_request.execution_plan_bundle,
-            research_execution_context=typed_request.research_execution_context,
             observability_payload=payload,
+            research_execution_context=typed_request.research_execution_context,
         )
 
 
@@ -719,7 +745,11 @@ def _request_execution_decision_payload(
         return None, typed_summary_error
     typed_payload = typed_summary.as_dict() if typed_summary is not None else None
 
-    if typed_payload is not None and raw_execution_decision is not None:
+    explicit_non_authoritative_observability = isinstance(
+        request.observability_payload,
+        ExecutionObservabilityPayload,
+    )
+    if typed_payload is not None and raw_execution_decision is not None and not explicit_non_authoritative_observability:
         raw_payload = dict(raw_execution_decision)
         if typed_payload != raw_payload:
             return None, "execution_decision_summary_context_mismatch"

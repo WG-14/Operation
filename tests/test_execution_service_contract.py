@@ -8,10 +8,12 @@ from bithumb_bot.config import settings
 from bithumb_bot.broker import live as live_broker
 from bithumb_bot.execution_service import (
     ExecutionDecisionSummary,
+    ExecutionObservabilityPayload,
     ExecutionSubmitPlan,
     LiveSignalExecutionService,
     PaperSignalExecutionService,
     SignalExecutionRequest,
+    TypedExecutionRequest,
     validate_execution_submit_plan_payload,
 )
 from bithumb_bot.research.backtest_kernel import ResearchExecutionContext, ResearchVirtualExecutionService
@@ -391,18 +393,15 @@ def test_malformed_explicit_submit_plan_blocks_executor_without_fallback(
     mutate(plan)
     calls: list[dict[str, object]] = []
 
-    result = _service(calls).execute(
+    with pytest.raises(TypeError, match="decision_context_not_execution_authority"):
         SignalExecutionRequest(
             signal="BUY",
             ts=123,
             market_price=100_000_000.0,
             decision_context={"execution_decision": {field_name: plan}},
         )
-    )
 
-    assert result is None
     assert calls == []
-    assert "live_real_order_dict_only_execution_decision_not_authority" in caplog.text
 
 
 def test_explicit_plan_present_but_not_consumed_does_not_call_executor(
@@ -723,7 +722,7 @@ def test_valid_residual_plan_reaches_executor_only_when_residual_live_submit_is_
     [
         (None, "live_real_order_missing_typed_execution_summary"),
         ({}, "live_real_order_missing_typed_execution_summary"),
-        ({"execution_decision": {}}, "live_real_order_missing_typed_execution_summary"),
+        ({"execution_decision": {}}, "decision_context_not_execution_authority"),
     ],
 )
 def test_missing_execution_plan_contract_fails_closed_in_live_real_order_mode(
@@ -734,18 +733,15 @@ def test_missing_execution_plan_contract_fails_closed_in_live_real_order_mode(
     _arm_live_real_orders(engine="lot_native")
     calls: list[dict[str, object]] = []
 
-    result = _service(calls).execute(
+    with pytest.raises(TypeError, match=expected_reason):
         SignalExecutionRequest(
             signal="BUY",
             ts=123,
             market_price=100_000_000.0,
             decision_context=decision_context,
         )
-    )
 
-    assert result is None
     assert calls == []
-    assert expected_reason in caplog.text
 
 
 def test_live_real_order_blocks_dict_only_execution_decision_even_with_submit_plan(
@@ -754,18 +750,15 @@ def test_live_real_order_blocks_dict_only_execution_decision_even_with_submit_pl
     _arm_live_real_orders(engine="target_delta")
     calls: list[dict[str, object]] = []
 
-    result = _service(calls).execute(
+    with pytest.raises(TypeError, match="decision_context_not_execution_authority"):
         SignalExecutionRequest(
             signal="BUY",
             ts=123,
             market_price=100_000_000.0,
             decision_context={"execution_decision": {"target_submit_plan": _valid_target_submit_plan()}},
         )
-    )
 
-    assert result is None
     assert calls == []
-    assert "live_real_order_dict_only_execution_decision_not_authority" in caplog.text
 
 
 def test_live_real_order_executes_with_typed_authority_and_empty_observability_context() -> None:
@@ -785,6 +778,59 @@ def test_live_real_order_executes_with_typed_authority_and_empty_observability_c
     assert submitted == {"status": "submitted", "signal": "BUY"}
     assert len(calls) == 1
     assert calls[0]["kwargs"]["execution_submit_plan"]["source"] == "strategy_position"  # type: ignore[index]
+
+
+def test_live_real_order_request_construction_requires_typed_execution_summary() -> None:
+    _arm_live_real_orders(engine="lot_native")
+
+    with pytest.raises(TypeError, match="live_real_order_missing_typed_execution_summary"):
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+        )
+
+
+def test_live_real_order_dict_context_cannot_be_submit_authority() -> None:
+    _arm_live_real_orders(engine="lot_native")
+    calls: list[dict[str, object]] = []
+
+    result = _service(calls).execute(
+        SignalExecutionRequest(
+            signal="BUY",
+            ts=123,
+            market_price=100_000_000.0,
+            execution_decision_summary=_typed_buy_execution_summary(),
+            decision_context={"execution_decision": {"buy_submit_plan": _valid_buy_submit_plan()}},
+        )
+    )
+
+    assert result is None
+    assert calls == []
+
+
+def test_explicit_observability_payload_is_non_authoritative_telemetry() -> None:
+    _arm_live_real_orders(engine="lot_native")
+    calls: list[dict[str, object]] = []
+    typed_request = TypedExecutionRequest(
+        signal="BUY",
+        ts=123,
+        market_price=100_000_000.0,
+        execution_decision_summary=_typed_buy_execution_summary(),
+        observability_payload=ExecutionObservabilityPayload(
+            {"execution_decision": {"buy_submit_plan": _valid_buy_submit_plan()}, "trace": "telemetry"}
+        ),
+    )
+
+    request = SignalExecutionRequest.from_typed(
+        typed_request,
+        observability_payload=typed_request.observability_payload,
+    )
+    submitted = _service(calls).execute(request)
+
+    assert submitted == {"status": "submitted", "signal": "BUY"}
+    assert calls[0]["kwargs"]["execution_submit_plan"] == typed_request.execution_decision_summary.buy_submit_plan.as_final_payload()  # type: ignore[union-attr,index]
+    assert request.observability_payload.as_dict()["trace"] == "telemetry"  # type: ignore[union-attr]
 
 
 def test_paper_typed_path_rejects_missing_typed_submit_plan(
@@ -993,7 +1039,7 @@ def test_live_real_order_blocks_non_execution_decision_summary_object(
     _arm_live_real_orders(engine="lot_native")
     calls: list[dict[str, object]] = []
 
-    result = _service(calls).execute(
+    with pytest.raises(TypeError, match="execution_decision_summary_must_be_typed"):
         SignalExecutionRequest(
             signal="BUY",
             ts=123,
@@ -1001,11 +1047,8 @@ def test_live_real_order_blocks_non_execution_decision_summary_object(
             decision_context={},
             execution_decision_summary=object(),  # type: ignore[arg-type]
         )
-    )
 
-    assert result is None
     assert calls == []
-    assert "live_real_order_invalid_typed_execution_summary" in caplog.text
 
 
 def test_execution_decision_summary_rejects_dict_submit_plan_at_core_model_boundary() -> None:

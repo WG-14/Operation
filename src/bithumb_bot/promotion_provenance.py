@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,9 @@ class PromotionArtifactProvenance:
     typed_execution_summary_present: bool
     execution_summary_hash: str
     execution_submit_plan_hash: str
+    runtime_decision_request_hash: str
+    runtime_strategy_set_manifest_hash: str
+    approved_profile_hash: str
     compatibility_fallback: bool
     legacy_context_planning_used: bool
     runtime_replay_planning_error: str | None
@@ -50,6 +54,9 @@ class PromotionArtifactProvenance:
             typed_execution_summary_present=payload.get("typed_execution_summary_present") is True,
             execution_summary_hash=str(payload.get("execution_summary_hash") or ""),
             execution_submit_plan_hash=str(payload.get("execution_submit_plan_hash") or ""),
+            runtime_decision_request_hash=str(payload.get("runtime_decision_request_hash") or ""),
+            runtime_strategy_set_manifest_hash=str(payload.get("runtime_strategy_set_manifest_hash") or ""),
+            approved_profile_hash=str(payload.get("approved_profile_hash") or ""),
             compatibility_fallback=payload.get("compatibility_fallback") is True,
             legacy_context_planning_used=payload.get("legacy_context_planning_used") is True,
             runtime_replay_planning_error=(
@@ -113,6 +120,12 @@ def promotion_provenance_failure_codes(
         failures.append("canonical_promotion_execution_summary_hash_missing")
     if not _valid_hash(provenance.execution_submit_plan_hash):
         failures.append("canonical_promotion_execution_submit_plan_hash_missing")
+    if not _valid_sha256_hash(provenance.runtime_decision_request_hash):
+        failures.append("canonical_promotion_runtime_decision_request_hash_missing")
+    if not _valid_sha256_hash(provenance.runtime_strategy_set_manifest_hash):
+        failures.append("canonical_promotion_runtime_strategy_set_manifest_hash_missing")
+    if not _valid_sha256_hash(provenance.approved_profile_hash):
+        failures.append("canonical_promotion_approved_profile_hash_missing")
     if provenance.decision_authority_source.strip() in LEGACY_DECISION_AUTHORITY_SOURCES:
         failures.append("canonical_promotion_legacy_context_authority")
     if provenance.runtime_replay_planning_error:
@@ -140,6 +153,9 @@ def payload_has_promotion_provenance_markers(payload: dict[str, Any]) -> bool:
             "typed_execution_summary_present",
             "execution_summary_hash",
             "execution_submit_plan_hash",
+            "runtime_decision_request_hash",
+            "runtime_strategy_set_manifest_hash",
+            "approved_profile_hash",
             "legacy_context_planning_used",
             "runtime_replay_planning_error",
             "artifact_grade",
@@ -149,19 +165,44 @@ def payload_has_promotion_provenance_markers(payload: dict[str, Any]) -> bool:
 
 
 def verify_promotion_provenance_artifact_file(path: str | Path) -> dict[str, Any]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    resolved = Path(path).resolve()
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        validation = validate_promotion_artifact_provenance({}).as_dict()
+        validation.update(
+            {
+                "ok": False,
+                "reason_codes": sorted(
+                    set(list(validation["reason_codes"]) + ["promotion_artifact_unreadable"])
+                ),
+                "recommended_next_action": PROMOTION_NEXT_ACTION,
+                "artifact_path": str(resolved),
+                "load_error": str(exc),
+            }
+        )
+        return validation
     if not isinstance(payload, dict):
-        validation = {
-            "ok": False,
-            "reason_codes": ["promotion_artifact_schema_not_object"],
-            "recommended_next_action": PROMOTION_NEXT_ACTION,
-        }
+        validation = validate_promotion_artifact_provenance({}).as_dict()
+        validation["ok"] = False
+        validation["reason_codes"] = sorted(
+            set(list(validation["reason_codes"]) + ["promotion_artifact_schema_not_object"])
+        )
+        validation["recommended_next_action"] = PROMOTION_NEXT_ACTION
+        validation["artifact_path"] = str(resolved)
         return validation
     validation = validate_promotion_artifact_provenance(payload).as_dict()
-    validation["artifact_path"] = str(Path(path).resolve())
+    validation["artifact_path"] = str(resolved)
     return validation
 
 
 def _valid_hash(value: str) -> bool:
     text = str(value or "").strip()
     return text.startswith("sha256:") and len(text) > len("sha256:")
+
+
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _valid_sha256_hash(value: str) -> bool:
+    return bool(_SHA256_RE.fullmatch(str(value or "").strip()))

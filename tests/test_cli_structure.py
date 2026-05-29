@@ -81,6 +81,8 @@ EXPECTED_COMMANDS = {
     "runtime-strategy-set-dump",
     "runtime-strategy-set-lint",
     "replay-decision",
+    "promotion-provenance-verify",
+    "promotion-verify",
     "decision-equivalence",
     "candidate-regime-policy-equivalence-evidence",
     "profile-generate",

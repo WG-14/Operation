@@ -35,6 +35,8 @@ from bithumb_bot.research.lot_native_simulation import LotNativeResearchPosition
 from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.strategy.base import StrategyDecision
 
+VALID_SHA256 = "sha256:" + "b" * 64
+
 
 def _decision(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -117,6 +119,9 @@ def _decision_v2(**overrides: object) -> dict[str, object]:
             "decision_contract_version": 2,
             "strategy_version": "sma_with_filter.research_runtime_contract.v2",
             "strategy_decision_contract_version": "research_sma_decision_contract.v3_entry_exit_risk_exit",
+            "runtime_decision_request_hash": VALID_SHA256,
+            "runtime_strategy_set_manifest_hash": VALID_SHA256,
+            "approved_profile_hash": VALID_SHA256,
             "execution_summary_hash": "sha256:summary",
             "execution_submit_plan_hash": "sha256:plan",
             "execution_plan_bundle_hash": "sha256:bundle",
@@ -683,6 +688,32 @@ def test_promotion_rejects_context_fallback_execution_evidence() -> None:
 
     assert validation.promotion_grade is False
     assert "canonical_promotion_typed_execution_provenance_missing" in validation.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("runtime_decision_request_hash", "canonical_promotion_runtime_decision_request_hash_missing"),
+        (
+            "runtime_strategy_set_manifest_hash",
+            "canonical_promotion_runtime_strategy_set_manifest_hash_missing",
+        ),
+        ("approved_profile_hash", "canonical_promotion_approved_profile_hash_missing"),
+    ],
+)
+def test_promotion_rejects_missing_runtime_binding_hashes(field: str, reason: str) -> None:
+    validation = validate_promotion_artifact(_decision_v2(**{field: ""}))
+
+    assert validation.promotion_grade is False
+    assert field in validation.missing_fields
+    assert reason in validation.reason_codes
+
+
+def test_promotion_accepts_fully_bound_typed_runtime_provenance() -> None:
+    validation = validate_promotion_artifact(_decision_v2())
+
+    assert validation.promotion_grade is True
+    assert validation.reason_codes == ()
 
 
 def test_policy_hashes_are_canonical_diagnostics_not_promotion_required() -> None:

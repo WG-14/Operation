@@ -5,6 +5,8 @@ import json
 from bithumb_bot.profile_cli import cmd_promotion_provenance_verify
 from bithumb_bot.promotion_provenance import validate_promotion_artifact_provenance
 
+HASH = "sha256:" + "a" * 64
+
 
 def _typed_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -16,6 +18,9 @@ def _typed_payload(**overrides: object) -> dict[str, object]:
         "typed_execution_summary_present": True,
         "execution_summary_hash": "sha256:summary",
         "execution_submit_plan_hash": "sha256:submit-or-no-submit-proof",
+        "runtime_decision_request_hash": HASH,
+        "runtime_strategy_set_manifest_hash": HASH,
+        "approved_profile_hash": HASH,
         "compatibility_fallback": False,
         "legacy_context_planning_used": False,
         "runtime_replay_planning_error": "",
@@ -73,6 +78,9 @@ def test_promotion_provenance_verify_cli_reports_structured_failure(tmp_path, ca
     assert captured["authority_plane"] == "typed_execution_plan_bundle"
     assert captured["execution_evidence_source"] == "typed_execution_plan_bundle"
     assert captured["execution_plan_bundle_hash"] == ""
+    assert captured["runtime_decision_request_hash"] == HASH
+    assert captured["runtime_strategy_set_manifest_hash"] == HASH
+    assert captured["approved_profile_hash"] == HASH
     assert captured["typed_execution_summary_present"] is True
     assert captured["compatibility_fallback"] is False
     assert captured["legacy_context_planning_used"] is False
@@ -81,3 +89,37 @@ def test_promotion_provenance_verify_cli_reports_structured_failure(tmp_path, ca
     assert "canonical_promotion_execution_plan_bundle_hash_missing" in captured["reason_codes"]
     assert "canonical_promotion_runtime_replay_planning_error" in captured["reason_codes"]
     assert captured["recommended_next_action"] == "regenerate_with_typed_execution_authority"
+
+
+def test_promotion_provenance_verify_cli_reports_structured_success(tmp_path, capsys) -> None:
+    artifact = tmp_path / "canonical.json"
+    artifact.write_text(json.dumps(_typed_payload()), encoding="utf-8")
+
+    rc = cmd_promotion_provenance_verify(artifact_path=str(artifact))
+
+    captured = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert captured["ok"] is True
+    assert captured["reason_codes"] == []
+    assert captured["artifact_path"] == str(artifact.resolve())
+    assert captured["artifact_grade"] == "promotion_candidate"
+    assert captured["authority_plane"] == "typed_execution_plan_bundle"
+    assert captured["execution_plan_bundle_present"] is True
+    assert captured["typed_execution_summary_present"] is True
+    assert captured["runtime_decision_request_hash"] == HASH
+    assert captured["runtime_strategy_set_manifest_hash"] == HASH
+    assert captured["approved_profile_hash"] == HASH
+
+
+def test_promotion_provenance_rejects_missing_binding_hashes_independently() -> None:
+    cases = {
+        "runtime_decision_request_hash": "canonical_promotion_runtime_decision_request_hash_missing",
+        "runtime_strategy_set_manifest_hash": "canonical_promotion_runtime_strategy_set_manifest_hash_missing",
+        "approved_profile_hash": "canonical_promotion_approved_profile_hash_missing",
+    }
+
+    for field, reason in cases.items():
+        payload = _typed_payload(**{field: ""})
+        result = validate_promotion_artifact_provenance(payload)
+        assert result.ok is False
+        assert reason in result.reason_codes

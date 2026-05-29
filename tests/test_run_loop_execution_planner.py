@@ -141,6 +141,7 @@ def test_diagnostic_legacy_equivalence_cannot_create_promotion_artifact() -> Non
     assert result.context["legacy_context_planning_used"] is True
     assert result.context["compatibility_fallback"] is True
     assert result.context["promotion_grade"] is False
+    assert result.context["artifact_grade"] == "diagnostic_only"
     assert result.context["recommended_next_action"] == "regenerate_decision_with_typed_execution_authority"
 
 
