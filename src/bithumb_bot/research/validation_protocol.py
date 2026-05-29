@@ -4710,16 +4710,25 @@ def _depth_requested_for_manifest(manifest: ExperimentManifest) -> bool:
 
 def _production_evidence_locator_reasons(manifest: ExperimentManifest, evidence: str) -> list[str]:
     values: list[object] = []
+    locator: dict[str, object] | None = None
+    source_uri: str | None = None
     if evidence == "dataset":
-        values.append(manifest.dataset.source_uri)
-        values.extend((manifest.dataset.locator or {}).values())
+        source_uri = manifest.dataset.source_uri
+        locator = manifest.dataset.locator
     elif evidence == "top_of_book" and manifest.dataset.top_of_book is not None:
-        values.append(manifest.dataset.top_of_book.source_uri)
-        values.extend((manifest.dataset.top_of_book.locator or {}).values())
+        source_uri = manifest.dataset.top_of_book.source_uri
+        locator = manifest.dataset.top_of_book.locator
     elif evidence == "depth" and manifest.dataset.depth is not None:
-        values.append(manifest.dataset.depth.source_uri)
-        values.extend((manifest.dataset.depth.locator or {}).values())
+        source_uri = manifest.dataset.depth.source_uri
+        locator = manifest.dataset.depth.locator
+    values.append(source_uri)
+    values.extend((locator or {}).values())
     reasons: list[str] = []
+    if is_production_bound_target(manifest.deployment_tier):
+        if not source_uri and not locator:
+            reasons.append(f"missing_immutable_{evidence}_locator")
+        elif not _has_immutable_locator_material(source_uri=source_uri, locator=locator):
+            reasons.append(f"mutable_{evidence}_locator")
     for value in values:
         text = str(value or "").strip().lower()
         if not text:
@@ -4742,6 +4751,36 @@ def _production_evidence_locator_reasons(manifest: ExperimentManifest, evidence:
     if "mutable_dataset_locator" not in reasons and evidence == "dataset" and reasons:
         reasons.append("mutable_dataset_locator")
     return sorted(set(reasons))
+
+
+def _has_immutable_locator_material(*, source_uri: str | None, locator: dict[str, object] | None) -> bool:
+    material = {str(key).strip().lower(): value for key, value in (locator or {}).items()}
+    immutable_markers = (
+        "version_id",
+        "version",
+        "etag",
+        "content_hash",
+        "source_content_hash",
+        "managed_identity",
+        "snapshot_id",
+        "snapshot_hash",
+        "commit",
+    )
+    if any(str(material.get(key) or "").strip() for key in immutable_markers):
+        return True
+    if bool(material.get("immutable")) or bool(material.get("content_addressed")):
+        return True
+    uri = str(source_uri or "").strip().lower()
+    if uri.startswith(("sha256:", "ipfs://")):
+        return True
+    if uri.startswith("s3://") and (
+        "versionid=" in uri
+        or "version_id=" in uri
+        or "/sha256:" in uri
+        or "sha256:" in uri
+    ):
+        return True
+    return False
 
 
 def _validate_strategy_data_requirements(manifest: ExperimentManifest) -> None:

@@ -251,6 +251,79 @@ def test_unknown_depth_source_fails_at_resolver_not_parser(tmp_path: Path) -> No
         load_dataset_split(db_path=tmp_path / "unused.sqlite", manifest=manifest, split_name="train")
 
 
+def test_sqlite_depth_source_is_not_filtered_by_top_of_book_quote_source(tmp_path: Path) -> None:
+    db_path = tmp_path / "depth_decoupled.sqlite"
+    conn = __import__("sqlite3").connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE candles(
+                ts INTEGER, pair TEXT, interval TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orderbook_depth_levels(
+                ts INTEGER, pair TEXT, source TEXT, observed_at_epoch_sec REAL,
+                side TEXT, level_index INTEGER, price REAL, size REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO candles(ts, pair, interval, open, high, low, close, volume)
+            VALUES (1672531200000, 'KRW-BTC', '1m', 100, 101, 99, 100, 1)
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO orderbook_depth_levels(
+                ts, pair, source, observed_at_epoch_sec, side, level_index, price, size
+            )
+            VALUES (1672531200000, 'KRW-BTC', 'depth-only', NULL, ?, 0, ?, 1)
+            """,
+            (("bid", 99.0), ("ask", 101.0)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    manifest = parse_manifest(
+        {
+            "experiment_id": "depth_decoupled",
+            "hypothesis": "Depth source options are independent from top-of-book source filters.",
+            "strategy_name": "sma_with_filter",
+            "market": "KRW-BTC",
+            "interval": "1m",
+            "dataset": {
+                "source": "sqlite_candles",
+                "snapshot_id": "depth_decoupled",
+                "top_of_book": {
+                    "source": "sqlite_orderbook_top_snapshots",
+                    "quote_source": "top-only",
+                },
+                "depth": {"source": "orderbook_depth_levels"},
+                "train": {"start": "2023-01-01", "end": "2023-01-01"},
+                "validation": {"start": "2023-01-02", "end": "2023-01-02"},
+            },
+            "parameter_space": {"SMA_SHORT": [2], "SMA_LONG": [4]},
+            "cost_model": {"fee_rate": 0.0, "slippage_bps": [0]},
+            "acceptance_gate": {
+                "min_trade_count": 1,
+                "max_mdd_pct": 99,
+                "min_profit_factor": 0.1,
+                "oos_return_must_be_positive": False,
+                "parameter_stability_required": False,
+            },
+        }
+    )
+
+    snapshot = load_dataset_split(db_path=db_path, manifest=manifest, split_name="train")
+
+    assert len(snapshot.orderbook_depth_snapshots) == 1
+    assert snapshot.orderbook_depth_snapshots[0].source == "depth-only"
+
+
 def test_manifest_preserves_adapter_locator_options_and_provenance_fields() -> None:
     manifest = parse_manifest(
         {
@@ -447,6 +520,81 @@ def test_production_bound_adapter_provenance_rejects_mutable_locator() -> None:
     report.payload["content_hash"] = "sha256:test"
 
     with pytest.raises(ResearchValidationError, match="mutable_dataset_locator"):
+        _validate_dataset_adapter_provenance(manifest=manifest, quality_reports={"train": report})
+
+
+def test_production_bound_adapter_provenance_rejects_missing_immutable_locator() -> None:
+    manifest = replace(
+        _manifest("unit_candles_adapter_source"),
+        deployment_tier="paper_candidate",
+    )
+    manifest = replace(
+        manifest,
+        dataset=replace(
+            manifest.dataset,
+            source_content_hash="sha256:content",
+            source_schema_hash="sha256:schema",
+        ),
+    )
+    snapshot = DatasetSnapshot(
+        snapshot_id="quality_non_sqlite",
+        source="unit_candles_adapter_source",
+        market="KRW-BTC",
+        interval="1m",
+        split_name="train",
+        date_range=DateRange(start="2023-01-01", end="2023-01-01"),
+        candles=(Candle(1_672_531_200_000, 100.0, 101.0, 99.0, 100.0, 1.0),),
+    )
+    report = _build_source_agnostic_dataset_quality_report(
+        db_path=None,
+        snapshot=snapshot,
+        adapter_name="unit_candle_adapter",
+        adapter_version="1",
+        adapter_provenance={"unit": {"source": "unit_candles_adapter_source"}},
+    )
+    report.payload["source_content_hash"] = "sha256:content"
+    report.payload["source_schema_hash"] = "sha256:schema"
+    report.payload["content_hash"] = "sha256:test"
+
+    with pytest.raises(ResearchValidationError, match="missing_immutable_dataset_locator"):
+        _validate_dataset_adapter_provenance(manifest=manifest, quality_reports={"train": report})
+
+
+def test_production_bound_adapter_provenance_rejects_wrong_mode_locator() -> None:
+    manifest = replace(
+        _manifest("unit_candles_adapter_source"),
+        deployment_tier="paper_candidate",
+    )
+    manifest = replace(
+        manifest,
+        dataset=replace(
+            manifest.dataset,
+            source_content_hash="sha256:content",
+            source_schema_hash="sha256:schema",
+            source_uri="s3://research/paper/candles.parquet?versionId=v1",
+        ),
+    )
+    snapshot = DatasetSnapshot(
+        snapshot_id="quality_non_sqlite",
+        source="unit_candles_adapter_source",
+        market="KRW-BTC",
+        interval="1m",
+        split_name="train",
+        date_range=DateRange(start="2023-01-01", end="2023-01-01"),
+        candles=(Candle(1_672_531_200_000, 100.0, 101.0, 99.0, 100.0, 1.0),),
+    )
+    report = _build_source_agnostic_dataset_quality_report(
+        db_path=None,
+        snapshot=snapshot,
+        adapter_name="unit_candle_adapter",
+        adapter_version="1",
+        adapter_provenance={"unit": {"source": "unit_candles_adapter_source"}},
+    )
+    report.payload["source_content_hash"] = "sha256:content"
+    report.payload["source_schema_hash"] = "sha256:schema"
+    report.payload["content_hash"] = "sha256:test"
+
+    with pytest.raises(ResearchValidationError, match="wrong_mode_dataset_locator"):
         _validate_dataset_adapter_provenance(manifest=manifest, quality_reports={"train": report})
 
 

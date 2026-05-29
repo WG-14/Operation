@@ -13,7 +13,8 @@
     "source_schema_hash": "sha256:replace_with_reviewed_sqlite_schema_hash",
     "locator": {
       "policy": "managed-db",
-      "identity": "candles_krw_btc_2023_2026_v1"
+      "managed_identity": "candles_krw_btc_2023_2026_v1",
+      "snapshot_hash": "sha256:replace_with_reviewed_managed_snapshot_hash"
     },
     "options": {
       "quality_backend": "sqlite_streaming"
@@ -28,7 +29,8 @@
       "source_schema_hash": "sha256:replace_with_reviewed_top_of_book_schema_hash",
       "locator": {
         "policy": "managed-db",
-        "identity": "orderbook_top_krw_btc_2023_2026_v1"
+        "managed_identity": "orderbook_top_krw_btc_2023_2026_v1",
+        "snapshot_hash": "sha256:replace_with_reviewed_top_snapshot_hash"
       }
     },
     "depth": {
@@ -38,7 +40,11 @@
       "source_schema_hash": "sha256:replace_with_reviewed_depth_schema_hash_when_depth_walk_is_used",
       "locator": {
         "policy": "managed-db",
-        "identity": "orderbook_depth_krw_btc_2023_2026_v1"
+        "managed_identity": "orderbook_depth_krw_btc_2023_2026_v1",
+        "snapshot_hash": "sha256:replace_with_reviewed_depth_snapshot_hash"
+      },
+      "options": {
+        "source_filter": "reviewed_depth_feed"
       }
     },
     "train": {

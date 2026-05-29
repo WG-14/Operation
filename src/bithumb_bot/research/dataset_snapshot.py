@@ -74,6 +74,12 @@ class DatasetSnapshot:
     split_name: str
     date_range: DateRange
     candles: tuple[Candle, ...]
+    source_uri: str | None = None
+    source_content_hash: str | None = None
+    source_schema_hash: str | None = None
+    locator: dict[str, Any] | None = None
+    options: dict[str, Any] | None = None
+    adapter_provenance: dict[str, Any] | None = None
     top_of_book_quotes: tuple[TopOfBookQuote | None, ...] = ()
     top_of_book_event_quotes: tuple[TopOfBookQuote, ...] = ()
     top_of_book_requested: bool = False
@@ -298,6 +304,12 @@ def load_dataset_range(
         split_name=snapshot.split_name,
         date_range=snapshot.date_range,
         candles=snapshot.candles,
+        source_uri=snapshot.source_uri,
+        source_content_hash=snapshot.source_content_hash,
+        source_schema_hash=snapshot.source_schema_hash,
+        locator=snapshot.locator,
+        options=snapshot.options,
+        adapter_provenance=snapshot.adapter_provenance,
         top_of_book_quotes=top_of_book_quotes,
         top_of_book_event_quotes=top_of_book_event_quotes,
         top_of_book_requested=top_of_book_spec is not None,
@@ -373,6 +385,11 @@ def _load_sqlite_dataset_range(
         split_name=split_name,
         date_range=date_range,
         candles=candles,
+        source_uri=manifest.dataset.source_uri,
+        source_content_hash=manifest.dataset.source_content_hash,
+        source_schema_hash=manifest.dataset.source_schema_hash,
+        locator=manifest.dataset.locator,
+        options=manifest.dataset.options,
         top_of_book_requested=top_of_book_spec is not None,
         top_of_book_required=bool(top_of_book_spec.required) if top_of_book_spec is not None else False,
         top_of_book_missing_policy=top_of_book_spec.missing_policy if top_of_book_spec is not None else None,
@@ -515,14 +532,24 @@ def _build_source_agnostic_dataset_quality_report(
         "db_schema_fingerprint": _db_schema_fingerprint(db_path) if db_path is not None and snapshot.source == "sqlite_candles" else None,
         "dataset_content_hash": snapshot.content_hash(),
         "canonical_snapshot_hash": snapshot.content_hash(),
-        "source_content_hash": snapshot.content_hash(),
+        "source_content_hash": snapshot.source_content_hash or snapshot.content_hash(),
         "source_schema_hash": (
-            _db_schema_fingerprint(db_path) if db_path is not None and snapshot.source == "sqlite_candles" else "not_applicable:source_schema_unavailable"
+            snapshot.source_schema_hash
+            or (
+                _db_schema_fingerprint(db_path)
+                if db_path is not None and snapshot.source == "sqlite_candles"
+                else "not_applicable:source_schema_unavailable"
+            )
         ),
         "source_hash_status": "present",
-        "source_schema_hash_status": "present" if snapshot.source == "sqlite_candles" and db_path is not None else "not_applicable",
-        "adapter_provenance": adapter_provenance or {},
-        "adapter_provenance_hash": sha256_prefixed(adapter_provenance or {}),
+        "source_schema_hash_status": (
+            "present"
+            if snapshot.source_schema_hash
+            or (snapshot.source == "sqlite_candles" and db_path is not None)
+            else "not_applicable"
+        ),
+        "adapter_provenance": adapter_provenance or snapshot.adapter_provenance or {},
+        "adapter_provenance_hash": sha256_prefixed(adapter_provenance or snapshot.adapter_provenance or {}),
         "quality_gate_status": "PASS" if not reasons else "FAIL",
         "quality_gate_reasons": reasons,
         "limitations": {
@@ -1224,12 +1251,18 @@ class SQLiteOrderbookDepthAdapter:
     ) -> tuple[OrderbookDepthSnapshot, ...]:
         if context.db_path is None:
             raise ValueError("sqlite_orderbook_depth_adapter_db_path_missing")
+        spec = manifest.dataset.depth
+        options = spec.options if spec is not None else {}
+        source_filter = options.get("quote_source") or options.get("source_filter")
+        parsed_source_filter = str(source_filter).strip() if source_filter is not None else None
+        if parsed_source_filter == "":
+            parsed_source_filter = None
         return _load_orderbook_depth_event_snapshots(
             db_path=context.db_path,
             market=manifest.market,
             interval=manifest.interval,
             candles=candles,
-            source=manifest.dataset.top_of_book.quote_source if manifest.dataset.top_of_book else None,
+            source=parsed_source_filter,
             execution_depth_lookahead_ms=execution_depth_lookahead_ms,
         )
 
@@ -1253,6 +1286,7 @@ class SQLiteOrderbookDepthAdapter:
             "depth_source": self.source,
             "adapter_name": self.adapter_name,
             "adapter_version": self.adapter_version,
+            "options": dict(manifest.dataset.depth.options) if manifest.dataset.depth is not None else {},
             "provenance_policy": "sqlite_orderbook_depth_compatibility_adapter",
         }
 

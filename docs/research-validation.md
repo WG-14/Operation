@@ -611,7 +611,8 @@ Adapters may also use explicit locator/provenance fields. Production-bound manif
     "source_schema_hash": "sha256:replace_with_reviewed_schema_hash",
     "locator": {
       "policy": "managed-db",
-      "identity": "candles_reviewed_2026_05"
+      "managed_identity": "candles_reviewed_2026_05",
+      "snapshot_hash": "sha256:replace_with_reviewed_managed_snapshot_hash"
     },
     "options": {
       "quality_backend": "sqlite_streaming"
@@ -626,7 +627,8 @@ Adapters may also use explicit locator/provenance fields. Production-bound manif
       "source_schema_hash": "sha256:replace_with_reviewed_top_of_book_schema_hash",
       "locator": {
         "policy": "managed-db",
-        "identity": "orderbook_top_reviewed_2026_05"
+        "managed_identity": "orderbook_top_reviewed_2026_05",
+        "snapshot_hash": "sha256:replace_with_reviewed_top_snapshot_hash"
       }
     },
     "depth": {
@@ -636,7 +638,11 @@ Adapters may also use explicit locator/provenance fields. Production-bound manif
       "source_schema_hash": "sha256:replace_with_reviewed_depth_schema_hash",
       "locator": {
         "policy": "managed-db",
-        "identity": "orderbook_depth_reviewed_2026_05"
+        "managed_identity": "orderbook_depth_reviewed_2026_05",
+        "snapshot_hash": "sha256:replace_with_reviewed_depth_snapshot_hash"
+      },
+      "options": {
+        "source_filter": "reviewed_depth_feed"
       }
     },
     "train": {"start": "2023-01-01", "end": "2023-06-30"},
