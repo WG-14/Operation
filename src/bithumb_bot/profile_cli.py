@@ -22,6 +22,7 @@ from .approved_profile import (
     verify_profile_against_runtime,
     write_approved_profile_atomic,
 )
+from .promotion_provenance import verify_promotion_provenance_artifact_file
 from .config import PATH_MANAGER, settings
 from .evidence_chain import evidence_report_failure_payload
 from .evidence_chain import (
@@ -287,6 +288,12 @@ def cmd_profile_promote(
         }
     )
     return 0
+
+
+def cmd_promotion_provenance_verify(*, artifact_path: str) -> int:
+    result = verify_promotion_provenance_artifact_file(artifact_path)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0 if result.get("ok") is True else 1
 
 
 def cmd_decision_equivalence(

@@ -394,6 +394,38 @@ def test_promotion_artifact_rejects_nested_candidate_profile_compatibility_fallb
         verify_promotion_artifact(promotion)
 
 
+def test_profile_verification_rejects_candidate_profile_legacy_provenance_marker() -> None:
+    promotion = _promotion()
+    candidate_profile = dict(promotion["candidate_profile"])  # type: ignore[arg-type]
+    candidate_profile.update(
+        {
+            "authority_plane": "compatibility_context",
+            "decision_authority_source": "legacy_context",
+            "execution_evidence_source": "diagnostic_context_fallback",
+            "execution_plan_bundle_present": False,
+            "execution_plan_bundle_hash": "",
+            "typed_execution_summary_present": False,
+            "execution_summary_hash": "",
+            "execution_submit_plan_hash": "",
+            "compatibility_fallback": True,
+            "legacy_context_planning_used": True,
+            "runtime_replay_planning_error": "",
+            "artifact_grade": "diagnostic_only",
+            "promotion_rejection_reason": "legacy_context_planning_diagnostic_only",
+        }
+    )
+    promotion["candidate_profile"] = candidate_profile
+    promotion["content_hash"] = sha256_prefixed(
+        content_hash_payload({k: v for k, v in promotion.items() if k != "content_hash"})
+    )
+
+    with pytest.raises(
+        ApprovedProfileError,
+        match="candidate_profile_compatibility_fallback_not_promotion_grade",
+    ):
+        verify_promotion_artifact(promotion)
+
+
 def test_profile_generate_refuses_validation_run_required_without_hash(tmp_path: Path) -> None:
     promotion = _promotion(
         validation_run_required=True,

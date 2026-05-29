@@ -402,7 +402,7 @@ def test_malformed_explicit_submit_plan_blocks_executor_without_fallback(
 
     assert result is None
     assert calls == []
-    assert "live_real_order_missing_typed_execution_summary" in caplog.text
+    assert "live_real_order_dict_only_execution_decision_not_authority" in caplog.text
 
 
 def test_explicit_plan_present_but_not_consumed_does_not_call_executor(
@@ -765,7 +765,7 @@ def test_live_real_order_blocks_dict_only_execution_decision_even_with_submit_pl
 
     assert result is None
     assert calls == []
-    assert "live_real_order_missing_typed_execution_summary" in caplog.text
+    assert "live_real_order_dict_only_execution_decision_not_authority" in caplog.text
 
 
 def test_live_real_order_executes_with_typed_authority_and_empty_observability_context() -> None:

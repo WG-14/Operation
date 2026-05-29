@@ -73,7 +73,15 @@ EXECUTION_PLANNING_READINESS_KEYS = frozenset(
 
 
 @dataclass(frozen=True)
-class SignalExecutionRequest:
+class ExecutionObservabilityPayload:
+    payload: Mapping[str, object] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, object]:
+        return {str(key): value for key, value in dict(self.payload).items()}
+
+
+@dataclass(frozen=True)
+class TypedExecutionRequest:
     signal: str
     ts: int
     market_price: float
@@ -81,14 +89,55 @@ class SignalExecutionRequest:
     decision_id: int | None = None
     decision_reason: str | None = None
     exit_rule_name: str | None = None
+    execution_decision_summary: "ExecutionDecisionSummary | None" = None
+    execution_plan_bundle: object | None = None
+    research_execution_context: object | None = None
+
+    def __post_init__(self) -> None:
+        if self.execution_decision_summary is not None and not isinstance(
+            self.execution_decision_summary, ExecutionDecisionSummary
+        ):
+            raise TypeError("execution_decision_summary_must_be_typed")
+
+
+@dataclass(frozen=True)
+class SignalExecutionRequest(TypedExecutionRequest):
     # Compatibility-only aliases. These dicts are non-authoritative
     # observability material and must not be used as live submit authority.
     decision_context: dict[str, object] | None = None
     observability_context: dict[str, object] | None = None
-    observability_payload: dict[str, object] | None = None
-    execution_decision_summary: "ExecutionDecisionSummary | None" = None
-    execution_plan_bundle: object | None = None
-    research_execution_context: object | None = None
+    observability_payload: dict[str, object] | ExecutionObservabilityPayload | None = None
+
+    def __post_init__(self) -> None:
+        # Compatibility adapter: service boundaries validate and fail closed so
+        # old callers can still be rejected without construction-time crashes.
+        return None
+
+    @classmethod
+    def from_typed(
+        cls,
+        typed_request: TypedExecutionRequest,
+        *,
+        observability_payload: ExecutionObservabilityPayload | Mapping[str, object] | None = None,
+    ) -> "SignalExecutionRequest":
+        payload = (
+            observability_payload
+            if isinstance(observability_payload, ExecutionObservabilityPayload)
+            else ExecutionObservabilityPayload(observability_payload or {})
+        )
+        return cls(
+            signal=typed_request.signal,
+            ts=typed_request.ts,
+            market_price=typed_request.market_price,
+            strategy_name=typed_request.strategy_name,
+            decision_id=typed_request.decision_id,
+            decision_reason=typed_request.decision_reason,
+            exit_rule_name=typed_request.exit_rule_name,
+            execution_decision_summary=typed_request.execution_decision_summary,
+            execution_plan_bundle=typed_request.execution_plan_bundle,
+            research_execution_context=typed_request.research_execution_context,
+            observability_payload=payload,
+        )
 
 
 @dataclass(frozen=True)
@@ -685,13 +734,16 @@ def _request_execution_decision_payload(
 
 
 def _request_observability_payload(request: SignalExecutionRequest) -> dict[str, object] | None:
-    return (
+    payload = (
         request.observability_payload
         if request.observability_payload is not None
         else request.observability_context
         if request.observability_context is not None
         else request.decision_context
     )
+    if isinstance(payload, ExecutionObservabilityPayload):
+        return payload.as_dict()
+    return payload
 
 
 class SignalExecutionService(Protocol):

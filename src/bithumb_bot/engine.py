@@ -95,7 +95,9 @@ from .risk import (
 )
 from .execution_service import (
     ExecutionDecisionSummary,
+    ExecutionObservabilityPayload,
     SignalExecutionRequest,
+    TypedExecutionRequest,
     build_signal_execution_service,
     live_execute_signal,
     paper_execute,
@@ -359,7 +361,7 @@ def build_signal_execution_request(
     decision_context: dict[str, object] | None,
     execution_plan_bundle: object | None = None,
 ) -> SignalExecutionRequest:
-    return SignalExecutionRequest(
+    typed_request = TypedExecutionRequest(
         signal=signal,
         ts=ts,
         market_price=market_price,
@@ -368,9 +370,11 @@ def build_signal_execution_request(
         decision_reason=decision_reason,
         exit_rule_name=exit_rule_name,
         execution_decision_summary=execution_decision_summary,
-        decision_context=decision_context,
-        observability_payload=decision_context,
         execution_plan_bundle=execution_plan_bundle,
+    )
+    return SignalExecutionRequest.from_typed(
+        typed_request,
+        observability_payload=ExecutionObservabilityPayload(decision_context or {}),
     )
 
 

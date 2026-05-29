@@ -5,10 +5,12 @@ from typing import Any
 
 from bithumb_bot.execution_service import (
     ExecutionDecisionSummary,
+    ExecutionObservabilityPayload,
     ExecutionReadinessPlanningInput,
-    SignalExecutionRequest,
     ExecutionSubmitPlan,
     ExecutionTargetPlanningInput,
+    SignalExecutionRequest,
+    TypedExecutionRequest,
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
@@ -406,16 +408,20 @@ def execute_research_signal_request(
     research_execution_context: Any,
 ) -> Any:
     service = service_cls(execution_model=execution_model, fee_rate=fee_rate)
+    typed_request = TypedExecutionRequest(
+        signal=str(signal),
+        ts=int(signal_ts),
+        market_price=float(market_price),
+        strategy_name=strategy_name,
+        decision_reason=decision_reason,
+        execution_decision_summary=plan_bundle.summary,
+        execution_plan_bundle=plan_bundle,
+        research_execution_context=research_execution_context,
+    )
     return service.execute(
-        SignalExecutionRequest(
-            signal=str(signal),
-            ts=int(signal_ts),
-            market_price=float(market_price),
-            strategy_name=strategy_name,
-            decision_reason=decision_reason,
-            execution_decision_summary=plan_bundle.summary,
-            execution_plan_bundle=plan_bundle,
-            research_execution_context=research_execution_context,
+        SignalExecutionRequest.from_typed(
+            typed_request,
+            observability_payload=ExecutionObservabilityPayload({}),
         )
     )
 

@@ -442,6 +442,31 @@ class ExecutionPlanner:
     persistence_context_builder: Callable[..., dict[str, object]] = prepare_strategy_decision_persistence_context
     strict_promotion_mode: bool = True
 
+    @property
+    def result_cls(self) -> type[ExecutionPlanningResult]:
+        return ExecutionPlanningResult
+
+    @property
+    def typed_summary_builder(self) -> Callable[..., ExecutionDecisionSummary]:
+        return build_typed_execution_decision_summary
+
+    @staticmethod
+    def live_real_target_delta_performance_gate_applies() -> bool:
+        return _live_real_target_delta_performance_gate_applies()
+
+    def fail_closed_context(
+        self,
+        *,
+        decision_context: dict[str, object],
+        reason_code: str,
+        exc: Exception | None = None,
+    ) -> ExecutionPlanningResult:
+        return self._fail_closed_context(
+            decision_context=decision_context,
+            reason_code=reason_code,
+            exc=exc,
+        )
+
     def plan_envelope(
         self,
         conn,
@@ -789,12 +814,14 @@ class ExecutionPlanner:
                 decision_context=decision_context,
                 reason_code="legacy_context_planning_live_real_order_disabled",
             )
-        return self._plan_diagnostic_context(
+        from .diagnostic_only.execution_planning import plan_legacy_context
+
+        return plan_legacy_context(
+            self,
             conn,
             decision_context=decision_context,
             signal=signal,
             reason=reason,
-            raw_signal=None,
             updated_ts=updated_ts,
         )
 
@@ -864,121 +891,6 @@ class ExecutionPlanner:
             target_policy_metadata={},
             planning_error=planning_error,
         )
-
-    def _plan_diagnostic_context(
-        self,
-        conn,
-        *,
-        decision_context: dict[str, object],
-        signal: str,
-        reason: str,
-        raw_signal: str | None,
-        updated_ts: int,
-        typed_planning_input: ExecutionPlanningInput | None = None,
-    ) -> ExecutionPlanningResult:
-        context = dict(decision_context)
-        try:
-            readiness_payload = self.readiness_snapshot_builder(conn).as_dict()
-            strategy_performance_gate = None
-            if _live_real_target_delta_performance_gate_applies():
-                strategy_performance_gate = self.performance_gate_evaluator(
-                    conn,
-                    strategy_name=str(settings.STRATEGY_NAME),
-                    pair=str(settings.PAIR),
-                )
-            raw_signal_for_target = str(
-                raw_signal or context.get("raw_signal") or context.get("base_signal") or signal
-            )
-            reference_price = context.get("market_price", context.get("last_close", context.get("close")))
-            target_resolution = self.target_state_resolver(
-                conn,
-                readiness_payload=readiness_payload,
-                reference_price=reference_price,
-                raw_signal=raw_signal_for_target,
-                updated_ts=int(updated_ts),
-            )
-            previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
-            target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
-            readiness_payload = {**readiness_payload, **target_policy_metadata}
-            summary_context = dict(context)
-            if typed_planning_input is not None:
-                from .execution_service import build_execution_decision_summary
-
-                summary_context = self._planning_context_from_envelope_input(typed_planning_input)
-                typed_builder = (
-                    build_typed_execution_decision_summary
-                    if self.summary_builder is build_execution_decision_summary
-                    else self.summary_builder
-                )
-                execution_decision_summary = typed_builder(
-                    typed_input=TypedExecutionPlanningInput(
-                        strategy_decision=typed_planning_input.strategy_decision,
-                        candle_ts=typed_planning_input.candle_ts,
-                        market_price=typed_planning_input.market_price,
-                        readiness=ExecutionReadinessPlanningInput.from_payload(
-                            readiness_payload,
-                            target_policy_metadata=target_policy_metadata,
-                        ),
-                        target=ExecutionTargetPlanningInput(
-                            previous_target_exposure_krw=(
-                                None
-                                if previous_target_exposure_krw is None
-                                else float(previous_target_exposure_krw)
-                            ),
-                        ),
-                        observability_context=summary_context,
-                    ),
-                    strategy_performance_gate=strategy_performance_gate,
-                )
-            else:
-                from .execution_service import build_execution_decision_summary
-
-                legacy_summary_kwargs = {
-                    "decision_context": summary_context,
-                    "readiness_payload": readiness_payload,
-                    "raw_signal": raw_signal_for_target,
-                    "final_signal": signal,
-                    "final_reason": reason,
-                    "previous_target_exposure_krw": (
-                        None
-                        if previous_target_exposure_krw is None
-                        else float(previous_target_exposure_krw)
-                    ),
-                    "strategy_performance_gate": strategy_performance_gate,
-                }
-                legacy_builder = (
-                    build_execution_decision_summary
-                    if self.summary_builder is build_typed_execution_decision_summary
-                    else self.summary_builder
-                )
-                execution_decision_summary = legacy_builder(**legacy_summary_kwargs)
-                summary_context["legacy_context_planning_used"] = True
-                summary_context["compatibility_fallback"] = True
-                summary_context["promotion_grade"] = False
-                summary_context["recommended_next_action"] = (
-                    "regenerate_decision_with_typed_execution_authority"
-                )
-            context = self.persistence_context_builder(
-                decision_context=summary_context,
-                execution_decision_summary=execution_decision_summary,
-                readiness_payload=readiness_payload,
-                target_policy_metadata=target_policy_metadata,
-            )
-            execution_decision = dict(context["execution_decision"])  # type: ignore[arg-type]
-            return ExecutionPlanningResult(
-                context=context,
-                execution_decision=execution_decision,
-                execution_decision_summary=execution_decision_summary,
-                readiness_payload=readiness_payload,
-                target_policy_metadata=target_policy_metadata,
-            )
-        except Exception as exc:
-            return self._fail_closed_context(
-                decision_context=context,
-                reason_code="execution_decision_unavailable",
-                exc=exc,
-            )
-
 
 def _primary_submit_plan(
     summary: ExecutionDecisionSummary | None,

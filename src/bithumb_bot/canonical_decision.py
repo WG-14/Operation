@@ -15,6 +15,13 @@ from .position_authority import (
     runtime_state_has_required_lot_native_fields,
     runtime_position_authority_snapshot,
 )
+from .promotion_provenance import (
+    PROMOTION_ARTIFACT_GRADE,
+    PROMOTION_AUTHORITY_PLANE,
+    PROMOTION_EXECUTION_EVIDENCE_SOURCE,
+    PromotionArtifactProvenance,
+    promotion_provenance_failure_codes,
+)
 
 
 def sha256_prefixed(payload: object) -> str:
@@ -241,7 +248,7 @@ class CanonicalDecisionValidation:
     reason_codes: tuple[str, ...]
 
 
-PROMOTION_TYPED_EXECUTION_EVIDENCE_SOURCE = "typed_execution_plan_bundle"
+PROMOTION_TYPED_EXECUTION_EVIDENCE_SOURCE = PROMOTION_EXECUTION_EVIDENCE_SOURCE
 
 
 def canonical_payload_hash(value: object) -> str:
@@ -424,24 +431,29 @@ def _promotion_artifact_provenance_failures(
     payload: dict[str, Any],
     normalized: dict[str, Any],
 ) -> list[tuple[str, str]]:
-    failures: list[tuple[str, str]] = []
-    if bool(payload.get("compatibility_fallback")):
-        failures.append(("compatibility_fallback", "canonical_promotion_compatibility_fallback"))
-    if bool(payload.get("legacy_context_planning_used")):
-        failures.append(("legacy_context_planning_used", "canonical_promotion_legacy_context_planning"))
-    if payload.get("execution_plan_bundle_present") is not True:
-        failures.append(("execution_plan_bundle_present", "canonical_promotion_execution_plan_bundle_missing"))
-    if _canonical_required_missing(normalized.get("execution_plan_bundle_hash")):
-        failures.append(("execution_plan_bundle_hash", "canonical_promotion_execution_plan_bundle_hash_missing"))
-    if payload.get("typed_execution_summary_present") is not True:
-        failures.append(("typed_execution_summary_present", "canonical_promotion_typed_execution_summary_missing"))
-    if str(payload.get("decision_authority_source") or "").strip() == "legacy_context":
-        failures.append(("decision_authority_source", "canonical_promotion_legacy_context_authority"))
-    if str(payload.get("runtime_replay_planning_error") or "").strip():
-        failures.append(("runtime_replay_planning_error", "canonical_promotion_runtime_replay_planning_error"))
-    if str(normalized.get("execution_evidence_source") or "").strip() != PROMOTION_TYPED_EXECUTION_EVIDENCE_SOURCE:
-        failures.append(("execution_evidence_source", "canonical_promotion_typed_execution_provenance_missing"))
-    return failures
+    provenance_payload = dict(payload)
+    provenance_payload["execution_plan_bundle_hash"] = normalized.get("execution_plan_bundle_hash")
+    provenance_payload["execution_evidence_source"] = normalized.get("execution_evidence_source")
+    provenance = PromotionArtifactProvenance.from_payload(provenance_payload)
+    reason_to_field = {
+        "canonical_promotion_compatibility_fallback": "compatibility_fallback",
+        "canonical_promotion_legacy_context_planning": "legacy_context_planning_used",
+        "canonical_promotion_execution_plan_bundle_missing": "execution_plan_bundle_present",
+        "canonical_promotion_execution_plan_bundle_hash_missing": "execution_plan_bundle_hash",
+        "canonical_promotion_typed_execution_summary_missing": "typed_execution_summary_present",
+        "canonical_promotion_execution_summary_hash_missing": "execution_summary_hash",
+        "canonical_promotion_execution_submit_plan_hash_missing": "execution_submit_plan_hash",
+        "canonical_promotion_legacy_context_authority": "decision_authority_source",
+        "canonical_promotion_runtime_replay_planning_error": "runtime_replay_planning_error",
+        "canonical_promotion_typed_execution_provenance_missing": "execution_evidence_source",
+        "canonical_promotion_typed_authority_plane_missing": "authority_plane",
+        "canonical_promotion_artifact_grade_not_promotion": "artifact_grade",
+        "canonical_promotion_rejection_reason_present": "promotion_rejection_reason",
+    }
+    return [
+        (reason_to_field.get(reason, "promotion_provenance"), reason)
+        for reason in promotion_provenance_failure_codes(provenance)
+    ]
 
 
 def runtime_decision_to_canonical_event(
@@ -791,8 +803,8 @@ def _runtime_execution_plan_evidence(
             "execution_plan_bundle_hash": bundle_hash,
             "execution_evidence_source": PROMOTION_TYPED_EXECUTION_EVIDENCE_SOURCE,
             "typed_execution_summary_present": True,
-            "artifact_grade": "promotion_candidate",
-            "authority_plane": "typed_execution_plan_bundle",
+            "artifact_grade": PROMOTION_ARTIFACT_GRADE,
+            "authority_plane": PROMOTION_AUTHORITY_PLANE,
             "promotion_rejection_reason": str(observability.get("runtime_replay_planning_error") or ""),
         }
         if submit_plan is None:

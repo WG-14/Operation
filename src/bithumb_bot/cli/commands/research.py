@@ -97,6 +97,12 @@ def _replay_decision(args: argparse.Namespace, _context) -> int:
     return int(cmd_replay_decision(db_path=str(args.db), strategy_name=str(args.strategy), candle_ts=int(args.candle_ts), readiness_json_path=None if getattr(args, "readiness_json", None) is None else str(args.readiness_json), as_json=bool(args.json)))
 
 
+def _promotion_provenance_verify(args: argparse.Namespace, _context) -> int:
+    from bithumb_bot.profile_cli import cmd_promotion_provenance_verify
+
+    return int(cmd_promotion_provenance_verify(artifact_path=str(args.artifact)))
+
+
 def command_specs() -> list[CommandSpec]:
     common = dict(domain="research", read_only=True, produces_artifact=True, json_output_supported=True)
     return [
@@ -113,6 +119,7 @@ def command_specs() -> list[CommandSpec]:
         make_spec("research-export-decisions", handler=_export_decisions, help="export repo-generated canonical research decisions for a manifest candidate", description="Generate canonical research decision evidence from the repository research path.", build=_build_export_decisions, **common),
         make_spec("runtime-replay-decisions", handler=_runtime_replay, help="replay runtime SMA decisions at explicit closed-candle timestamps", description="Read-only runtime decision replay from SQLite; does not call live broker APIs or submit orders.", build=_build_runtime_replay, **common),
         make_spec("replay-decision", handler=_replay_decision, help="debug one runtime SMA decision at a closed-candle timestamp", description="Read-only single-decision replay from SQLite; does not call live broker APIs or submit orders.", build=_build_replay_decision, **common),
+        make_spec("promotion-provenance-verify", handler=_promotion_provenance_verify, help="verify typed promotion provenance on a canonical artifact", description="Read-only provenance check for promotion/canonical artifacts; rejects compatibility fallback evidence.", build=lambda p: p.add_argument("--artifact", required=True), **common),
         make_spec("decision-equivalence", handler=_decision_equivalence, help="compare research decisions against runtime/paper decision telemetry", description="Credential-free deterministic equivalence check over exported decision JSON artifacts.", build=_build_decision_equivalence, **common),
         make_spec("candidate-regime-policy-equivalence-evidence", handler=_candidate_regime, help="bind promotion-grade decision-equivalence evidence to candidate regime policy equivalence", description="Generate a typed candidate-regime-policy equivalence artifact and optionally bind it into the research backtest report candidate before promotion.", build=_build_candidate_regime, **common),
     ]

@@ -103,6 +103,7 @@ uv run bithumb-bot research-reproduce --promotion <promotion.json>
 uv run bithumb-bot profile-generate --promotion <promotion.json> --mode paper --out <profile.json>
 uv run bithumb-bot research-export-decisions --manifest <manifest.json> --candidate-id <id> --split validation --profile <profile.json> --out <research_decisions.json>
 uv run bithumb-bot runtime-replay-decisions --profile <profile.json> --db <paper_or_runtime.sqlite> --through-ts-list <timestamps.json> --out <runtime_decisions.json>
+uv run bithumb-bot promotion-provenance-verify --artifact <canonical_or_promotion_artifact.json>
 uv run bithumb-bot replay-decision --db <paper_or_runtime.sqlite> --strategy sma_with_filter --candle-ts <closed_candle_ts_ms> --json
 uv run bithumb-bot decision-equivalence --research-decisions <research_decisions.json> --runtime-decisions <runtime_decisions.json> --profile-hash <profile_hash> --market <market> --interval <interval> --data-fingerprint <dataset_or_db_hash>
 uv run bithumb-bot candidate-regime-policy-equivalence-evidence --backtest-report <backtest_report.json> --candidate-id <id> --decision-equivalence-report <decision_equivalence.json> --bind

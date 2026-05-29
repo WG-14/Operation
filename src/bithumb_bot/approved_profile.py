@@ -24,6 +24,10 @@ from .evidence_chain import (
     validate_profile_transition_evidence,
 )
 from .evidence_safety import smoke_only_evidence_rejection_reasons
+from .promotion_provenance import (
+    payload_has_promotion_provenance_markers,
+    validate_promotion_artifact_provenance,
+)
 from .decision_equivalence import compute_decision_equivalence_hash
 from .research.hashing import content_hash_payload, sha256_prefixed
 from .research.lineage import validate_lineage_artifact, LineageValidationError
@@ -345,6 +349,14 @@ def verify_promotion_artifact(payload: dict[str, Any]) -> dict[str, Any]:
             raise ApprovedProfileError(f"{source_name}_compatibility_fallback_not_promotion_grade")
         if source.get("promotion_grade") is False:
             raise ApprovedProfileError(f"{source_name}_promotion_grade_false")
+        if payload_has_promotion_provenance_markers(source):
+            provenance_validation = validate_promotion_artifact_provenance(source)
+            if not provenance_validation.ok:
+                raise ApprovedProfileError(
+                    f"{source_name}_promotion_provenance_not_promotion_grade:"
+                    + ",".join(provenance_validation.reason_codes)
+                    + f",{provenance_validation.recommended_next_action}"
+                )
     expected_profile_hash = payload.get("candidate_profile_hash") or payload.get("verified_candidate_profile_hash")
     if sha256_prefixed(profile) != expected_profile_hash:
         raise ApprovedProfileError("promotion_candidate_profile_hash_mismatch")
