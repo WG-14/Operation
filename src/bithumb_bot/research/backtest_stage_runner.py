@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from . import backtest_support as support
@@ -9,7 +10,7 @@ from .audit_trace_recorder import AuditTraceRecorder
 from .backtest_result_assembler import BacktestResultAssembler
 from .backtest_stages import ReplayTick
 from .decision_payload import DecisionPayloadBuilder
-from .execution_simulator_stage import blocked_execution_evidence
+from .execution_simulator_stage import ExecutionSimulationRequest, blocked_execution_evidence
 from .execution_model import FixedBpsExecutionModel
 from .execution_timing import candle_close_ts
 from .experiment_manifest import ExecutionTimingPolicy, legacy_research_portfolio_policy
@@ -17,6 +18,309 @@ from .metrics_contract import EquityPoint
 from .portfolio_ledger import PortfolioLedger
 from .stage_trace_recorder import StageTraceRecorder
 from .strategy_spec import exit_policy_from_parameters, exit_policy_hash, strategy_spec_for_name
+
+
+@dataclass(frozen=True)
+class BacktestEventProcessResult:
+    mark_boundary_ts: int
+    mark_cash: float
+    mark_qty: float
+    retained_equity: bool
+    decision_payload: dict[str, object]
+
+
+@dataclass
+class BacktestEventProcessor:
+    """Coordinates one replay tick through the stage-owned authority path."""
+
+    dataset: Any
+    strategy_name: str
+    parameter_values: dict[str, Any]
+    fee_rate: float
+    slippage_bps: float
+    timing_policy: Any
+    execution_model: Any
+    portfolio_policy: Any
+    strategy_plugin: Any
+    strategy_spec: Any
+    active_exit_policy: dict[str, Any]
+    active_exit_policy_hash: str
+    buy_fraction: float
+    run_context: Any
+    ledger: PortfolioLedger
+    accumulator: Any
+    payload_builder: DecisionPayloadBuilder
+    audit_recorder: AuditTraceRecorder
+    trace_recorder: StageTraceRecorder
+    strategy_evaluator: Any
+    risk_gate: Any
+    execution_simulator: Any
+    metrics_collector: Any | None
+    experiment_recorder: Any | None
+    dataset_content_hash: str
+    warnings: list[str]
+    decisions: list[dict[str, object]]
+    regime_snapshots: list[dict[str, object]]
+    regime_coverage_accumulator: Any
+
+    def process_tick(self, *, tick: ReplayTick, event_number: int) -> BacktestEventProcessResult:
+        event = tick.event
+        candle = tick.candle
+        mark_boundary_ts = candle_close_ts(candle, interval=self.dataset.interval)
+        decision_boundary_ts = int(event.decision_ts)
+        tick_state = self.ledger.begin_tick(
+            mark_boundary_ts=mark_boundary_ts,
+            decision_boundary_ts=decision_boundary_ts,
+            candle_ts=int(candle.ts),
+            close=float(candle.close),
+        )
+        mark_cash = tick_state.mark_cash
+        mark_qty = tick_state.mark_qty
+        sellable_qty = tick_state.sellable_qty
+        event_extra = event.extra_payload if isinstance(event.extra_payload, dict) else {}
+        regime_snapshot = dict(
+            event_extra.get("regime_snapshot")
+            or {"composite_regime": "strategy_neutral_not_evaluated"}
+        )
+        self.regime_coverage_accumulator.update(regime_snapshot)
+        if self.accumulator.retain_full_detail():
+            self.regime_snapshots.append(regime_snapshot)
+
+        policy_position = self.ledger.snapshot_for_policy(
+            candle_ts=int(candle.ts),
+            market_price=float(candle.close),
+        )
+        replay_tick_hash = canonical_payload_hash(
+            {
+                "candle_ts": int(tick.candle_ts),
+                "decision_ts": int(tick.decision_ts),
+                "raw_signal": event.raw_signal,
+                "final_signal": event.final_signal,
+                "reason": event.reason,
+            }
+        )
+        position_snapshot_hash = canonical_payload_hash(
+            policy_position.as_dict() if hasattr(policy_position, "as_dict") else vars(policy_position)
+        )
+        strategy_envelope = self.strategy_evaluator.evaluate(
+            tick,
+            policy_position,
+            {
+                "dataset": self.dataset,
+                "strategy_name": self.strategy_name,
+                "parameter_values": self.parameter_values,
+                "fee_rate": self.fee_rate,
+                "slippage_bps": self.slippage_bps,
+                "active_exit_policy": self.active_exit_policy,
+                "buy_fraction": self.buy_fraction,
+                "run_context": self.run_context,
+            },
+        )
+        strategy_decision_hash = canonical_payload_hash(
+            {
+                "replay_fingerprint_hash": strategy_envelope.replay_fingerprint_hash,
+                "compatibility_fallback": strategy_envelope.compatibility_fallback,
+                "unsupported_reason": strategy_envelope.unsupported_reason,
+                "decision_hash": (
+                    getattr(strategy_envelope.decision, "policy_decision_hash", "")
+                    if strategy_envelope.decision is not None
+                    else ""
+                ),
+            }
+        )
+        self.trace_recorder.record_strategy(
+            replay_tick_hash=replay_tick_hash,
+            position_snapshot_hash=position_snapshot_hash,
+            strategy_decision_hash=strategy_decision_hash,
+            compatibility_fallback=bool(strategy_envelope.compatibility_fallback),
+            unsupported_reason=strategy_envelope.unsupported_reason,
+            recommended_next_action=strategy_envelope.recommended_next_action,
+        )
+        policy_decision = strategy_envelope.decision
+        risk_decision = self.risk_gate.evaluate(
+            policy_decision,
+            policy_position,
+            {
+                "candle_ts": int(candle.ts),
+                "close": float(candle.close),
+            },
+            {
+                "qty": self.ledger.qty,
+                **self.ledger.portfolio_snapshot(tick_state),
+            },
+            {
+                "strategy_plugin": self.strategy_plugin,
+                "event": event,
+                "active_exit_policy": self.active_exit_policy,
+                "parameter_values": self.parameter_values,
+                "fee_rate": self.fee_rate,
+                "strategy_envelope": strategy_envelope,
+            },
+        )
+        risk_gate_hash = risk_decision.evidence_hash
+        self.trace_recorder.record_risk(
+            input_hash=strategy_decision_hash,
+            risk_gate_hash=risk_gate_hash,
+            reason_code=risk_decision.reason_code,
+        )
+        action = risk_decision.final_signal
+        decision_payload_qty = float(self.ledger.qty)
+        decision_payload_sellable_qty = float(sellable_qty)
+        if action in {"BUY", "SELL"}:
+            outcome = self.execution_simulator.execute(
+                ExecutionSimulationRequest(
+                    dataset=self.dataset,
+                    candle=candle,
+                    candle_index=int(tick.candle_index),
+                    event=event,
+                    ledger=self.ledger,
+                    timing_policy=self.timing_policy,
+                    execution_model=self.execution_model,
+                    fee_rate=self.fee_rate,
+                    strategy_name=self.strategy_plugin.name,
+                    action=action,
+                    decision_reason=risk_decision.reason_code,
+                    regime_snapshot=regime_snapshot,
+                    decision_hash=str(strategy_envelope.replay_fingerprint_hash or strategy_decision_hash),
+                    sellable_qty=sellable_qty,
+                    buy_fraction=self.buy_fraction,
+                    promotion_grade_policy_required=bool(
+                        strategy_envelope.provenance.get("promotion_grade_policy_required")
+                    ),
+                    allow_execution_compatibility_fallback=bool(
+                        strategy_envelope.provenance.get("allow_execution_compatibility_fallback")
+                    ),
+                    policy_drives_execution=True,
+                    policy_decision=policy_decision,
+                    exit_rule=risk_decision.exit_rule,
+                    exit_reason=risk_decision.exit_reason,
+                )
+            )
+            execution_evidence = dict(outcome.evidence)
+            self.warnings.extend(outcome.warnings)
+            application = self.ledger.apply_execution_outcome(
+                outcome,
+                mark_boundary_ts=mark_boundary_ts,
+                mark_cash=mark_cash,
+                mark_qty=mark_qty,
+            )
+            mark_cash = application.mark_cash
+            mark_qty = application.mark_qty
+            if application.trade_recorded:
+                _record_audit_execution(
+                    self.audit_recorder,
+                    self.run_context,
+                    self.warnings,
+                    self.trace_recorder,
+                    input_hash=canonical_payload_hash(self.ledger.trade_ledger[-1]),
+                    trade=self.ledger.trade_ledger[-1],
+                )
+                self.ledger.apply_pending_fills(decision_boundary_ts)
+            execution_plan_hash = canonical_payload_hash(execution_evidence)
+            fill_hash = canonical_payload_hash(
+                outcome.fill.as_dict() if outcome.fill is not None and hasattr(outcome.fill, "as_dict") else {}
+            )
+        else:
+            execution_evidence = blocked_execution_evidence(risk_decision.reason_code)
+            execution_plan_hash = canonical_payload_hash(execution_evidence)
+            fill_hash = canonical_payload_hash({})
+        self.trace_recorder.record_execution(
+            input_hash=risk_gate_hash,
+            execution_plan_hash=execution_plan_hash,
+            fill_hash=fill_hash,
+            reason_code=str(execution_evidence.get("execution_plan_reason_code") or risk_decision.reason_code),
+        )
+
+        retain_equity = self.accumulator.retain_equity_point()
+        self.ledger.mark_tick_equity(
+            ts=mark_boundary_ts,
+            mark_price=float(candle.close),
+            cash=mark_cash,
+            qty=mark_qty,
+        )
+        self.trace_recorder.record_ledger_and_equity(
+            execution_plan_hash=execution_plan_hash,
+            ledger_snapshot=self.ledger.portfolio_snapshot(),
+            mark_boundary_ts=mark_boundary_ts,
+            mark_cash=mark_cash,
+            mark_qty=mark_qty,
+            mark_price=float(candle.close),
+        )
+        if not retain_equity and self.ledger.equity_curve:
+            self.ledger.equity_curve.pop()
+        self.accumulator.update_equity(retained=retain_equity, ts=mark_boundary_ts, asset_qty=mark_qty)
+        decision_payload = _build_decision_observability_payload(
+            payload_builder=self.payload_builder,
+            trace_recorder=self.trace_recorder,
+            warnings=self.warnings,
+            dataset=self.dataset,
+            dataset_content_hash=self.dataset_content_hash,
+            parameter_values=self.parameter_values,
+            strategy_plugin=self.strategy_plugin,
+            strategy_spec=self.strategy_spec,
+            exit_policy=self.active_exit_policy,
+            exit_policy_hash=self.active_exit_policy_hash,
+            fee_rate=self.fee_rate,
+            slippage_bps=self.slippage_bps,
+            timing_policy=self.timing_policy,
+            portfolio_policy=self.portfolio_policy,
+            event=event,
+            decision_boundary_ts=decision_boundary_ts,
+            strategy_envelope=strategy_envelope,
+            risk_decision=risk_decision,
+            policy_position=policy_position,
+            policy_decision=policy_decision,
+            regime_snapshot=regime_snapshot,
+            qty=decision_payload_qty,
+            sellable_qty=decision_payload_sellable_qty,
+            execution_evidence=execution_evidence,
+            input_hash=execution_plan_hash,
+        )
+        retain_decision = self.accumulator.retain_decision()
+        if retain_decision:
+            self.decisions.append(decision_payload)
+        self.accumulator.update_decision(decision_payload, retained=retain_decision)
+        _record_audit_decision(
+            self.audit_recorder,
+            self.run_context,
+            self.warnings,
+            self.trace_recorder,
+            input_hash=canonical_payload_hash(decision_payload),
+            decision_payload=decision_payload,
+        )
+        _record_audit_equity_mark(
+            self.audit_recorder,
+            self.run_context,
+            self.warnings,
+            self.trace_recorder,
+            input_hash=canonical_payload_hash(
+                {
+                    "stage": "tick_equity",
+                    "ts": mark_boundary_ts,
+                    "cash": mark_cash,
+                    "asset_qty": mark_qty,
+                }
+            ),
+            ts=mark_boundary_ts,
+            equity=mark_cash + mark_qty * float(candle.close),
+            cash=mark_cash,
+            asset_qty=mark_qty,
+        )
+        _flush_stage_trace_observability(
+            self.trace_recorder,
+            self.warnings,
+            count=5,
+            metrics_collector=self.metrics_collector,
+            experiment_recorder=self.experiment_recorder,
+            event_number=event_number,
+        )
+        return BacktestEventProcessResult(
+            mark_boundary_ts=mark_boundary_ts,
+            mark_cash=mark_cash,
+            mark_qty=mark_qty,
+            retained_equity=retain_equity,
+            decision_payload=decision_payload,
+        )
 
 
 def run_stage_owned_decision_event_backtest(
@@ -119,256 +423,39 @@ def run_stage_owned_decision_event_backtest(
         asset_qty=ledger.qty,
     )
 
+    event_processor = BacktestEventProcessor(
+        dataset=dataset,
+        strategy_name=strategy_name,
+        parameter_values=parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        timing_policy=timing_policy,
+        execution_model=model,
+        portfolio_policy=policy,
+        strategy_plugin=strategy_plugin,
+        strategy_spec=strategy_spec,
+        active_exit_policy=active_exit_policy,
+        active_exit_policy_hash=active_exit_policy_hash,
+        buy_fraction=buy_fraction,
+        run_context=run_context,
+        ledger=ledger,
+        accumulator=accumulator,
+        payload_builder=payload_builder,
+        audit_recorder=audit_recorder,
+        trace_recorder=trace_recorder,
+        strategy_evaluator=strategy_evaluator,
+        risk_gate=risk_gate,
+        execution_simulator=execution_simulator,
+        metrics_collector=metrics_collector,
+        experiment_recorder=experiment_recorder,
+        dataset_content_hash=dataset_content_hash,
+        warnings=warnings,
+        decisions=decisions,
+        regime_snapshots=regime_snapshots,
+        regime_coverage_accumulator=regime_coverage_accumulator,
+    )
     for event_number, tick in enumerate(prepared_ticks, start=1):
-        event = tick.event
-        candle = tick.candle
-        mark_boundary_ts = candle_close_ts(candle, interval=dataset.interval)
-        decision_boundary_ts = int(event.decision_ts)
-        tick_state = ledger.begin_tick(
-            mark_boundary_ts=mark_boundary_ts,
-            decision_boundary_ts=decision_boundary_ts,
-            candle_ts=int(candle.ts),
-            close=float(candle.close),
-        )
-        mark_cash = tick_state.mark_cash
-        mark_qty = tick_state.mark_qty
-        sellable_qty = tick_state.sellable_qty
-        event_extra = event.extra_payload if isinstance(event.extra_payload, dict) else {}
-        regime_snapshot = dict(
-            event_extra.get("regime_snapshot")
-            or {"composite_regime": "strategy_neutral_not_evaluated"}
-        )
-        regime_coverage_accumulator.update(regime_snapshot)
-        if accumulator.retain_full_detail():
-            regime_snapshots.append(regime_snapshot)
-
-        policy_position = ledger.snapshot_for_policy(
-            candle_ts=int(candle.ts),
-            market_price=float(candle.close),
-        )
-        replay_tick_hash = canonical_payload_hash(
-            {
-                "candle_ts": int(tick.candle_ts),
-                "decision_ts": int(tick.decision_ts),
-                "raw_signal": event.raw_signal,
-                "final_signal": event.final_signal,
-                "reason": event.reason,
-            }
-        )
-        position_snapshot_hash = canonical_payload_hash(
-            policy_position.as_dict() if hasattr(policy_position, "as_dict") else vars(policy_position)
-        )
-        strategy_envelope = strategy_evaluator.evaluate(
-            tick,
-            policy_position,
-            {
-                "dataset": dataset,
-                "strategy_name": strategy_name,
-                "parameter_values": parameter_values,
-                "fee_rate": fee_rate,
-                "slippage_bps": slippage_bps,
-                "active_exit_policy": active_exit_policy,
-                "buy_fraction": buy_fraction,
-                "run_context": run_context,
-            },
-        )
-        strategy_decision_hash = canonical_payload_hash(
-            {
-                "replay_fingerprint_hash": strategy_envelope.replay_fingerprint_hash,
-                "compatibility_fallback": strategy_envelope.compatibility_fallback,
-                "unsupported_reason": strategy_envelope.unsupported_reason,
-                "decision_hash": (
-                    getattr(strategy_envelope.decision, "policy_decision_hash", "")
-                    if strategy_envelope.decision is not None
-                    else ""
-                ),
-            }
-        )
-        trace_recorder.record_strategy(
-            replay_tick_hash=replay_tick_hash,
-            position_snapshot_hash=position_snapshot_hash,
-            strategy_decision_hash=strategy_decision_hash,
-            compatibility_fallback=bool(strategy_envelope.compatibility_fallback),
-            unsupported_reason=strategy_envelope.unsupported_reason,
-            recommended_next_action=strategy_envelope.recommended_next_action,
-        )
-        policy_decision = strategy_envelope.decision
-        risk_decision = risk_gate.evaluate(
-            policy_decision,
-            policy_position,
-            {
-                "candle_ts": int(candle.ts),
-                "close": float(candle.close),
-            },
-            {
-                "qty": ledger.qty,
-                **ledger.portfolio_snapshot(tick_state),
-            },
-            {
-                "strategy_plugin": strategy_plugin,
-                "event": event,
-                "active_exit_policy": active_exit_policy,
-                "parameter_values": parameter_values,
-                "fee_rate": fee_rate,
-                "strategy_envelope": strategy_envelope,
-            },
-        )
-        risk_gate_hash = risk_decision.evidence_hash
-        trace_recorder.record_risk(
-            input_hash=strategy_decision_hash,
-            risk_gate_hash=risk_gate_hash,
-            reason_code=risk_decision.reason_code,
-        )
-        action = risk_decision.final_signal
-        execution_evidence: dict[str, object]
-        decision_payload_qty = float(ledger.qty)
-        decision_payload_sellable_qty = float(sellable_qty)
-        if action in {"BUY", "SELL"}:
-            outcome = execution_simulator.execute(
-                dataset=dataset,
-                candle=candle,
-                candle_index=int(tick.candle_index),
-                event=event,
-                ledger=ledger,
-                timing_policy=timing_policy,
-                execution_model=model,
-                fee_rate=fee_rate,
-                strategy_name=strategy_plugin.name,
-                action=action,
-                decision_reason=risk_decision.reason_code,
-                regime_snapshot=regime_snapshot,
-                decision_hash=str(strategy_envelope.replay_fingerprint_hash or strategy_decision_hash),
-                sellable_qty=sellable_qty,
-                buy_fraction=buy_fraction,
-                promotion_grade_policy_required=bool(
-                    strategy_envelope.provenance.get("promotion_grade_policy_required")
-                ),
-                allow_execution_compatibility_fallback=bool(
-                    strategy_envelope.provenance.get("allow_execution_compatibility_fallback")
-                ),
-                policy_drives_execution=True,
-                policy_decision=policy_decision,
-                exit_rule=risk_decision.exit_rule,
-                exit_reason=risk_decision.exit_reason,
-            )
-            execution_evidence = dict(outcome.evidence)
-            warnings.extend(outcome.warnings)
-            application = ledger.apply_execution_outcome(
-                outcome,
-                mark_boundary_ts=mark_boundary_ts,
-                mark_cash=mark_cash,
-                mark_qty=mark_qty,
-            )
-            mark_cash = application.mark_cash
-            mark_qty = application.mark_qty
-            if application.trade_recorded:
-                _record_audit_execution(
-                    audit_recorder,
-                    run_context,
-                    warnings,
-                    trace_recorder,
-                    input_hash=canonical_payload_hash(ledger.trade_ledger[-1]),
-                    trade=ledger.trade_ledger[-1],
-                )
-                ledger.apply_pending_fills(decision_boundary_ts)
-            execution_plan_hash = canonical_payload_hash(execution_evidence)
-            fill_hash = canonical_payload_hash(
-                outcome.fill.as_dict() if outcome.fill is not None and hasattr(outcome.fill, "as_dict") else {}
-            )
-        else:
-            execution_evidence = blocked_execution_evidence(risk_decision.reason_code)
-            execution_plan_hash = canonical_payload_hash(execution_evidence)
-            fill_hash = canonical_payload_hash({})
-        trace_recorder.record_execution(
-            input_hash=risk_gate_hash,
-            execution_plan_hash=execution_plan_hash,
-            fill_hash=fill_hash,
-            reason_code=str(execution_evidence.get("execution_plan_reason_code") or risk_decision.reason_code),
-        )
-
-        retain_equity = accumulator.retain_equity_point()
-        ledger.mark_tick_equity(
-            ts=mark_boundary_ts,
-            mark_price=float(candle.close),
-            cash=mark_cash,
-            qty=mark_qty,
-        )
-        trace_recorder.record_ledger_and_equity(
-            execution_plan_hash=execution_plan_hash,
-            ledger_snapshot=ledger.portfolio_snapshot(),
-            mark_boundary_ts=mark_boundary_ts,
-            mark_cash=mark_cash,
-            mark_qty=mark_qty,
-            mark_price=float(candle.close),
-        )
-        if not retain_equity and ledger.equity_curve:
-            ledger.equity_curve.pop()
-        accumulator.update_equity(retained=retain_equity, ts=mark_boundary_ts, asset_qty=mark_qty)
-        decision_payload = _build_decision_observability_payload(
-            payload_builder=payload_builder,
-            trace_recorder=trace_recorder,
-            warnings=warnings,
-            dataset=dataset,
-            dataset_content_hash=dataset_content_hash,
-            parameter_values=parameter_values,
-            strategy_plugin=strategy_plugin,
-            strategy_spec=strategy_spec,
-            exit_policy=active_exit_policy,
-            exit_policy_hash=active_exit_policy_hash,
-            fee_rate=fee_rate,
-            slippage_bps=slippage_bps,
-            timing_policy=timing_policy,
-            portfolio_policy=policy,
-            event=event,
-            decision_boundary_ts=decision_boundary_ts,
-            strategy_envelope=strategy_envelope,
-            risk_decision=risk_decision,
-            policy_position=policy_position,
-            policy_decision=policy_decision,
-            regime_snapshot=regime_snapshot,
-            qty=decision_payload_qty,
-            sellable_qty=decision_payload_sellable_qty,
-            execution_evidence=execution_evidence,
-            input_hash=execution_plan_hash,
-        )
-        retain_decision = accumulator.retain_decision()
-        if retain_decision:
-            decisions.append(decision_payload)
-        accumulator.update_decision(decision_payload, retained=retain_decision)
-        _record_audit_decision(
-            audit_recorder,
-            run_context,
-            warnings,
-            trace_recorder,
-            input_hash=canonical_payload_hash(decision_payload),
-            decision_payload=decision_payload,
-        )
-        _record_audit_equity_mark(
-            audit_recorder,
-            run_context,
-            warnings,
-            trace_recorder,
-            input_hash=canonical_payload_hash(
-                {
-                    "stage": "tick_equity",
-                    "ts": mark_boundary_ts,
-                    "cash": mark_cash,
-                    "asset_qty": mark_qty,
-                }
-            ),
-            ts=mark_boundary_ts,
-            equity=mark_cash + mark_qty * float(candle.close),
-            cash=mark_cash,
-            asset_qty=mark_qty,
-        )
-        _flush_stage_trace_observability(
-            trace_recorder,
-            warnings,
-            count=5,
-            metrics_collector=metrics_collector,
-            experiment_recorder=experiment_recorder,
-            event_number=event_number,
-        )
+        event_processor.process_tick(tick=tick, event_number=event_number)
         accumulator.maybe_emit_heartbeat(event_number)
         accumulator.check_limits(candles_processed=event_number, trades=ledger.trade_ledger)
 

@@ -24,6 +24,59 @@ class ExecutionSimulationOutcome:
 
 
 @dataclass(frozen=True)
+class ExecutionSimulationRequest:
+    dataset: Any
+    candle: Any
+    candle_index: int
+    event: Any
+    ledger: Any
+    timing_policy: Any
+    execution_model: Any
+    fee_rate: float
+    strategy_name: str
+    action: str
+    decision_reason: str
+    regime_snapshot: dict[str, object]
+    decision_hash: str
+    sellable_qty: float
+    buy_fraction: float
+    promotion_grade_policy_required: bool
+    allow_execution_compatibility_fallback: bool
+    policy_drives_execution: bool
+    policy_decision: Any | None
+    exit_rule: str = ""
+    exit_reason: str = ""
+
+    @classmethod
+    def from_kwargs(cls, payload: dict[str, Any]) -> ExecutionSimulationRequest:
+        return cls(
+            dataset=payload["dataset"],
+            candle=payload["candle"],
+            candle_index=int(payload["candle_index"]),
+            event=payload["event"],
+            ledger=payload["ledger"],
+            timing_policy=payload["timing_policy"],
+            execution_model=payload["execution_model"],
+            fee_rate=float(payload["fee_rate"]),
+            strategy_name=str(payload["strategy_name"]),
+            action=str(payload["action"]),
+            decision_reason=str(payload["decision_reason"]),
+            regime_snapshot=dict(payload["regime_snapshot"]),
+            decision_hash=str(payload.get("decision_hash") or ""),
+            sellable_qty=float(payload["sellable_qty"]),
+            buy_fraction=float(payload["buy_fraction"]),
+            promotion_grade_policy_required=bool(payload["promotion_grade_policy_required"]),
+            allow_execution_compatibility_fallback=bool(
+                payload["allow_execution_compatibility_fallback"]
+            ),
+            policy_drives_execution=bool(payload.get("policy_drives_execution", True)),
+            policy_decision=payload.get("policy_decision"),
+            exit_rule=str(payload.get("exit_rule") or ""),
+            exit_reason=str(payload.get("exit_reason") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class DefaultExecutionSimulator:
     """Typed execution planning and virtual fill authority boundary."""
 
@@ -31,28 +84,38 @@ class DefaultExecutionSimulator:
         return state
 
     def execute(self, *args: Any, **kwargs: Any) -> ExecutionSimulationOutcome:
-        action = str(kwargs["action"]).upper()
+        if args:
+            if len(args) != 1 or kwargs or not isinstance(args[0], ExecutionSimulationRequest):
+                raise TypeError("execution_simulator_requires_execution_simulation_request")
+            return self.execute_request(args[0])
+        return self.execute_request(ExecutionSimulationRequest.from_kwargs(kwargs))
+
+    def execute_request(self, request: ExecutionSimulationRequest) -> ExecutionSimulationOutcome:
+        action = str(request.action).upper()
         if action not in {"BUY", "SELL"}:
             return ExecutionSimulationOutcome(fill=None)
-        dataset = kwargs["dataset"]
-        candle = kwargs["candle"]
-        index = int(kwargs["candle_index"])
-        event = kwargs["event"]
-        ledger = kwargs["ledger"]
-        timing_policy = kwargs["timing_policy"]
-        model = kwargs["execution_model"]
-        fee_rate = float(kwargs["fee_rate"])
-        strategy_name = str(kwargs["strategy_name"])
-        decision_reason = str(kwargs["decision_reason"])
-        regime_snapshot = dict(kwargs["regime_snapshot"])
-        decision_hash = str(kwargs.get("decision_hash") or "")
-        sellable_qty = float(kwargs["sellable_qty"])
-        buy_fraction = float(kwargs["buy_fraction"])
-        promotion_grade_policy_required = bool(kwargs["promotion_grade_policy_required"])
-        allow_execution_compatibility_fallback = bool(kwargs["allow_execution_compatibility_fallback"])
-        policy_drives_execution = bool(kwargs.get("policy_drives_execution", True))
-        policy_decision = kwargs.get("policy_decision")
-        plan_bundle_builder = _compat_attr("_research_execution_plan_bundle", _default_research_execution_plan_bundle)
+        dataset = request.dataset
+        candle = request.candle
+        index = int(request.candle_index)
+        event = request.event
+        ledger = request.ledger
+        timing_policy = request.timing_policy
+        model = request.execution_model
+        fee_rate = float(request.fee_rate)
+        strategy_name = str(request.strategy_name)
+        decision_reason = str(request.decision_reason)
+        regime_snapshot = dict(request.regime_snapshot)
+        decision_hash = str(request.decision_hash or "")
+        sellable_qty = float(request.sellable_qty)
+        buy_fraction = float(request.buy_fraction)
+        promotion_grade_policy_required = bool(request.promotion_grade_policy_required)
+        allow_execution_compatibility_fallback = bool(request.allow_execution_compatibility_fallback)
+        policy_drives_execution = bool(request.policy_drives_execution)
+        policy_decision = request.policy_decision
+        plan_bundle_builder = _compat_attr(
+            "_research_execution_plan_bundle",
+            _default_research_execution_plan_bundle,
+        )
         plan_bundle = plan_bundle_builder(
             side=action,
             cash=float(ledger.cash),
@@ -207,8 +270,8 @@ class DefaultExecutionSimulator:
                 exit_price=exec_price,
                 entry_regime_snapshot=ledger.entry_regime_snapshot,
                 exit_regime_snapshot=regime_snapshot,
-                exit_rule=str(kwargs.get("exit_rule") or ""),
-                exit_reason=str(kwargs.get("exit_reason") or ""),
+                exit_rule=str(request.exit_rule or ""),
+                exit_reason=str(request.exit_reason or ""),
                 path=ledger.open_trade_path,
                 entry_decision_hash=ledger.entry_decision_hash,
                 exit_decision_hash=decision_hash,

@@ -96,7 +96,7 @@ class RiskGate(Protocol):
 
 
 class ExecutionSimulatorStage(Protocol):
-    def execute(self, *args: Any, **kwargs: Any) -> Any:
+    def execute(self, request: Any) -> Any:
         ...
 
 

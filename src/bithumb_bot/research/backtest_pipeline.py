@@ -34,7 +34,7 @@ execution_event_summary = support.execution_event_summary
 
 
 class ExecutionSimulator(Protocol):
-    def execute(self, *args: Any, **kwargs: Any) -> Any:
+    def execute(self, request: object) -> Any:
         ...
 
 

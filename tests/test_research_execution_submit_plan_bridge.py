@@ -12,7 +12,7 @@ from bithumb_bot.research.backtest_kernel import (
     execution_submit_plan_to_research_request,
 )
 from bithumb_bot.research.execution_model import FixedBpsExecutionModel
-from bithumb_bot.research.execution_simulator_stage import DefaultExecutionSimulator
+from bithumb_bot.research.execution_simulator_stage import DefaultExecutionSimulator, ExecutionSimulationRequest
 
 
 def _typed_decision(*, raw_signal: str = "BUY", final_signal: str = "BUY") -> StrategyDecisionV2:
@@ -471,6 +471,35 @@ def test_execution_simulator_is_independent_stage() -> None:
 
     assert simulator.run(object()) is not None
     assert DefaultExecutionSimulator.__module__ == "bithumb_bot.research.execution_simulator_stage"
+
+
+def test_execution_simulator_accepts_typed_request_boundary() -> None:
+    request = ExecutionSimulationRequest(
+        dataset=object(),
+        candle=object(),
+        candle_index=0,
+        event=object(),
+        ledger=object(),
+        timing_policy=object(),
+        execution_model=object(),
+        fee_rate=0.001,
+        strategy_name="unit",
+        action="HOLD",
+        decision_reason="strategy_hold",
+        regime_snapshot={},
+        decision_hash="sha256:test",
+        sellable_qty=0.0,
+        buy_fraction=0.0,
+        promotion_grade_policy_required=True,
+        allow_execution_compatibility_fallback=False,
+        policy_drives_execution=True,
+        policy_decision=None,
+    )
+
+    outcome = DefaultExecutionSimulator().execute(request)
+
+    assert outcome.fill is None
+    assert outcome.pending_fill is None
 
 
 def test_direct_cash_fraction_is_not_request_authority_when_plan_exists() -> None:
