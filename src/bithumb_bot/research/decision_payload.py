@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from . import backtest_support as support
+
+
+@dataclass(frozen=True)
+class DecisionPayloadBuilder:
+    """Builds non-authoritative research decision observability payloads."""
+
+    def build(
+        self,
+        *,
+        dataset: Any,
+        dataset_content_hash: str,
+        parameter_values: dict[str, Any],
+        strategy_plugin: Any,
+        strategy_spec: Any,
+        exit_policy: dict[str, Any],
+        exit_policy_hash: str,
+        fee_rate: float,
+        slippage_bps: float,
+        timing_policy: Any,
+        portfolio_policy: Any,
+        event: Any,
+        decision_boundary_ts: int,
+        strategy_envelope: Any,
+        risk_decision: Any,
+        policy_position: Any,
+        policy_decision: Any | None,
+        regime_snapshot: dict[str, object],
+        qty: float,
+        sellable_qty: float,
+    ) -> dict[str, object]:
+        action = risk_decision.final_signal
+        raw_signal = str(strategy_envelope.provenance.get("raw_signal") or "HOLD").upper()
+        raw_reason = str(strategy_envelope.provenance.get("raw_reason") or event.reason)
+        raw_filter_would_block = bool(strategy_envelope.provenance.get("raw_filter_would_block"))
+        entry_signal = str(strategy_envelope.provenance.get("entry_signal") or raw_signal).upper()
+        exit_signal = str(strategy_envelope.provenance.get("exit_signal") or raw_signal).upper()
+        blocked_filters = list(strategy_envelope.provenance.get("blocked_filters") or ())
+        entry_decision = strategy_envelope.provenance.get("entry_decision")
+        market_regime_decision = (
+            dict(getattr(entry_decision, "candidate_regime_decision"))
+            if entry_decision is not None
+            and isinstance(getattr(entry_decision, "candidate_regime_decision", None), dict)
+            else {"regime_decision": "not_configured"}
+        )
+        market_regime_blocked = bool(
+            getattr(entry_decision, "market_regime_triggered", False) if entry_decision is not None else False
+        )
+        candidate_regime_blocked = bool(
+            getattr(entry_decision, "candidate_regime_triggered", False) if entry_decision is not None else False
+        )
+        if policy_decision is not None:
+            protective_exit_overrode_entry = bool(policy_decision.protective_exit_overrode_entry)
+            entry_blocked = bool(policy_decision.entry_blocked)
+            exit_filter_suppression_prevented = bool(policy_decision.exit_filter_suppression_prevented)
+        elif strategy_envelope.unsupported_reason:
+            protective_exit_overrode_entry = False
+            entry_blocked = False
+            exit_filter_suppression_prevented = False
+        else:
+            protective_exit_overrode_entry = bool(
+                raw_signal == "BUY"
+                and action == "SELL"
+                and risk_decision.exit_rule in {"stop_loss", "max_holding_time"}
+            )
+            entry_blocked = bool(raw_signal == "BUY" and action == "HOLD" and raw_filter_would_block)
+            exit_filter_suppression_prevented = bool(
+                raw_signal == "SELL"
+                and raw_filter_would_block
+                and sellable_qty > 1e-12
+                and bool(risk_decision.exit_evaluations)
+            )
+        payload = support.research_decision_payload(
+            dataset=dataset,
+            dataset_content_hash=dataset_content_hash,
+            parameter_values=parameter_values,
+            strategy_name=strategy_plugin.name,
+            strategy_spec=strategy_spec.as_dict(),
+            strategy_spec_hash=strategy_spec.spec_hash(),
+            strategy_plugin_contract=strategy_plugin.contract_payload(),
+            strategy_plugin_contract_hash=strategy_plugin.contract_hash(),
+            exit_policy=exit_policy,
+            exit_policy_hash=exit_policy_hash,
+            fee_rate=fee_rate,
+            slippage_bps=slippage_bps,
+            timing_policy=timing_policy,
+            portfolio_policy=portfolio_policy,
+            candle_ts=event.candle_ts,
+            decision_ts=decision_boundary_ts,
+            raw_signal=raw_signal,
+            entry_signal=entry_signal,
+            exit_signal=exit_signal,
+            final_signal=action,
+            raw_reason=raw_reason,
+            blocked=bool(risk_decision.block or (raw_signal in {"BUY", "SELL"} and action == "HOLD")),
+            raw_filter_would_block=raw_filter_would_block,
+            entry_blocked=entry_blocked,
+            protective_exit_overrode_entry=protective_exit_overrode_entry,
+            exit_filter_suppression_prevented=exit_filter_suppression_prevented,
+            blocked_filters=blocked_filters,
+            feature_snapshot=dict(event.feature_snapshot),
+            regime_snapshot=regime_snapshot,
+            entry_reason=risk_decision.reason_code,
+            market_regime_decision=market_regime_decision,
+            market_regime_blocked=market_regime_blocked,
+            candidate_regime_blocked=candidate_regime_blocked,
+            qty=qty,
+            sellable_qty=sellable_qty,
+            exit_rule=risk_decision.exit_rule,
+            exit_reason=risk_decision.exit_reason,
+            exit_evaluations=[dict(item) for item in risk_decision.exit_evaluations],
+        )
+        if strategy_plugin.decision_payload_adapter is not None:
+            payload = strategy_plugin.decision_payload_adapter(payload, event)
+        payload.update(
+            {
+                "decision_event_schema_version": 1,
+                "strategy_decision_contract_version": strategy_plugin.decision_contract_version,
+                "raw_reason": raw_reason,
+                "feature_snapshot": dict(event.feature_snapshot),
+                "strategy_diagnostics_namespace": strategy_plugin.diagnostics_namespace,
+                "strategy_diagnostics": dict(event.strategy_diagnostics),
+                "strategy_behavior_payload": {
+                    "strategy_name": event.strategy_name,
+                    "strategy_version": event.strategy_version,
+                    "raw_signal": raw_signal,
+                    "final_signal": action,
+                    "reason": risk_decision.reason_code,
+                    "feature_snapshot": dict(event.feature_snapshot),
+                    "strategy_diagnostics": dict(event.strategy_diagnostics),
+                },
+                "execution_intent": action.lower() if action in {"BUY", "SELL"} else "none",
+                "order_intent": dict(event.order_intent) if event.order_intent is not None else None,
+                "exit_intent": dict(event.exit_intent) if event.exit_intent is not None else None,
+                "research_policy_position_terminal_state": policy_position.terminal_state,
+                "research_policy_recomputed_with_simulated_position": policy_decision is not None,
+                "research_policy_unsupported": bool(strategy_envelope.unsupported_reason),
+                "research_policy_unsupported_reason": strategy_envelope.unsupported_reason,
+                "research_policy_comparable": not bool(strategy_envelope.unsupported_reason),
+            }
+        )
+        if policy_decision is not None:
+            payload["pure_policy_hash"] = policy_decision.policy_hash
+            payload["policy_contract_hash"] = policy_decision.policy_contract_hash
+            payload["policy_input_hash"] = policy_decision.policy_input_hash
+            payload["policy_decision_hash"] = policy_decision.policy_decision_hash
+            payload["pure_policy_trace"] = policy_decision.as_trace()
+            trace = policy_decision.as_trace()
+            service_provenance = trace.get("strategy_evaluation_provenance")
+            if isinstance(service_provenance, dict):
+                payload["strategy_evaluation_provenance"] = dict(service_provenance)
+            payload["execution_intent_v2"] = (
+                policy_decision.execution_intent.as_dict()
+                if policy_decision.execution_intent is not None
+                else None
+            )
+            diagnostics = (
+                dict(payload["strategy_diagnostics"])
+                if isinstance(payload.get("strategy_diagnostics"), dict)
+                else {}
+            )
+            diagnostics.update(
+                {
+                    "pure_policy_hash": policy_decision.policy_hash,
+                    "policy_contract_hash": policy_decision.policy_contract_hash,
+                    "policy_input_hash": policy_decision.policy_input_hash,
+                    "policy_decision_hash": policy_decision.policy_decision_hash,
+                    "pure_policy_trace": policy_decision.as_trace(),
+                    "policy_position_terminal_state": policy_position.terminal_state,
+                    "policy_recomputed_with_simulated_position": True,
+                }
+            )
+            payload["strategy_diagnostics"] = diagnostics
+        return payload
+
+
+__all__ = ["DecisionPayloadBuilder"]

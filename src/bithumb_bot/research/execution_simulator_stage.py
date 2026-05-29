@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import backtest_support as support
-from .backtest_loop import ResearchExecutionPlanBundle
-from .backtest_loop import _execution_plan_evidence as _default_execution_plan_evidence
-from .backtest_loop import _research_execution_plan_bundle as _default_research_execution_plan_bundle
+from .execution_planning import ResearchExecutionPlanBundle
+from .execution_planning import _execution_plan_evidence as _default_execution_plan_evidence
+from .execution_planning import _research_execution_plan_bundle as _default_research_execution_plan_bundle
 from .execution_simulator import ResearchExecutionContext, ResearchVirtualExecutionService
 from .execution_timing import build_signal_event, resolve_execution_reference
 

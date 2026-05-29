@@ -357,6 +357,17 @@ def test_promotion_grade_backtest_final_consumer_rejects_missing_submit_plan(mon
                 "schema_version": 1,
                 "raw_filter_would_block": False,
                 "entry_blocked": False,
+                "replay_fingerprint_hash": canonical_payload_hash(
+                    {
+                        "policy_input_hash": canonical_payload_hash(policy_input),
+                        "policy_decision_hash": canonical_payload_hash(policy_decision),
+                        "candle_ts": int(event.candle_ts),
+                    }
+                ),
+                "strategy_evaluation_provenance": {
+                    "decision_boundary": "StrategyDecisionService.evaluate",
+                    "strategy_evaluation_mode": "research_promotion",
+                },
             },
             policy_hash=canonical_payload_hash(
                 {"policy_input": policy_input, "policy_decision": policy_decision}

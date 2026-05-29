@@ -246,6 +246,9 @@ class DefaultStrategyEvaluator:
         if promotion_grade_policy_required and policy_decision is None:
             raise ValueError(unsupported_reason or "research_policy_decision_missing_not_comparable")
         if policy_decision is not None:
+            trace = policy_decision.as_trace()
+            replay_hash = str(trace.get("replay_fingerprint_hash") or "")
+            service_provenance = trace.get("strategy_evaluation_provenance")
             missing = [
                 name
                 for name in (
@@ -256,6 +259,12 @@ class DefaultStrategyEvaluator:
                 )
                 if not str(getattr(policy_decision, name, "") or "").strip()
             ]
+            if not replay_hash:
+                missing.append("replay_fingerprint_hash")
+            if not isinstance(service_provenance, dict):
+                missing.append("strategy_evaluation_provenance")
+            elif service_provenance.get("decision_boundary") != "StrategyDecisionService.evaluate":
+                missing.append("strategy_evaluation_provenance.decision_boundary")
             if promotion_grade_policy_required and missing:
                 raise ValueError("research_strategy_decision_promotion_fields_missing:" + ",".join(missing))
             entry_decision = policy_decision.entry_decision
@@ -266,7 +275,6 @@ class DefaultStrategyEvaluator:
             entry_signal = str(policy_decision.entry_signal or raw_signal).upper()
             exit_signal = str(policy_decision.exit_signal or raw_signal).upper()
             blocked_filters = tuple(policy_decision.blocked_filters)
-            replay_hash = str(policy_decision.trace.get("replay_fingerprint_hash") or "")
             if not replay_hash:
                 replay_hash = canonical_payload_hash(
                     {
@@ -280,6 +288,7 @@ class DefaultStrategyEvaluator:
             entry_decision = event_extra.get("entry_decision")
             exit_signal = str(event.exit_signal or event.raw_signal or "HOLD").upper()
             blocked_filters = tuple(event.blocked_filters)
+            compatibility_fallback_reason_code = unsupported_reason or "legacy_research_event_decision_payload"
             replay_hash = canonical_payload_hash(
                 {
                     "strategy": plugin.name,
@@ -288,8 +297,11 @@ class DefaultStrategyEvaluator:
                     "raw_signal": raw_signal,
                     "final_signal": str(event.final_signal or "HOLD").upper(),
                     "compatibility_fallback": True,
+                    "compatibility_fallback_reason_code": compatibility_fallback_reason_code,
                 }
             )
+        if policy_decision is not None:
+            compatibility_fallback_reason_code = ""
         provenance = {
             "stage_id": "strategy_evaluator",
             "strategy_name": plugin.name,
@@ -305,6 +317,18 @@ class DefaultStrategyEvaluator:
             "promotion_grade_policy_required": promotion_grade_policy_required,
             "allows_legacy_event_first_exit_policy": allows_legacy_event_first_exit_policy,
             "evaluates_exit_policy": evaluates_exit_policy,
+            "strategy_evaluation_provenance": (
+                dict(service_provenance)
+                if policy_decision is not None and isinstance(service_provenance, dict)
+                else None
+            ),
+            "compatibility_fallback": policy_decision is None,
+            "compatibility_fallback_reason_code": compatibility_fallback_reason_code,
+            "compatibility_fallback_recommended_next_action": (
+                "none"
+                if policy_decision is not None
+                else "regenerate_research_decisions_with_typed_strategy_decision"
+            ),
         }
         return StrategyEvaluationEnvelope(
             decision=policy_decision,
@@ -788,7 +812,7 @@ def _run_stage_composed_decision_event_backtest(
 
 
 # Compatibility re-exports for existing tests and downstream research tooling.
-from .backtest_loop import (  # noqa: E402
+from .execution_planning import (  # noqa: E402
     ResearchExecutionPlanBundle,
     _execution_plan_evidence,
     _research_execution_plan_bundle,
