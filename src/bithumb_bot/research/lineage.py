@@ -82,6 +82,7 @@ def build_research_lineage(
     dataset_quality_hash: str | None = None,
     dataset_split_hash: str | None = None,
     data_source_fingerprint: str | None = None,
+    dataset_adapter_provenance_hash: str | None = None,
     repository_version: str | None = None,
     command_name: str | None = None,
     command_args: dict[str, Any] | None = None,
@@ -139,6 +140,7 @@ def build_research_lineage(
         "dataset_quality_hash": dataset_quality_hash,
         "dataset_split_hash": dataset_split_hash or dataset_content_hash,
         "data_source_fingerprint": data_source_fingerprint,
+        "dataset_adapter_provenance_hash": dataset_adapter_provenance_hash,
         "repository_version": repository_version,
         "command_name": command_name,
         "normalized_command_args": _redacted_mapping(command_args or {}),
@@ -311,6 +313,7 @@ def reproduce_promotion(promotion_path: str | Path, *, manager: PathManager | No
         "manifest_hash": None,
         "dataset_content_hash": None,
         "dataset_quality_hash": None,
+        "dataset_adapter_provenance_hash": None,
         "backtest_report_hash": None,
         "walk_forward_report_hash": None,
         "candidate_profile_hash": None,
@@ -399,6 +402,7 @@ def reproduce_promotion(promotion_path: str | Path, *, manager: PathManager | No
     summary["manifest_hash"] = lineage.get("manifest_hash")
     summary["dataset_content_hash"] = lineage.get("dataset_content_hash")
     summary["dataset_quality_hash"] = lineage.get("dataset_quality_hash")
+    summary["dataset_adapter_provenance_hash"] = lineage.get("dataset_adapter_provenance_hash")
     summary["backtest_report_hash"] = lineage.get("backtest_report_hash")
     summary["walk_forward_report_hash"] = lineage.get("walk_forward_report_hash")
     summary["candidate_profile_hash"] = lineage.get("candidate_profile_hash")
@@ -464,6 +468,14 @@ def reproduce_promotion(promotion_path: str | Path, *, manager: PathManager | No
             promotion.get("dataset_quality_hash"),
             lineage.get("dataset_quality_hash"),
             "dataset_quality_hash_mismatch",
+        )
+    if promotion.get("dataset_adapter_provenance_hash") or lineage.get("dataset_adapter_provenance_hash"):
+        _compare(
+            summary,
+            "dataset_adapter_provenance_hash",
+            promotion.get("dataset_adapter_provenance_hash"),
+            lineage.get("dataset_adapter_provenance_hash"),
+            "dataset_adapter_provenance_hash_mismatch",
         )
     _compare(
         summary,

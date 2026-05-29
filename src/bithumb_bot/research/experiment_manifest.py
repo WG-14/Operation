@@ -66,6 +66,11 @@ class TopOfBookDatasetSpec:
     missing_policy: str = "warn"
     quote_source: str | None = None
     min_coverage_pct: float = 100.0
+    source_uri: str | None = None
+    source_content_hash: str | None = None
+    source_schema_hash: str | None = None
+    locator: dict[str, object] | None = None
+    options: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -77,6 +82,16 @@ class TopOfBookDatasetSpec:
         }
         if self.quote_source is not None:
             payload["quote_source"] = self.quote_source
+        if self.source_uri is not None:
+            payload["source_uri"] = self.source_uri
+        if self.source_content_hash is not None:
+            payload["source_content_hash"] = self.source_content_hash
+        if self.source_schema_hash is not None:
+            payload["source_schema_hash"] = self.source_schema_hash
+        if self.locator is not None:
+            payload["locator"] = dict(self.locator)
+        if self.options:
+            payload["options"] = dict(self.options)
         return payload
 
 
@@ -86,6 +101,11 @@ class DatasetSpec:
     snapshot_id: str
     split: DatasetSplit
     top_of_book: TopOfBookDatasetSpec | None = None
+    source_uri: str | None = None
+    source_content_hash: str | None = None
+    source_schema_hash: str | None = None
+    locator: dict[str, object] | None = None
+    options: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -93,6 +113,16 @@ class DatasetSpec:
             "snapshot_id": self.snapshot_id,
             **self.split.as_dict(),
         }
+        if self.source_uri is not None:
+            payload["source_uri"] = self.source_uri
+        if self.source_content_hash is not None:
+            payload["source_content_hash"] = self.source_content_hash
+        if self.source_schema_hash is not None:
+            payload["source_schema_hash"] = self.source_schema_hash
+        if self.locator is not None:
+            payload["locator"] = dict(self.locator)
+        if self.options:
+            payload["options"] = dict(self.options)
         if self.top_of_book is not None:
             payload["top_of_book"] = self.top_of_book.as_dict()
         return payload
@@ -856,6 +886,34 @@ def _required_str(payload: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
+def _optional_non_empty_str(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ManifestValidationError(f"{field} must be non-empty when supplied")
+    return value.strip()
+
+
+def _optional_hash(value: Any, field: str) -> str | None:
+    text = _optional_non_empty_str(value, field)
+    if text is not None and not text.startswith("sha256:"):
+        raise ManifestValidationError(f"{field} must be a sha256: hash when supplied")
+    return text
+
+
+def _optional_mapping(value: Any, field: str) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ManifestValidationError(f"{field} must be an object when supplied")
+    out: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ManifestValidationError(f"{field} keys must be non-empty strings")
+        out[key.strip()] = item
+    return out
+
+
 def _required_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     if not isinstance(value, dict):
@@ -883,13 +941,25 @@ def _parse_date_range(payload: dict[str, Any], key: str) -> DateRange:
 
 
 def _parse_dataset(payload: dict[str, Any]) -> DatasetSpec:
-    allowed_fields = {"source", "snapshot_id", "train", "validation", "final_holdout", "top_of_book"}
+    allowed_fields = {
+        "source",
+        "snapshot_id",
+        "train",
+        "validation",
+        "final_holdout",
+        "top_of_book",
+        "source_uri",
+        "source_content_hash",
+        "source_schema_hash",
+        "locator",
+        "options",
+    }
     unknown = sorted(set(payload) - allowed_fields)
     if unknown:
         raise ManifestValidationError(f"dataset unsupported fields: {','.join(unknown)}")
     source = _required_str(payload, "source")
-    if source != "sqlite_candles":
-        raise ManifestValidationError("dataset.source currently supports only 'sqlite_candles'")
+    locator = _optional_mapping(payload.get("locator"), "dataset.locator")
+    options = _optional_mapping(payload.get("options"), "dataset.options") or {}
     split = DatasetSplit(
         train=_parse_date_range(payload, "train"),
         validation=_parse_date_range(payload, "validation"),
@@ -904,6 +974,11 @@ def _parse_dataset(payload: dict[str, Any]) -> DatasetSpec:
         snapshot_id=_required_str(payload, "snapshot_id"),
         split=split,
         top_of_book=_parse_top_of_book_dataset(payload.get("top_of_book")),
+        source_uri=_optional_non_empty_str(payload.get("source_uri"), "dataset.source_uri"),
+        source_content_hash=_optional_hash(payload.get("source_content_hash"), "dataset.source_content_hash"),
+        source_schema_hash=_optional_hash(payload.get("source_schema_hash"), "dataset.source_schema_hash"),
+        locator=locator,
+        options=options,
     )
 
 
@@ -965,13 +1040,18 @@ def _parse_top_of_book_dataset(value: Any) -> TopOfBookDatasetSpec | None:
         "missing_policy",
         "quote_source",
         "min_coverage_pct",
+        "source_uri",
+        "source_content_hash",
+        "source_schema_hash",
+        "locator",
+        "options",
     }
     unknown = sorted(set(value) - allowed_fields)
     if unknown:
         raise ManifestValidationError(f"dataset.top_of_book unsupported fields: {','.join(unknown)}")
     source = str(value.get("source") or "sqlite_orderbook_top_snapshots").strip()
-    if source != "sqlite_orderbook_top_snapshots":
-        raise ManifestValidationError("dataset.top_of_book.source must be sqlite_orderbook_top_snapshots")
+    if not source:
+        raise ManifestValidationError("dataset.top_of_book.source must be non-empty")
     join_tolerance_ms = _positive_int(value.get("join_tolerance_ms", 3000), "dataset.top_of_book.join_tolerance_ms")
     missing_policy = str(value.get("missing_policy") or "warn").strip().lower()
     if missing_policy not in {"warn", "fail"}:
@@ -989,6 +1069,8 @@ def _parse_top_of_book_dataset(value: Any) -> TopOfBookDatasetSpec | None:
     )
     if min_coverage_pct > 100.0:
         raise ManifestValidationError("dataset.top_of_book.min_coverage_pct must be <= 100")
+    locator = _optional_mapping(value.get("locator"), "dataset.top_of_book.locator")
+    options = _optional_mapping(value.get("options"), "dataset.top_of_book.options") or {}
     return TopOfBookDatasetSpec(
         source=source,
         required=required,
@@ -996,6 +1078,11 @@ def _parse_top_of_book_dataset(value: Any) -> TopOfBookDatasetSpec | None:
         missing_policy=missing_policy,
         quote_source=parsed_quote_source,
         min_coverage_pct=min_coverage_pct,
+        source_uri=_optional_non_empty_str(value.get("source_uri"), "dataset.top_of_book.source_uri"),
+        source_content_hash=_optional_hash(value.get("source_content_hash"), "dataset.top_of_book.source_content_hash"),
+        source_schema_hash=_optional_hash(value.get("source_schema_hash"), "dataset.top_of_book.source_schema_hash"),
+        locator=locator,
+        options=options,
     )
 
 

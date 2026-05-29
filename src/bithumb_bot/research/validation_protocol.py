@@ -26,6 +26,7 @@ from .dataset_snapshot import (
     load_dataset_range,
     load_dataset_split,
 )
+from .datasets.registry import default_dataset_adapter_registry
 from .backtest_common import execution_event_summary
 from .backtest_types import (
     BacktestHeartbeatPolicy,
@@ -40,7 +41,7 @@ from .audit_trail import (
     write_trace_manifest,
     trace_manifest_path,
 )
-from .deployment_policy import validate_production_calibration_policy
+from .deployment_policy import is_production_bound_target, validate_production_calibration_policy
 from .execution_calibration import compare_calibration_to_scenario
 from .execution_model import DepthWalkExecutionModel, FixedBpsExecutionModel, StressExecutionModel, model_params_hash
 from .execution_timing import execution_reality_gate, signal_quote_coverage_summary
@@ -595,6 +596,7 @@ def run_research_backtest(
         _emit_progress(progress_callback, stage="load_split", split=split_name, candles=len(snapshot.candles))
     stage_started = time.perf_counter()
     quality_reports = _quality_reports(db_path=db_path, snapshots=snapshots)
+    _validate_dataset_adapter_provenance(manifest=manifest, quality_reports=quality_reports)
     stage_timings.append(_stage_timing("quality_report", stage_started, split="train,validation"))
     for split_name, report in sorted(quality_reports.items()):
         _emit_progress(
@@ -641,6 +643,10 @@ def run_research_backtest(
             db_path=db_path,
             snapshots={"final_holdout": snapshots["final_holdout"]},
         )["final_holdout"]
+        _validate_dataset_adapter_provenance(
+            manifest=manifest,
+            quality_reports={"final_holdout": quality_reports["final_holdout"]},
+        )
         stage_timings.append(_stage_timing("quality_report", stage_started, split="final_holdout"))
         report = quality_reports["final_holdout"]
         _emit_progress(
@@ -786,6 +792,7 @@ def run_research_walk_forward(
         _emit_progress(progress_callback, stage="load_split", split=split_name, candles=len(snapshot.candles))
     stage_started = time.perf_counter()
     quality_reports = _quality_reports(db_path=db_path, snapshots=snapshots)
+    _validate_dataset_adapter_provenance(manifest=manifest, quality_reports=quality_reports)
     stage_timings.append(_stage_timing("quality_report", stage_started, split="walk_forward"))
     for split_name, report in sorted(quality_reports.items()):
         _emit_progress(
@@ -832,6 +839,10 @@ def run_research_walk_forward(
             db_path=db_path,
             snapshots={"final_holdout": snapshots["final_holdout"]},
         )["final_holdout"]
+        _validate_dataset_adapter_provenance(
+            manifest=manifest,
+            quality_reports={"final_holdout": quality_reports["final_holdout"]},
+        )
         stage_timings.append(_stage_timing("quality_report", stage_started, split="final_holdout"))
         report = quality_reports["final_holdout"]
         _emit_progress(
@@ -2927,6 +2938,12 @@ def _report_payload(
     dataset_quality_status, dataset_quality_reasons = _combined_dataset_quality_gate(
         {report.payload["split_name"]: report for report in quality_reports}
     )
+    dataset_adapter_provenance = _dataset_adapter_provenance_payload(
+        manifest=manifest,
+        snapshots=snapshots,
+        quality_reports=quality_reports,
+    )
+    dataset_adapter_provenance_hash = sha256_prefixed(dataset_adapter_provenance)
     top_of_book_quality_summary = _top_of_book_quality_summary(
         {str(report.payload["split_name"]): report for report in quality_reports}
     )
@@ -3041,7 +3058,9 @@ def _report_payload(
             "market": manifest.market,
             "interval": manifest.interval,
             "snapshot_id": manifest.dataset.snapshot_id,
+            "adapter_provenance_hash": dataset_adapter_provenance_hash,
         }),
+        dataset_adapter_provenance_hash=dataset_adapter_provenance_hash,
         repository_version=repository_version,
         command_name=command_name or f"research-{report_kind}",
         command_args=command_args or {},
@@ -3349,6 +3368,8 @@ def _report_payload(
         "dataset_snapshot_id": manifest.dataset.snapshot_id,
         "dataset_content_hash": dataset_hash,
         "dataset_quality_hash": dataset_quality_hash,
+        "dataset_adapter_provenance": dataset_adapter_provenance,
+        "dataset_adapter_provenance_hash": dataset_adapter_provenance_hash,
         "dataset_quality_gate_status": dataset_quality_status,
         "dataset_quality_gate_reasons": dataset_quality_reasons,
         "dataset_quality_reports": {
@@ -4492,6 +4513,114 @@ def _quality_reports(
     }
 
 
+def _dataset_adapter_provenance_payload(
+    *,
+    manifest: ExperimentManifest,
+    snapshots: tuple[DatasetSnapshot, ...],
+    quality_reports: tuple[DatasetQualityReport, ...],
+) -> dict[str, Any]:
+    split_reports = {str(report.payload.get("split_name")): report.payload for report in quality_reports}
+    return {
+        "dataset_source": manifest.dataset.source,
+        "snapshot_id": manifest.dataset.snapshot_id,
+        "adapter_name": _single_payload_value(split_reports.values(), "adapter_name"),
+        "adapter_version": _single_payload_value(split_reports.values(), "adapter_version"),
+        "source_uri": manifest.dataset.source_uri,
+        "source_locator": manifest.dataset.locator,
+        "declared_source_content_hash": manifest.dataset.source_content_hash,
+        "declared_source_schema_hash": manifest.dataset.source_schema_hash,
+        "canonical_snapshot_hash": combined_dataset_fingerprint(snapshots),
+        "split_hashes": {snapshot.split_name: snapshot.content_hash() for snapshot in snapshots},
+        "quality_report_hashes": {
+            split_name: str(payload.get("content_hash"))
+            for split_name, payload in sorted(split_reports.items())
+        },
+        "source_content_hashes": {
+            split_name: payload.get("source_content_hash")
+            for split_name, payload in sorted(split_reports.items())
+        },
+        "source_schema_hashes": {
+            split_name: payload.get("source_schema_hash")
+            for split_name, payload in sorted(split_reports.items())
+        },
+        "adapter_provenance_by_split": {
+            split_name: payload.get("adapter_provenance") or {}
+            for split_name, payload in sorted(split_reports.items())
+        },
+        "top_of_book": manifest.dataset.top_of_book.as_dict() if manifest.dataset.top_of_book else None,
+    }
+
+
+def _single_payload_value(payloads: Any, key: str) -> Any:
+    values = sorted({str(payload.get(key)) for payload in payloads if payload.get(key) is not None})
+    if len(values) == 1:
+        return values[0]
+    return values
+
+
+def _validate_dataset_adapter_provenance(
+    *,
+    manifest: ExperimentManifest,
+    quality_reports: dict[str, DatasetQualityReport],
+) -> None:
+    if not is_production_bound_target(manifest.deployment_tier):
+        return
+    reasons: list[str] = []
+    for split_name, report in sorted(quality_reports.items()):
+        payload = report.payload
+        adapter_name = str(payload.get("adapter_name") or "")
+        adapter_version = str(payload.get("adapter_version") or "")
+        source = str(payload.get("dataset_source") or payload.get("source") or "")
+        source_content_hash = str(payload.get("source_content_hash") or "")
+        source_schema_hash = str(payload.get("source_schema_hash") or "")
+        canonical_hash = str(payload.get("canonical_snapshot_hash") or payload.get("dataset_content_hash") or "")
+        if not adapter_name:
+            reasons.append(f"{split_name}:dataset_adapter_name_missing")
+        if not adapter_version:
+            reasons.append(f"{split_name}:dataset_adapter_version_missing")
+        if not source:
+            reasons.append(f"{split_name}:dataset_source_missing")
+        if not canonical_hash.startswith("sha256:"):
+            reasons.append(f"{split_name}:canonical_snapshot_hash_missing")
+        if source == "sqlite_candles" and source_content_hash.startswith("sha256:"):
+            pass
+        elif source_content_hash.startswith("sha256:"):
+            pass
+        else:
+            reasons.append(f"{split_name}:source_content_hash_missing")
+        if not source_schema_hash.startswith("sha256:"):
+            reasons.append(f"{split_name}:source_schema_hash_missing")
+        if manifest.dataset.source_content_hash and manifest.dataset.source_content_hash != source_content_hash:
+            reasons.append(f"{split_name}:source_content_hash_mismatch")
+        if manifest.dataset.source_schema_hash and manifest.dataset.source_schema_hash != source_schema_hash:
+            reasons.append(f"{split_name}:source_schema_hash_mismatch")
+        if _has_mutable_dataset_locator(manifest):
+            reasons.append(f"{split_name}:mutable_dataset_locator")
+    if reasons:
+        raise ResearchValidationError("dataset_adapter_provenance_failed:" + ",".join(reasons))
+
+
+def _has_mutable_dataset_locator(manifest: ExperimentManifest) -> bool:
+    values: list[object] = []
+    values.append(manifest.dataset.source_uri)
+    values.extend((manifest.dataset.locator or {}).values())
+    top = manifest.dataset.top_of_book
+    if top is not None:
+        values.append(top.source_uri)
+        values.extend((top.locator or {}).values())
+    for value in values:
+        text = str(value or "").strip().lower()
+        if not text:
+            continue
+        if text in {"latest", "current"} or text.endswith("/latest") or "/latest/" in text:
+            return True
+        if is_production_bound_target(manifest.deployment_tier) and "/paper/" in text:
+            return True
+        if "/" in text and "://" not in text and not text.startswith(("/", "managed-db:")):
+            return True
+    return False
+
+
 def _validate_strategy_data_requirements(manifest: ExperimentManifest) -> None:
     requirements = research_strategy_data_requirements(manifest.strategy_name)
     available = _manifest_data_capabilities(manifest)
@@ -4509,8 +4638,11 @@ def _validate_strategy_data_requirements(manifest: ExperimentManifest) -> None:
 
 def _manifest_data_capabilities(manifest: ExperimentManifest) -> dict[str, bool]:
     top_of_book_requested = manifest.dataset.top_of_book is not None
+    default_dataset_adapter_registry().resolve(manifest.dataset.source)
+    if top_of_book_requested and manifest.dataset.top_of_book is not None:
+        default_dataset_adapter_registry().resolve_top_of_book(manifest.dataset.top_of_book.source)
     return {
-        "candles": manifest.dataset.source == "sqlite_candles",
+        "candles": True,
         "top_of_book": top_of_book_requested,
         "l2_depth_snapshot": any(scenario.type == "depth_walk" for scenario in manifest.execution_model.scenarios),
         "depth_walk": any(scenario.type == "depth_walk" for scenario in manifest.execution_model.scenarios),

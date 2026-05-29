@@ -1448,6 +1448,8 @@ def promote_candidate(
         "dataset_snapshot_id": candidate["dataset_snapshot_id"],
         "dataset_content_hash": candidate["dataset_content_hash"],
         "dataset_quality_hash": candidate.get("dataset_quality_hash"),
+        "dataset_adapter_provenance": report.get("dataset_adapter_provenance"),
+        "dataset_adapter_provenance_hash": report.get("dataset_adapter_provenance_hash"),
         "dataset_quality_gate_status": candidate.get("dataset_quality_gate_status"),
         "dataset_quality_gate_reasons": candidate.get("dataset_quality_gate_reasons"),
         "portfolio_policy": candidate.get("portfolio_policy"),

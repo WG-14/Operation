@@ -633,7 +633,7 @@ Manifests are JSON to avoid adding another dependency. See:
 Required sections:
 
 - `experiment_id`, `hypothesis`, `strategy_name`, `market`, `interval`
-- `dataset.source=sqlite_candles`, `dataset.snapshot_id`, `train`, `validation`, optional `final_holdout`
+- `dataset.source`, `dataset.snapshot_id`, `train`, `validation`, optional `final_holdout`. `sqlite_candles` is the default/current production adapter, not the only manifest-level source string.
 - `parameter_space`
 - `cost_model.fee_rate`, `cost_model.slippage_bps` for legacy fixed-bps manifests
 - `execution_model` for normalized fixed-bps or stress execution scenarios. Stress scenarios may configure slippage bps, latency, partial-fill rate, order-failure rate, market-order extra cost, scenario policy, scenario role, seed, and calibration requirements. Unsupported execution-model fields fail manifest parsing rather than being ignored.
@@ -643,7 +643,7 @@ Required sections:
 Optional section:
 
 - `walk_forward.train_window_days`, `test_window_days`, `step_days`, `min_windows`
-- `dataset.top_of_book` to opt into SQLite top-of-book quote joins. Supported fields are `source=sqlite_orderbook_top_snapshots`, `required`, `join_tolerance_ms` (default `3000`), `missing_policy`, optional `quote_source`, and `min_coverage_pct`. Unsupported dataset or top-of-book fields fail manifest parsing rather than being ignored.
+- `dataset.top_of_book` to opt into top-of-book quote joins. The current SQLite adapter supports `source=sqlite_orderbook_top_snapshots`; source support is resolved by the dataset adapter registry, not by manifest parsing. Supported fields are `source`, `required`, `join_tolerance_ms` (default `3000`), `missing_policy`, optional `quote_source`, `min_coverage_pct`, and optional adapter provenance fields. Unsupported dataset or top-of-book fields fail manifest parsing rather than being ignored.
 - `statistical_validation` is optional for `research_only` diagnostics and required for production-bound promotion. Supported fields are `required_for_promotion`, `benchmark`, `primary_metric`, `selection_universe`, `multiple_testing_scope`, `bootstrap`, and `gates`. Unsupported or malformed statistical fields fail manifest parsing.
 - `stress_suite` is optional for `research_only` diagnostics and required for production-bound manifests. It is independent of execution stress. Supported implemented sections are `trade_removal`, `trade_order_monte_carlo`, `period_ablation`, `parameter_perturbation`, and `risk_adjusted_score`. Unsupported stress-suite fields fail manifest parsing rather than being ignored.
 - `final_selection` is optional only for `research_only` diagnostics and required for production-bound manifests. It declares the deterministic policy for choosing one candidate from the eligible candidate universe after acceptance, statistical, stress, dataset-quality, final-holdout, and production-calibration gates have produced evidence.
@@ -652,6 +652,45 @@ Optional section:
 - `research_run.audit_trail` declares external audit-trace requirements. Supported fields are `mode` (`summary_only` or `complete_external`), `decisions_required`, `equity_required`, `executions_required`, `hash_chain_required`, and `required_for_promotion`. Production-bound manifests should use `mode=complete_external` with all required booleans true.
 
 When `acceptance_gate.walk_forward_required=true`, the `walk_forward` section is required. All values must be positive integers.
+
+## Dataset Adapter Contract
+
+Research data loading now follows this boundary:
+
+```text
+ExperimentManifest / DatasetSpec
+-> DatasetAdapterRegistry
+-> source-specific adapter
+-> canonical DatasetSnapshot
+-> DatasetQualityReport with adapter provenance
+-> backtest / validation / reproduction
+```
+
+`DatasetSnapshot` remains the canonical in-memory contract consumed by strategy research code. Adapters are responsible for converting a source-specific locator into that shape with deterministic ordering and stable hashes. `sqlite_candles` is implemented as the current compatibility adapter and continues to read `candles`, `orderbook_top_snapshots`, and `orderbook_depth_levels` from the configured SQLite DB. Future adapters must not bypass the registry by adding parser-only special cases.
+
+Common quality fields are source-agnostic: expected candle count, actual candle count, present expected buckets, coverage percentage, missing buckets/ranges/sample, duplicate timestamps, non-monotonic timestamps, interval mismatches, OHLC invariant violations, non-positive prices, negative volume, first/last timestamp, `canonical_snapshot_hash`, `quality_gate_status`, and `quality_gate_reasons`. Adapter-specific details live under `adapter_provenance`; for SQLite that includes `adapter_provenance.sqlite.db_schema_fingerprint` and the discovered compatibility tables. Legacy fields such as `db_schema_fingerprint` may remain for compatibility, but they are not the universal dataset contract.
+
+Every quality report should identify:
+
+- `dataset_source`
+- `adapter_name`
+- `adapter_version`
+- `source_content_hash` or a reason-coded missing/not-applicable status
+- `source_schema_hash` or a reason-coded missing/not-applicable status
+- `canonical_snapshot_hash`
+- `quality_gate_status`
+- `quality_gate_reasons`
+
+Production-bound tiers (`paper_candidate`, `live_dry_run_candidate`, and `small_live_candidate`) require reproducible adapter provenance. Validation fails closed when adapter name/version, dataset source, canonical snapshot hash, source content hash, source schema hash, split hashes, or quality report hashes are missing or when a manifest uses a mutable locator such as `latest`. The SQLite compatibility adapter may derive source content from the canonical snapshot hash and source schema from the SQLite schema fingerprint, but production-bound non-SQLite sources must provide equivalent immutable provenance rather than relying on mutable paths.
+
+To add a new dataset source:
+
+1. Implement an adapter that returns `DatasetSnapshot` and source-agnostic `DatasetQualityReport` payloads.
+2. Register the adapter with `DatasetAdapterRegistry`.
+3. Add adapter contract tests covering load, quality checks, provenance, and fail-closed resolver behavior.
+4. Add a manifest example with immutable locator/provenance fields.
+5. Verify `source_content_hash`, `source_schema_hash`, `canonical_snapshot_hash`, split hashes, and quality report hashes.
+6. Run `research-validate` and `research-reproduce` against the generated artifacts.
 
 ## Statistical Selection Contract
 

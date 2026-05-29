@@ -8,12 +8,17 @@
   "dataset": {
     "source": "sqlite_candles",
     "snapshot_id": "candles_krw_btc_2023_2026_v1",
+    "source_uri": "managed-db:DATA_ROOT/<mode>/trades/<mode>.sqlite",
+    "source_content_hash": "sha256:replace_with_reviewed_canonical_snapshot_or_source_hash",
+    "source_schema_hash": "sha256:replace_with_reviewed_sqlite_schema_hash",
     "top_of_book": {
       "source": "sqlite_orderbook_top_snapshots",
       "required": true,
       "join_tolerance_ms": 3000,
       "missing_policy": "fail",
-      "min_coverage_pct": 100
+      "min_coverage_pct": 100,
+      "source_content_hash": "sha256:replace_with_reviewed_top_of_book_source_hash",
+      "source_schema_hash": "sha256:replace_with_reviewed_top_of_book_schema_hash"
     },
     "train": {
       "start": "2023-01-01",

@@ -24,6 +24,7 @@ from .dataset_snapshot import (
     _is_expected_bucket,
     _split_range,
 )
+from .datasets.registry import default_dataset_adapter_registry
 from .experiment_manifest import ExperimentManifest, load_manifest
 from .hashing import sha256_prefixed
 from .validation_protocol import _rolling_walk_forward_windows
@@ -80,6 +81,9 @@ def build_dataset_quality_report_sql(
     max_missing_sample: int = 20,
     include_top_of_book: bool = True,
 ) -> DatasetQualityReport:
+    default_dataset_adapter_registry().resolve(manifest.dataset.source)
+    if manifest.dataset.top_of_book is not None:
+        default_dataset_adapter_registry().resolve_top_of_book(manifest.dataset.top_of_book.source)
     date_range = _split_range(manifest, split_name)
     interval_ms = _interval_ms(manifest.interval)
     start_ts = date_range.start_ts_ms()
@@ -134,9 +138,12 @@ def build_dataset_quality_report_sql(
     depth_rows_available = bool(depth_summary["l2_depth_rows_available"])
     depth_complete_snapshots_available = bool(depth_summary["l2_depth_complete_snapshots_available"])
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "dataset_quality_report",
         "scan_method": "sqlite_streaming",
+        "dataset_source": manifest.dataset.source,
+        "adapter_name": "sqlite_candle_adapter",
+        "adapter_version": "1",
         "source": manifest.dataset.source,
         "market": manifest.market,
         "interval": manifest.interval,
@@ -164,6 +171,20 @@ def build_dataset_quality_report_sql(
         "last_ts": stats["last_ts"],
         "db_schema_fingerprint": _safe_db_schema_fingerprint(db_path),
         "dataset_content_hash": "not_materialized:sqlite_streaming_readiness_scan",
+        "canonical_snapshot_hash": "not_materialized:sqlite_streaming_readiness_scan",
+        "source_content_hash": manifest.dataset.source_content_hash
+        or "missing:sqlite_streaming_source_content_hash_not_declared",
+        "source_schema_hash": manifest.dataset.source_schema_hash or _safe_db_schema_fingerprint(db_path),
+        "source_hash_status": "present" if manifest.dataset.source_content_hash else "missing_compatibility_streaming_scan",
+        "source_schema_hash_status": "present",
+        "adapter_provenance": {
+            "sqlite": {
+                "source_locator_policy": "runtime_db_path_excluded_from_dataset_quality_hash",
+                "db_schema_fingerprint": _safe_db_schema_fingerprint(db_path),
+                "tables": _sqlite_present_tables(db_path),
+                "scan_method": "sqlite_streaming",
+            }
+        },
         "quality_gate_status": "PASS" if not reasons else "FAIL",
         "quality_gate_reasons": reasons,
         "limitations": {
@@ -903,6 +924,25 @@ def _safe_db_schema_fingerprint(db_path: str | Path) -> str:
     if not Path(db_path).expanduser().resolve().exists():
         return sha256_prefixed({"db_schema": "missing_db", "table": "candles"})
     return _db_schema_fingerprint(db_path)
+
+
+def _sqlite_present_tables(db_path: str | Path) -> list[str]:
+    resolved = Path(db_path).expanduser().resolve()
+    if not resolved.exists():
+        return []
+    conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table'
+              AND name IN ('candles', 'orderbook_top_snapshots', 'orderbook_depth_levels')
+            ORDER BY name ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row[0]) for row in rows]
 
 
 def _artifact_range(*, split_name: str, start_ts: int, end_ts: int, bucket_count: int) -> dict[str, Any]:

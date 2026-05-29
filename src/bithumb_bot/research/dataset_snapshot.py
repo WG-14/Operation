@@ -10,6 +10,8 @@ from bithumb_bot.public_api_minute_candles import interval_to_minute_unit
 from bithumb_bot.orderbook_depth_store import summarize_orderbook_depth_evidence
 from bithumb_bot.orderbook_depth_store import build_orderbook_depth_snapshot, OrderbookDepthSnapshot
 
+from .datasets.contracts import DatasetLoadContext
+from .datasets.registry import default_dataset_adapter_registry
 from .experiment_manifest import DateRange, ExperimentManifest, ManifestValidationError
 from .hashing import sha256_prefixed
 
@@ -220,6 +222,25 @@ def load_dataset_range(
     split_name: str,
     date_range: DateRange,
 ) -> DatasetSnapshot:
+    adapter = default_dataset_adapter_registry().resolve(manifest.dataset.source)
+    top_of_book_spec = manifest.dataset.top_of_book
+    if top_of_book_spec is not None:
+        default_dataset_adapter_registry().resolve_top_of_book(top_of_book_spec.source)
+    return adapter.load_range(
+        manifest=manifest,
+        split_name=split_name,
+        date_range=date_range,
+        context=DatasetLoadContext(db_path=db_path),
+    )
+
+
+def _load_sqlite_dataset_range(
+    *,
+    db_path: str | Path,
+    manifest: ExperimentManifest,
+    split_name: str,
+    date_range: DateRange,
+) -> DatasetSnapshot:
     conn = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
     try:
         rows = conn.execute(
@@ -255,6 +276,8 @@ def load_dataset_range(
     top_of_book_spec = manifest.dataset.top_of_book
     depth_requested = any(scenario.type == "depth_walk" for scenario in manifest.execution_model.scenarios)
     if top_of_book_spec is not None:
+        if top_of_book_spec.source not in SQLiteCandleAdapter.supported_top_of_book_sources:
+            raise ValueError(f"dataset_top_of_book_adapter_not_supported_by_sqlite_candles:{top_of_book_spec.source}")
         top_of_book_quotes = _load_top_of_book_quotes(
             db_path=db_path,
             market=manifest.market,
@@ -322,6 +345,21 @@ def build_dataset_quality_report(
     db_path: str | Path,
     snapshot: DatasetSnapshot,
 ) -> DatasetQualityReport:
+    try:
+        adapter = default_dataset_adapter_registry().resolve(snapshot.source)
+    except ValueError:
+        return _build_source_agnostic_dataset_quality_report(db_path=db_path, snapshot=snapshot)
+    return adapter.quality_report(snapshot=snapshot, context=DatasetLoadContext(db_path=db_path))
+
+
+def _build_source_agnostic_dataset_quality_report(
+    *,
+    db_path: str | Path | None,
+    snapshot: DatasetSnapshot,
+    adapter_name: str = "source_agnostic",
+    adapter_version: str = "1",
+    adapter_provenance: dict[str, Any] | None = None,
+) -> DatasetQualityReport:
     interval_ms = _interval_ms(snapshot.interval)
     start_ts = snapshot.date_range.start_ts_ms()
     end_ts = snapshot.date_range.end_ts_ms()
@@ -339,7 +377,7 @@ def build_dataset_quality_report(
         interval_ms=interval_ms,
         present_expected_ts=actual_expected_ts,
     )
-    duplicate_key_count = _duplicate_key_count(db_path=db_path, snapshot=snapshot)
+    duplicate_key_count = _duplicate_key_count_from_snapshot(snapshot=snapshot)
     non_monotonic = sum(1 for prev, curr in zip(actual_ts, actual_ts[1:]) if curr <= prev)
     interval_mismatch = sum(
         1
@@ -389,12 +427,19 @@ def build_dataset_quality_report(
     actual_count = len(candles)
     present_expected_count = len(actual_expected_ts)
     coverage_pct = (present_expected_count / expected_count * 100.0) if expected_count else 0.0
-    depth_summary = _orderbook_depth_summary(db_path=db_path, snapshot=snapshot)
+    depth_summary = (
+        _orderbook_depth_summary(db_path=db_path, snapshot=snapshot)
+        if db_path is not None and snapshot.source == "sqlite_candles"
+        else _empty_orderbook_depth_summary()
+    )
     depth_rows_available = bool(depth_summary["l2_depth_rows_available"])
     depth_complete_snapshots_available = bool(depth_summary["l2_depth_complete_snapshots_available"])
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "dataset_quality_report",
+        "dataset_source": snapshot.source,
+        "adapter_name": adapter_name,
+        "adapter_version": adapter_version,
         "source": snapshot.source,
         "market": snapshot.market,
         "interval": snapshot.interval,
@@ -418,8 +463,16 @@ def build_dataset_quality_report(
         "negative_volume_count": negative_volume,
         "first_ts": actual_ts[0] if actual_ts else None,
         "last_ts": actual_ts[-1] if actual_ts else None,
-        "db_schema_fingerprint": _db_schema_fingerprint(db_path),
+        "db_schema_fingerprint": _db_schema_fingerprint(db_path) if db_path is not None and snapshot.source == "sqlite_candles" else None,
         "dataset_content_hash": snapshot.content_hash(),
+        "canonical_snapshot_hash": snapshot.content_hash(),
+        "source_content_hash": snapshot.content_hash(),
+        "source_schema_hash": (
+            _db_schema_fingerprint(db_path) if db_path is not None and snapshot.source == "sqlite_candles" else "not_applicable:source_schema_unavailable"
+        ),
+        "source_hash_status": "present",
+        "source_schema_hash_status": "present" if snapshot.source == "sqlite_candles" and db_path is not None else "not_applicable",
+        "adapter_provenance": adapter_provenance or {},
         "quality_gate_status": "PASS" if not reasons else "FAIL",
         "quality_gate_reasons": reasons,
         "limitations": {
@@ -459,6 +512,13 @@ def build_dataset_quality_report(
         _add_top_of_book_quality_fields(payload=payload, snapshot=snapshot)
     payload["content_hash"] = sha256_prefixed(payload)
     return DatasetQualityReport(payload=payload)
+
+
+def _duplicate_key_count_from_snapshot(*, snapshot: DatasetSnapshot) -> int:
+    counts: dict[int, int] = {}
+    for candle in snapshot.candles:
+        counts[int(candle.ts)] = counts.get(int(candle.ts), 0) + 1
+    return sum(count - 1 for count in counts.values() if count > 1)
 
 
 def combined_dataset_fingerprint(snapshots: tuple[DatasetSnapshot, ...]) -> str:
@@ -558,27 +618,6 @@ def _compact_missing_ranges(missing_ts: list[int], interval_ms: int, *, max_rang
     return ranges[:max_ranges]
 
 
-def _duplicate_key_count(*, db_path: str | Path, snapshot: DatasetSnapshot) -> int:
-    conn = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
-    try:
-        rows = conn.execute(
-            """
-            SELECT COUNT(*) - COUNT(DISTINCT ts)
-            FROM candles
-            WHERE pair=? AND interval=? AND ts >= ? AND ts <= ?
-            """,
-            (
-                snapshot.market,
-                snapshot.interval,
-                snapshot.date_range.start_ts_ms(),
-                snapshot.date_range.end_ts_ms(),
-            ),
-        ).fetchone()
-    finally:
-        conn.close()
-    return int(rows[0] or 0) if rows else 0
-
-
 def _db_schema_fingerprint(db_path: str | Path) -> str:
     conn = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
     try:
@@ -611,6 +650,19 @@ def _orderbook_depth_summary(*, db_path: str | Path, snapshot: DatasetSnapshot) 
         )
     finally:
         conn.close()
+
+
+def _empty_orderbook_depth_summary() -> dict[str, Any]:
+    return {
+        "l2_depth_rows_available": False,
+        "l2_depth_complete_snapshots_available": False,
+        "l2_depth_snapshot_count": 0,
+        "l2_depth_row_count": 0,
+        "l2_depth_first_ts": None,
+        "l2_depth_last_ts": None,
+        "l2_depth_sources": [],
+        "l2_depth_content_hash": None,
+    }
 
 
 def _load_top_of_book_quotes(
@@ -870,3 +922,94 @@ def _add_top_of_book_quality_fields(*, payload: dict[str, Any], snapshot: Datase
             "top_of_book_gate_reasons": reasons,
         }
     )
+
+
+class SQLiteCandleAdapter:
+    source = "sqlite_candles"
+    adapter_name = "sqlite_candle_adapter"
+    adapter_version = "1"
+    supported_top_of_book_sources = frozenset({"sqlite_orderbook_top_snapshots"})
+
+    def load_range(
+        self,
+        *,
+        manifest: ExperimentManifest,
+        split_name: str,
+        date_range: DateRange,
+        context: DatasetLoadContext,
+    ) -> DatasetSnapshot:
+        if context.db_path is None:
+            raise ValueError("sqlite_dataset_adapter_db_path_missing")
+        return _load_sqlite_dataset_range(
+            db_path=context.db_path,
+            manifest=manifest,
+            split_name=split_name,
+            date_range=date_range,
+        )
+
+    def quality_report(
+        self,
+        *,
+        snapshot: DatasetSnapshot,
+        context: DatasetLoadContext,
+    ) -> DatasetQualityReport:
+        if context.db_path is None:
+            raise ValueError("sqlite_dataset_adapter_db_path_missing")
+        schema_hash = _db_schema_fingerprint(context.db_path)
+        provenance = {
+            "sqlite": {
+                "source_locator_policy": "runtime_db_path_excluded_from_dataset_quality_hash",
+                "db_schema_fingerprint": schema_hash,
+                "tables": _sqlite_present_tables(context.db_path),
+                "scan_method": "snapshot_materialized_with_sqlite_depth_summary",
+            }
+        }
+        report = _build_source_agnostic_dataset_quality_report(
+            db_path=context.db_path,
+            snapshot=snapshot,
+            adapter_name=self.adapter_name,
+            adapter_version=self.adapter_version,
+            adapter_provenance=provenance,
+        )
+        report.payload["source_schema_hash"] = schema_hash
+        report.payload["source_schema_hash_status"] = "present"
+        report.payload["scan_method"] = "sqlite_adapter_snapshot_scan"
+        report.payload["content_hash"] = sha256_prefixed({k: v for k, v in report.payload.items() if k != "content_hash"})
+        return report
+
+    def provenance(
+        self,
+        *,
+        manifest: ExperimentManifest,
+        context: DatasetLoadContext,
+    ) -> dict[str, Any]:
+        schema_hash = _db_schema_fingerprint(context.db_path) if context.db_path is not None else None
+        return {
+            "dataset_source": manifest.dataset.source,
+            "adapter_name": self.adapter_name,
+            "adapter_version": self.adapter_version,
+            "source_locator": "runtime_db_path_excluded_from_dataset_hash",
+            "source_content_hash": manifest.dataset.source_content_hash,
+            "source_schema_hash": manifest.dataset.source_schema_hash or schema_hash,
+            "top_of_book_source": manifest.dataset.top_of_book.source if manifest.dataset.top_of_book else None,
+            "provenance_policy": "sqlite_compatibility_adapter",
+        }
+
+
+def _sqlite_present_tables(db_path: str | Path) -> list[str]:
+    conn = sqlite3.connect(f"file:{Path(db_path).expanduser().resolve()}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table'
+              AND name IN ('candles', 'orderbook_top_snapshots', 'orderbook_depth_levels')
+            ORDER BY name ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row[0]) for row in rows]
+
+
+default_dataset_adapter_registry().register(SQLiteCandleAdapter())
