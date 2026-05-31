@@ -225,6 +225,21 @@ class SmaWithFilterRuntimeDecisionAdapter:
             return True
         return True
 
+    def legacy_diagnostic_signal(
+        self,
+        conn,
+        short_n: int | None = None,
+        long_n: int | None = None,
+        *,
+        through_ts_ms: int | None = None,
+    ) -> dict[str, object] | None:
+        return compute_sma_with_filter_signal(
+            conn,
+            short_n=short_n,
+            long_n=long_n,
+            through_ts_ms=through_ts_ms,
+        )
+
 
 def compute_sma_with_filter_signal(
     conn,

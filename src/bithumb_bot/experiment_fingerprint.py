@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 from functools import lru_cache
+from typing import Mapping
 
 from .config import PROJECT_ROOT, settings
 
@@ -25,25 +26,41 @@ def current_code_commit_sha() -> str:
     return result.stdout.strip() or "unknown"
 
 
-def build_experiment_fingerprint_payload(*, strategy_name: str | None = None) -> dict[str, object]:
+def build_experiment_fingerprint_payload(
+    *,
+    strategy_name: str | None = None,
+    parameter_overrides: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    from .runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
+
+    selected_strategy_name = str(strategy_name or settings.STRATEGY_NAME).strip().lower()
+    request = RuntimeDecisionRequestBuilder().build_for_spec(
+        RuntimeStrategySpec(
+            strategy_name=selected_strategy_name,
+            parameters=dict(parameter_overrides or {}) or None,
+            parameter_source="experiment_fingerprint_override" if parameter_overrides else None,
+        ),
+        through_ts_ms=None,
+    )
+    runtime_spec = request.runtime_strategy_spec
+    runtime_contract = (
+        dict(runtime_spec.runtime_contract)
+        if hasattr(runtime_spec, "runtime_contract")
+        else {}
+    )
     return {
+        "schema_version": 2,
         "code_commit_sha": current_code_commit_sha(),
-        "strategy_name": str(strategy_name or settings.STRATEGY_NAME),
-        "sma_short": int(settings.SMA_SHORT),
-        "sma_long": int(settings.SMA_LONG),
-        "sma_filter_gap_min_ratio": float(settings.SMA_FILTER_GAP_MIN_RATIO),
-        "sma_filter_vol_window": int(settings.SMA_FILTER_VOL_WINDOW),
-        "sma_filter_vol_min_range_ratio": float(settings.SMA_FILTER_VOL_MIN_RANGE_RATIO),
-        "sma_filter_overext_lookback": int(settings.SMA_FILTER_OVEREXT_LOOKBACK),
-        "sma_filter_overext_max_return_ratio": float(settings.SMA_FILTER_OVEREXT_MAX_RETURN_RATIO),
-        "sma_cost_edge_enabled": bool(settings.SMA_COST_EDGE_ENABLED),
-        "strategy_min_expected_edge_ratio": float(settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO),
-        "entry_edge_buffer_ratio": float(settings.ENTRY_EDGE_BUFFER_RATIO),
-        "exit_rules": str(settings.STRATEGY_EXIT_RULES),
-        "exit_stop_loss_ratio": float(settings.STRATEGY_EXIT_STOP_LOSS_RATIO),
-        "exit_max_holding_min": int(settings.STRATEGY_EXIT_MAX_HOLDING_MIN),
-        "exit_min_take_profit_ratio": float(settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO),
-        "exit_small_loss_tolerance_ratio": float(settings.STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO),
+        "strategy_name": request.strategy_name,
+        "strategy_version": request.strategy_version,
+        "strategy_parameters_hash": request.strategy_parameters_hash,
+        "runtime_contract_hash": request.runtime_contract_hash,
+        "plugin_contract_hash": request.plugin_contract_hash,
+        "execution_contract_hash": runtime_contract.get("execution_contract_hash"),
+        "runtime_decision_request_hash": request.request_hash,
+        "parameter_source": request.parameter_source,
+        "approved_profile_path": request.approved_profile_path,
+        "approved_profile_hash": request.approved_profile_hash,
         "execution_engine": str(settings.EXECUTION_ENGINE),
         "target_exposure_krw": settings.TARGET_EXPOSURE_KRW,
         "max_order_krw": float(settings.MAX_ORDER_KRW),
@@ -64,17 +81,37 @@ def build_experiment_fingerprint_payload(*, strategy_name: str | None = None) ->
     }
 
 
-def experiment_fingerprint(*, strategy_name: str | None = None) -> str:
-    payload = build_experiment_fingerprint_payload(strategy_name=strategy_name)
+def experiment_fingerprint(
+    *,
+    strategy_name: str | None = None,
+    parameter_overrides: Mapping[str, object] | None = None,
+) -> str:
+    payload = build_experiment_fingerprint_payload(
+        strategy_name=strategy_name,
+        parameter_overrides=parameter_overrides,
+    )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def experiment_context(*, strategy_name: str | None = None) -> dict[str, object]:
-    payload = build_experiment_fingerprint_payload(strategy_name=strategy_name)
+def experiment_context(
+    *,
+    strategy_name: str | None = None,
+    parameter_overrides: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    payload = build_experiment_fingerprint_payload(
+        strategy_name=strategy_name,
+        parameter_overrides=parameter_overrides,
+    )
     return {
-        "experiment_id": experiment_fingerprint(strategy_name=strategy_name),
-        "experiment_fingerprint": experiment_fingerprint(strategy_name=strategy_name),
-        "experiment_fingerprint_version": "experiment_fingerprint_v1",
+        "experiment_id": experiment_fingerprint(
+            strategy_name=strategy_name,
+            parameter_overrides=parameter_overrides,
+        ),
+        "experiment_fingerprint": experiment_fingerprint(
+            strategy_name=strategy_name,
+            parameter_overrides=parameter_overrides,
+        ),
+        "experiment_fingerprint_version": "experiment_fingerprint_v2",
         "experiment_fingerprint_inputs": payload,
     }

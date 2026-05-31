@@ -2071,8 +2071,6 @@ def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -
         object.__setattr__(engine.settings, "INTERVAL", "1m")
         decision = engine.compute_strategy_decision_snapshot(
             conn,
-            2,
-            3,
             through_ts_ms=1_700_000_240_000,
             strategy_name="sma_with_filter",
         )

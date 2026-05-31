@@ -18,6 +18,7 @@ from bithumb_bot.config import LiveModeValidationError, settings, validate_runti
 from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
 from bithumb_bot.runtime_adapters.safe_hold import SafeHoldRuntimeDecisionAdapter
+from bithumb_bot import runtime_strategy_decision
 from bithumb_bot.runtime_strategy_decision import RuntimeDecisionAdapter, RuntimeDecisionRequest
 from bithumb_bot.runtime_strategy_set import (
     RuntimeDecisionRequestBuilder,
@@ -192,6 +193,27 @@ def test_production_runtime_modules_have_no_test_only_adapter_registry() -> None
         assert {token for token in forbidden if token in source} == set()
 
 
+def test_generic_runtime_and_fingerprint_modules_do_not_embed_sma_diagnostics() -> None:
+    forbidden = {
+        "diagnostic_" + "sma_windows",
+        "SMA_" + "SHORT",
+        "SMA_" + "LONG",
+        "SMA_" + "FILTER_",
+        "SMA_" + "COST_EDGE_",
+        "sma_" + "with_filter",
+        "runtime_adapters." + "sma_with_filter",
+        "runtime_" + "sma_snapshot",
+        "strategy." + "sma",
+    }
+    for path in (
+        Path("src/bithumb_bot/approved_profile.py"),
+        Path("src/bithumb_bot/runtime_strategy_decision.py"),
+        Path("src/bithumb_bot/experiment_fingerprint.py"),
+    ):
+        source = path.read_text(encoding="utf-8-sig")
+        assert {token for token in forbidden if token in source} == set()
+
+
 def test_collector_passes_runtime_decision_request() -> None:
     received: list[RuntimeDecisionRequest] = []
 
@@ -221,6 +243,84 @@ def test_collector_passes_runtime_decision_request() -> None:
     assert bundle is not None
     assert len(received) == 1
     assert isinstance(received[0], RuntimeDecisionRequest)
+
+
+def test_runtime_decision_entrypoint_accepts_generic_parameter_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[RuntimeDecisionRequest] = []
+
+    class _Adapter:
+        strategy_name = "canary_non_sma"
+
+        def decide(self, conn: Any, request: RuntimeDecisionRequest):
+            del conn
+            received.append(request)
+            return _RuntimeResult(self.strategy_name)
+
+        def typed_authority_required(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        runtime_strategy_decision,
+        "get_runtime_decision_adapter",
+        lambda strategy_name: _Adapter()
+        if str(strategy_name).strip().lower() == "canary_non_sma"
+        else None,
+    )
+
+    result = runtime_strategy_decision.compute_strategy_decision_snapshot(
+        _conn(),
+        strategy_name="canary_non_sma",
+        through_ts_ms=1_700_000_180_000,
+        parameter_overrides={
+            "CANARY_ORDER_START_INDEX": 0,
+            "CANARY_ORDER_SIDE": "BUY",
+            "CANARY_ORDER_REASON": "override_reason",
+        },
+        parameter_source="runtime_override",
+    )
+
+    assert result is not None
+    request = received[0]
+    assert request.parameter_source == "runtime_override"
+    assert request.parameters["CANARY_ORDER_REASON"] == "override_reason"
+    fields = request.observability_fields()
+    assert fields["strategy_parameters_hash"] == request.strategy_parameters_hash
+    assert fields["runtime_contract_hash"] == request.runtime_contract_hash
+    assert fields["plugin_contract_hash"] == request.plugin_contract_hash
+    assert fields["runtime_decision_request_hash"] == request.request_hash
+
+
+def test_runtime_decision_entrypoint_rejects_positional_diagnostics_for_generic_path() -> None:
+    with pytest.raises(TypeError, match="positional_diagnostic_parameters_unsupported"):
+        runtime_strategy_decision.compute_strategy_decision_for_diagnostics(
+            _conn(),
+            2,
+            3,
+            strategy_name="canary_non_sma",
+        )
+
+
+def test_runtime_decision_entrypoint_rejects_ad_hoc_overrides_in_live_like_mode() -> None:
+    old_mode = settings.MODE
+    old_profile_path = settings.APPROVED_STRATEGY_PROFILE_PATH
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "/tmp/profile.json")
+        with pytest.raises(RuntimeError, match="runtime_parameter_overrides_unapproved:canary_non_sma"):
+            runtime_strategy_decision.compute_strategy_decision_snapshot(
+                _conn(),
+                strategy_name="canary_non_sma",
+                parameter_overrides={
+                    "CANARY_ORDER_START_INDEX": 0,
+                    "CANARY_ORDER_SIDE": "BUY",
+                    "CANARY_ORDER_REASON": "unapproved",
+                },
+            )
+    finally:
+        object.__setattr__(settings, "MODE", old_mode)
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", old_profile_path)
 
 
 def test_collector_rejects_dict_returning_adapter() -> None:

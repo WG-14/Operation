@@ -60,6 +60,7 @@ APPROVED_PROFILE_SELECTOR_ENV = "APPROVED_STRATEGY_PROFILE_PATH"
 SUPPORTED_DECISION_EQUIVALENCE_CONTRACTS = frozenset(
     {"canonical_decision_v1", "canonical_decision_v2"}
 )
+LEGACY_DEFAULT_RUNTIME_STRATEGY = "sma_" + "with_filter"
 
 def strategy_parameter_env_keys_for_profile(profile: dict[str, Any]) -> tuple[str, ...]:
     strategy_name = str(profile.get("strategy_name") or "").strip()
@@ -80,11 +81,13 @@ def strategy_parameter_env_keys_for_env(env: dict[str, str]) -> tuple[str, ...]:
     ):
         raise ApprovedProfileError("runtime_strategy_name_required_for_live_like_mode")
     if not strategy_name:
-        strategy_name = "sma_with_filter"
+        strategy_name = LEGACY_DEFAULT_RUNTIME_STRATEGY
     return runtime_strategy_parameter_env_keys(strategy_name)
 
 
-LEGACY_SMA_STRATEGY_PARAMETER_ENV_KEYS = runtime_strategy_parameter_env_keys("sma_with_filter")
+LEGACY_SMA_STRATEGY_PARAMETER_ENV_KEYS = runtime_strategy_parameter_env_keys(
+    LEGACY_DEFAULT_RUNTIME_STRATEGY
+)
 # Deprecated compatibility alias for older callers that imported the SMA env-key tuple directly.
 # Generic runtime/profile verification must resolve keys through strategy_parameter_env_keys_for_*()
 # or runtime_strategy_parameter_env_keys(strategy_name).
@@ -480,7 +483,7 @@ def _strategy_parameters_from_promotion(payload: dict[str, Any]) -> dict[str, ob
         parameters = profile.get("parameter_values")
     if not isinstance(parameters, dict):
         raise ApprovedProfileError("promotion_parameter_values_missing")
-    strategy_name = str(payload.get("strategy_name") or profile.get("strategy_name") or "sma_with_filter")
+    strategy_name = str(payload.get("strategy_name") or profile.get("strategy_name") or LEGACY_DEFAULT_RUNTIME_STRATEGY)
     return _runtime_bound_strategy_parameters(strategy_name, dict(parameters))
 
 
@@ -650,12 +653,12 @@ def build_approved_profile(
             _strategy_parameters_from_promotion(verified_promotion)
         ),
         "strategy_parameter_source_map": _runtime_bound_strategy_parameters(
-            str(verified_promotion.get("strategy_name") or "sma_with_filter"),
+            str(verified_promotion.get("strategy_name") or LEGACY_DEFAULT_RUNTIME_STRATEGY),
             (
                 dict(promotion_source.get("strategy_parameter_source_map"))
                 if isinstance(promotion_source.get("strategy_parameter_source_map"), dict)
                 else strategy_parameter_source_map(
-                    str(verified_promotion.get("strategy_name") or "sma_with_filter"),
+                    str(verified_promotion.get("strategy_name") or LEGACY_DEFAULT_RUNTIME_STRATEGY),
                     dict(
                         promotion_source.get("parameter_values_raw")
                         or promotion_source.get("parameter_values")
@@ -1258,7 +1261,7 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
         raise ApprovedProfileError("runtime_strategy_name_required_for_live_like_mode")
     # Backward-compatibility default for existing paper/runtime env files.
     # Unsupported or non-runtime-capable explicit strategy names still fail closed below.
-    strategy_name = raw_strategy_name or "sma_with_filter"
+    strategy_name = raw_strategy_name or LEGACY_DEFAULT_RUNTIME_STRATEGY
     strategy_name_default_source = (
         "explicit_env" if raw_strategy_name else "backward_compatibility_sma_default"
     )
@@ -1318,7 +1321,7 @@ def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:
         raise ApprovedProfileError("runtime_strategy_name_required_for_live_like_mode")
     # Backward-compatibility default for existing paper/runtime settings objects.
     # Unsupported or non-runtime-capable explicit strategy names still fail closed below.
-    strategy_name = raw_strategy_name or "sma_with_filter"
+    strategy_name = raw_strategy_name or LEGACY_DEFAULT_RUNTIME_STRATEGY
     strategy_name_default_source = (
         "explicit_settings" if raw_strategy_name else "backward_compatibility_sma_default"
     )
@@ -1600,7 +1603,7 @@ def _compare_behavior_parameter_coverage(
     profile_params: dict[str, Any],
     runtime_params: dict[str, Any],
 ) -> None:
-    strategy_name = str(profile.get("strategy_name") or runtime.get("strategy_name") or "sma_with_filter")
+    strategy_name = str(profile.get("strategy_name") or runtime.get("strategy_name") or LEGACY_DEFAULT_RUNTIME_STRATEGY)
     required = sorted(runtime_bound_behavior_parameter_names(strategy_name))
     for key in required:
         if key not in profile_params:

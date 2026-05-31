@@ -226,20 +226,38 @@ class DecisionRunner:
         *,
         through_ts_ms: int | None = None,
         strategy_name: str | None = None,
+        parameter_overrides: Mapping[str, object] | None = None,
+        parameter_source: str = "runtime_override",
+        runtime_strategy_spec: object | None = None,
     ) -> RuntimeStrategyDecisionResult | None:
-        selected_strategy_name = str(
-            strategy_name or self.strategy_name or settings.STRATEGY_NAME
-        ).strip().lower()
+        from .runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
+
+        if runtime_strategy_spec is not None:
+            if not isinstance(runtime_strategy_spec, RuntimeStrategySpec):
+                raise TypeError("runtime_strategy_spec_invalid")
+            spec = runtime_strategy_spec
+            selected_strategy_name = spec.strategy_name
+        else:
+            selected_strategy_name = str(
+                strategy_name or self.strategy_name or settings.STRATEGY_NAME
+            ).strip().lower()
+            parameters = dict(parameter_overrides or {})
+            if parameters:
+                _reject_unapproved_runtime_overrides(selected_strategy_name)
+            spec = RuntimeStrategySpec(
+                strategy_name=selected_strategy_name,
+                parameters=parameters or None,
+                parameter_source=parameter_source if parameters else None,
+            )
         validate_live_strategy_selection(
             replace(settings, STRATEGY_NAME=selected_strategy_name)
         )
         adapter = get_runtime_decision_adapter(selected_strategy_name)
         if adapter is None:
             raise production_runtime_strategy_missing_error(selected_strategy_name)
-        from .runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
 
         request = RuntimeDecisionRequestBuilder().build_for_spec(
-            RuntimeStrategySpec(strategy_name=selected_strategy_name),
+            spec,
             through_ts_ms=through_ts_ms,
         )
         result = adapter.decide(conn, request)
@@ -250,64 +268,45 @@ class DecisionRunner:
 
 def compute_strategy_decision_snapshot(
     conn,
-    *diagnostic_sma_windows: int,
     through_ts_ms: int | None = None,
     strategy_name: str | None = None,
+    parameter_overrides: Mapping[str, object] | None = None,
+    parameter_source: str = "runtime_override",
+    runtime_strategy_spec: object | None = None,
 ) -> RuntimeStrategyDecisionResult | None:
-    if diagnostic_sma_windows:
-        selected_strategy_name = str(strategy_name or settings.STRATEGY_NAME or "").strip().lower()
-        if selected_strategy_name != "sma_with_filter":
-            validate_live_strategy_selection(replace(settings, STRATEGY_NAME=selected_strategy_name))
-            adapter = get_runtime_decision_adapter(selected_strategy_name)
-            if adapter is None:
-                raise production_runtime_strategy_missing_error(selected_strategy_name)
-        else:
-            from .research.strategy_registry import runtime_strategy_parameters_from_settings
-            from .runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
-
-            short_n = int(diagnostic_sma_windows[0])
-            long_n = int(diagnostic_sma_windows[1]) if len(diagnostic_sma_windows) > 1 else int(settings.SMA_LONG)
-            parameters = runtime_strategy_parameters_from_settings("sma_with_filter", settings)
-            parameters["SMA_SHORT"] = short_n
-            parameters["SMA_LONG"] = long_n
-            request = RuntimeDecisionRequestBuilder().build_for_spec(
-                RuntimeStrategySpec(
-                    strategy_name="sma_with_filter",
-                    parameters=parameters,
-                    parameter_source="diagnostic_sma_windows",
-                ),
-                through_ts_ms=through_ts_ms,
-            )
-            adapter = get_runtime_decision_adapter("sma_with_filter")
-            if adapter is None:
-                raise production_runtime_strategy_missing_error("sma_with_filter")
-            result = adapter.decide(conn, request)
-            if result is not None:
-                _attach_runtime_request_metadata(result, request)
-            return result
     return DecisionRunner(strategy_name=strategy_name).decide_snapshot(
         conn,
         through_ts_ms=through_ts_ms,
+        parameter_overrides=parameter_overrides,
+        parameter_source=parameter_source,
+        runtime_strategy_spec=runtime_strategy_spec,
     )
 
 
 def compute_strategy_decision_for_diagnostics(
     conn,
-    *diagnostic_sma_windows: int,
+    *diagnostic_parameters: int,
     through_ts_ms: int | None = None,
     strategy_name: str | None = None,
+    parameter_overrides: Mapping[str, object] | None = None,
+    parameter_source: str = "runtime_override",
+    runtime_strategy_spec: object | None = None,
 ) -> RuntimeStrategyDecisionResult | None:
+    if diagnostic_parameters:
+        raise TypeError("positional_diagnostic_parameters_unsupported")
     return compute_strategy_decision_snapshot(
         conn,
-        *diagnostic_sma_windows,
         through_ts_ms=through_ts_ms,
         strategy_name=strategy_name,
+        parameter_overrides=parameter_overrides,
+        parameter_source=parameter_source,
+        runtime_strategy_spec=runtime_strategy_spec,
     )
 
 
 def compute_legacy_signal_for_diagnostics(
     conn,
-    *diagnostic_sma_windows: int,
+    *diagnostic_parameters: int,
     through_ts_ms: int | None = None,
     strategy_name: str | None = None,
 ):
@@ -316,20 +315,16 @@ def compute_legacy_signal_for_diagnostics(
     Production runtime authority must use RuntimeDecisionGateway and never this
     compatibility serialization.
     """
-    if diagnostic_sma_windows:
+    if diagnostic_parameters:
         selected_strategy_name = str(strategy_name or settings.STRATEGY_NAME or "").strip().lower()
-        if selected_strategy_name != "sma_with_filter":
-            validate_live_strategy_selection(replace(settings, STRATEGY_NAME=selected_strategy_name))
-            adapter = get_runtime_decision_adapter(selected_strategy_name)
-            if adapter is None:
-                raise production_runtime_strategy_missing_error(selected_strategy_name)
-        from .runtime_adapters.sma_with_filter import compute_sma_with_filter_signal
-
-        return compute_sma_with_filter_signal(
-            conn,
-            *diagnostic_sma_windows,
-            through_ts_ms=through_ts_ms,
-        )
+        validate_live_strategy_selection(replace(settings, STRATEGY_NAME=selected_strategy_name))
+        adapter = get_runtime_decision_adapter(selected_strategy_name)
+        if adapter is None:
+            raise production_runtime_strategy_missing_error(selected_strategy_name)
+        legacy_adapter = getattr(adapter, "legacy_diagnostic_signal", None)
+        if legacy_adapter is None or not callable(legacy_adapter):
+            raise TypeError(f"positional_diagnostic_parameters_unsupported:{selected_strategy_name}")
+        return legacy_adapter(conn, *diagnostic_parameters, through_ts_ms=through_ts_ms)
     result = compute_strategy_decision_for_diagnostics(
         conn,
         through_ts_ms=through_ts_ms,
@@ -340,6 +335,15 @@ def compute_legacy_signal_for_diagnostics(
     payload = result.as_legacy_dict()
     payload.setdefault("strategy", result.decision.strategy_name)
     return payload
+
+
+def _reject_unapproved_runtime_overrides(selected_strategy_name: str) -> None:
+    mode = str(settings.MODE or "").strip().lower()
+    approved_profile_path = str(getattr(settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
+    approved_profile_alias = str(getattr(settings, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+    live_like = mode == "live" or bool(approved_profile_path or approved_profile_alias)
+    if live_like:
+        raise RuntimeError(f"runtime_parameter_overrides_unapproved:{selected_strategy_name}")
 
 
 def _attach_runtime_request_metadata(

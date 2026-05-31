@@ -292,7 +292,7 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
             )
         conn.commit()
 
-        result = engine_module.compute_strategy_decision_snapshot(conn, 2, 3)
+        result = engine_module.compute_strategy_decision_snapshot(conn)
     finally:
         conn.close()
         object.__setattr__(settings, "DB_PATH", old_db_path)
@@ -369,7 +369,7 @@ def test_live_real_sma_cross_rejected_before_legacy_strategy_creation(
                 config.LiveModeValidationError,
                 match="live_strategy_capability_validation_failed",
             ) as exc:
-                engine_module.compute_strategy_decision_snapshot(conn, 2, 3)
+                engine_module.compute_strategy_decision_snapshot(conn)
     finally:
         object.__setattr__(settings, "MODE", old_mode)
         object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", old_armed)
@@ -405,8 +405,6 @@ def test_legacy_sma_cross_cannot_be_selected_in_live_even_if_strategy_name_argum
             ) as exc:
                 engine_module.compute_strategy_decision_snapshot(
                     conn,
-                    2,
-                    3,
                     strategy_name="sma_cross",
                 )
     finally:
