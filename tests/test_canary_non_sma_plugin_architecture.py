@@ -182,6 +182,88 @@ def test_canary_non_sma_runtime_adapter_is_request_bound(tmp_path: Path) -> None
         conn.close()
 
 
+def test_canary_non_sma_pre_start_research_omission_policy_is_explicit_and_deterministic(
+    tmp_path: Path,
+) -> None:
+    from bithumb_bot.runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
+    from bithumb_bot.strategy_plugins.canary_non_sma import build_canary_non_sma_research_events
+
+    snapshot = _canary_snapshot()
+    params = {
+        "CANARY_ORDER_START_INDEX": 2,
+        "CANARY_ORDER_SIDE": "BUY",
+        "CANARY_ORDER_REASON": "pre_start_policy",
+    }
+    plugin = resolve_research_strategy_plugin("canary_non_sma")
+    policy = plugin.spec.exit_policy_schema["research_replay_sequence_policy"]
+    events_a = build_canary_non_sma_research_events(
+        dataset=snapshot,
+        parameter_values=params,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        execution_timing_policy=None,
+    )
+    events_b = build_canary_non_sma_research_events(
+        dataset=snapshot,
+        parameter_values=params,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        execution_timing_policy=None,
+    )
+
+    assert policy["pre_start_research_hold_events"] == "omitted"
+    assert policy["runtime_replay_pre_start_decision"] == "HOLD"
+    assert policy["equivalence_interpretation"] == (
+        "pre_start_hold_omission_is_deterministic_and_not_replay_mismatch"
+    )
+    assert events_a == events_b
+    assert [event.candle_ts for event in events_a] == [snapshot.candles[2].ts, snapshot.candles[3].ts]
+
+    db_path = tmp_path / "paper.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_schema(conn)
+        for candle in snapshot.candles:
+            conn.execute(
+                """
+                INSERT INTO candles(ts, pair, interval, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(candle.ts),
+                    snapshot.market,
+                    snapshot.interval,
+                    float(candle.open),
+                    float(candle.high),
+                    float(candle.low),
+                    float(candle.close),
+                    float(candle.volume),
+                ),
+            )
+        conn.commit()
+        request = RuntimeDecisionRequestBuilder().build_for_spec(
+            RuntimeStrategySpec(
+                "canary_non_sma",
+                pair=snapshot.market,
+                interval=snapshot.interval,
+                parameters=params,
+            ),
+            through_ts_ms=int(snapshot.candles[1].ts),
+        )
+        runtime_result = runtime_strategy_decision.get_runtime_decision_adapter("canary_non_sma").decide(
+            conn,
+            request,
+        )
+    finally:
+        conn.close()
+
+    assert runtime_result is not None
+    assert runtime_result.decision.final_signal == "HOLD"
+    assert runtime_result.decision.final_reason == "canary_before_order_start_index"
+    assert runtime_result.replay_fingerprint["parameters"]["CANARY_ORDER_START_INDEX"] == 2
+
+
 def test_canary_non_sma_live_real_order_fails_closed_by_plugin_capability() -> None:
     from dataclasses import replace
 

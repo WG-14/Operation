@@ -73,6 +73,9 @@ def strategy_parameter_env_keys_for_profile(profile: dict[str, Any]) -> tuple[st
 def strategy_parameter_env_keys_for_env(env: dict[str, str]) -> tuple[str, ...]:
     strategy_name = str(env.get("STRATEGY_NAME") or "").strip()
     if not strategy_name:
+        mode = str(env.get("MODE") or "").strip().lower()
+        if mode == "live" or str(env.get("LIVE_DRY_RUN") or "").strip().lower() == "true":
+            raise ApprovedProfileError("runtime_strategy_name_required_for_live_like_mode")
         raise ApprovedProfileError("runtime_strategy_name_required")
     return runtime_strategy_parameter_env_keys(strategy_name)
 
@@ -1002,14 +1005,26 @@ def verify_profile_source_artifact(profile: dict[str, Any]) -> dict[str, Any]:
         for key in ("validation_run_binding_status", "validation_run_path", "validation_run_hash", "validation_run_binding_hash"):
             if not _values_equal(validated.get(key), promotion.get(key)):
                 raise ApprovedProfileError(f"source_promotion_{key}_mismatch")
-    for key in (
+    source_bound_keys = (
         "decision_equivalence_report_path",
         "decision_equivalence_content_hash",
         "decision_equivalence_status",
         "candidate_regime_policy_equivalence_evidence_hash",
         "candidate_regime_policy_equivalence_evidence_path",
         "candidate_profile_evidence_contract_hash",
-    ):
+    )
+    if str(validated.get("profile_mode") or "").strip() != "paper":
+        source_bound_keys = tuple(
+            key
+            for key in source_bound_keys
+            if key
+            not in {
+                "decision_equivalence_report_path",
+                "decision_equivalence_content_hash",
+                "decision_equivalence_status",
+            }
+        )
+    for key in source_bound_keys:
         promotion_value = promotion.get(key)
         if promotion_value is None and isinstance(promotion_profile, dict):
             promotion_value = promotion_profile.get(key)
@@ -1288,7 +1303,11 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
             compat_enabled=_bool_value(env.get("LEGACY_DEFAULT_STRATEGY_COMPAT")),
         )
     _require_runtime_replay_supported_strategy(strategy_name)
-    strategy_parameters = runtime_strategy_parameters_from_env(strategy_name, env)
+    plugin = resolve_research_strategy_plugin(strategy_name)
+    if plugin.runtime_parameter_adapter is None:
+        strategy_parameters = runtime_strategy_parameters_from_env(strategy_name, env)
+    else:
+        strategy_parameters = plugin.runtime_parameter_adapter.from_env(env)
     runtime = {
         "mode": mode,
         "live_dry_run": live_dry_run,
@@ -1315,7 +1334,10 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
             ),
         },
     }
-    runtime["exit_policy"] = exit_policy_from_parameters(strategy_name, strategy_parameters)
+    runtime["exit_policy"] = exit_policy_from_parameters(
+        strategy_name,
+        _coerce_strategy_parameters_for_profile_contract(strategy_name, strategy_parameters),
+    )
     runtime["exit_policy_hash"] = sha256_prefixed(runtime["exit_policy"])
     execution_contract = _execution_contract_from_env_values(env)
     if execution_contract is not None:
@@ -1324,6 +1346,31 @@ def runtime_contract_from_env_values(env: dict[str, str]) -> dict[str, Any]:
         runtime["execution_capability_contract"] = execution_contract.get("execution_capability_contract")
         runtime["execution_capability_contract_hash"] = execution_contract.get("execution_capability_contract_hash")
     return runtime
+
+
+def _coerce_strategy_parameters_for_profile_contract(
+    strategy_name: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    from .research.strategy_spec import strategy_spec_for_name
+
+    spec = strategy_spec_for_name(strategy_name)
+    coerced = dict(parameters)
+    for schema in spec.parameter_schema:
+        if schema.name not in coerced:
+            continue
+        value = coerced[schema.name]
+        if schema.value_type == "int" and not isinstance(value, bool):
+            coerced[schema.name] = int(value)
+        elif schema.value_type == "float":
+            coerced[schema.name] = float(value)
+        elif schema.value_type == "bool" and isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                coerced[schema.name] = True
+            elif lowered in {"0", "false", "no", "off"}:
+                coerced[schema.name] = False
+    return coerced
 
 
 def runtime_contract_from_settings(cfg: object) -> dict[str, Any]:

@@ -101,16 +101,17 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
         else dict(parameters)
     )
     cost_model = candidate.get("cost_model") if isinstance(candidate.get("cost_model"), dict) else {}
-    effective_parameters = (
-        candidate.get("effective_strategy_parameters")
-        if isinstance(candidate.get("effective_strategy_parameters"), dict)
-        else materialize_strategy_parameters(
+    if isinstance(candidate.get("effective_strategy_parameters"), dict):
+        effective_parameters = candidate.get("effective_strategy_parameters")
+    elif raw_parameters:
+        effective_parameters = materialize_strategy_parameters(
             strategy_name,
             raw_parameters,
             fee_rate=cost_model.get("fee_rate"),
             slippage_bps=cost_model.get("slippage_bps"),
         )
-    )
+    else:
+        effective_parameters = {}
     effective_parameters_hash = str(
         candidate.get("effective_strategy_parameters_hash")
         or materialized_strategy_parameters_hash(effective_parameters)
@@ -127,9 +128,17 @@ def build_candidate_profile(candidate: dict[str, Any]) -> dict[str, Any]:
     )
     exit_policy = candidate.get("exit_policy")
     if not isinstance(exit_policy, dict):
-        exit_policy = exit_policy_from_parameters(strategy_name, effective_parameters)
+        exit_policy = (
+            exit_policy_from_parameters(strategy_name, effective_parameters)
+            if effective_parameters
+            else {"schema_version": 1, "strategy_name": strategy_name, "rules": []}
+        )
     elif not _exit_policy_has_current_stop_loss_schema(exit_policy):
-        exit_policy = exit_policy_from_parameters(strategy_name, effective_parameters)
+        exit_policy = (
+            exit_policy_from_parameters(strategy_name, effective_parameters)
+            if effective_parameters
+            else {"schema_version": 1, "strategy_name": strategy_name, "rules": []}
+        )
     resolved_exit_policy_hash = (
         str(candidate.get("exit_policy_hash"))
         if isinstance(candidate.get("exit_policy"), dict)

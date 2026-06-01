@@ -198,12 +198,32 @@ class StrategyRuntimeCapabilities:
     live_real_order_allowed: bool = False
     approved_profile_required: bool = True
     fail_closed_reason: str = "strategy_runtime_capability_missing"
+    research_supported: bool | None = None
+    replay_decisions_supported: bool | None = None
+    promotion_export_supported: bool | None = None
+    runtime_decision_supported: bool | None = None
 
     def __post_init__(self) -> None:
         reason = str(self.fail_closed_reason or "").strip().lower()
         if not reason:
             raise ValueError("strategy runtime capability fail_closed_reason must be non-empty")
         object.__setattr__(self, "fail_closed_reason", reason)
+        if self.research_supported is None:
+            object.__setattr__(self, "research_supported", not bool(self.baseline_only))
+        if self.replay_decisions_supported is None:
+            object.__setattr__(self, "replay_decisions_supported", bool(self.runtime_replay_supported))
+        if self.promotion_export_supported is None:
+            object.__setattr__(
+                self,
+                "promotion_export_supported",
+                bool(self.promotion_runtime_decisions_supported),
+            )
+        if self.runtime_decision_supported is None:
+            object.__setattr__(
+                self,
+                "runtime_decision_supported",
+                bool(self.promotion_runtime_decisions_supported),
+            )
         if bool(self.research_only) or bool(self.baseline_only):
             if self.promotion_runtime_decisions_supported:
                 raise ValueError("research-only or baseline-only strategy cannot support promotion runtime decisions")
@@ -472,7 +492,10 @@ class ResearchStrategyPlugin:
 
     @property
     def is_promotion_grade(self) -> bool:
-        if self.promotion_extension_payload is not None:
+        if self.promotion_extension_payload is not None and self.authoring_contract_kind in {
+            "promotion_grade",
+            "live_eligible",
+        }:
             return True
         return (
             bool(self.runtime_capabilities.promotion_runtime_decisions_supported)

@@ -5,18 +5,20 @@ from typing import Any
 
 from bithumb_bot.canonical_decision import canonical_payload_hash
 from bithumb_bot.decision_equivalence import sha256_prefixed
-from bithumb_bot.research.strategy_registry import (
-    ResearchStrategyPlugin,
-    RuntimeParameterAdapter,
-)
+from bithumb_bot.research.strategy_registry import RuntimeParameterAdapter
 from bithumb_bot.research.strategy_spec import (
     StrategyParameterSchema,
     StrategySpec,
     materialize_strategy_parameters,
 )
 from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
-from bithumb_bot.strategy_authoring import PromotionGradeStrategyExtension
+from bithumb_bot.strategy_authoring import (
+    PromotionGradeStrategyExtension,
+    build_live_eligible_strategy_plugin,
+    research_plugin_from_event_builder,
+)
 from bithumb_bot.strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
+from bithumb_bot.strategy_evidence import StrategyDecisionEvidenceBuilder
 from bithumb_bot.strategy_policy_contract import (
     EntryExecutionIntent,
     ExecutionConstraintSnapshot,
@@ -63,6 +65,12 @@ CANARY_NON_SMA_SPEC = StrategySpec(
             "can_emit_order_intent": True,
             "live_real_order_allowed": False,
             "reason": "architecture canary proves promotion-grade replay without live real-order authority",
+        },
+        "research_replay_sequence_policy": {
+            "schema_version": 1,
+            "pre_start_research_hold_events": "omitted",
+            "runtime_replay_pre_start_decision": "HOLD",
+            "equivalence_interpretation": "pre_start_hold_omission_is_deterministic_and_not_replay_mismatch",
         },
     },
     parameter_schema=(
@@ -281,16 +289,63 @@ def _canary_policy_material(
         "final_reason": final_reason,
         "execution_intent": execution_intent.as_dict() if execution_intent is not None else None,
     }
-    policy_hash = sha256_prefixed(
-        {
-            "policy_contract": policy_contract,
-            "policy_input": policy_input,
-            "policy_decision": policy_decision,
-        }
+    evidence = StrategyDecisionEvidenceBuilder().build(
+        strategy_name=CANARY_NON_SMA_STRATEGY_NAME,
+        policy_contract_material=policy_contract,
+        policy_input_material=policy_input,
+        policy_decision_material=policy_decision,
+        replay_fingerprint_material={
+            "policy_contract_version": CANARY_NON_SMA_POLICY_CONTRACT_VERSION,
+            "candle_ts": int(candle_ts),
+            "candle_index": int(candle_index),
+            "market_price": float(market_price),
+            "parameters": dict(resolved),
+            "decision_input_bundle_hash": sha256_prefixed(policy_input),
+            "decision_input_contract_hash": sha256_prefixed(policy_contract),
+            "decision_input_bundle_payload_hash": sha256_prefixed(
+                {
+                    "policy_input": policy_input,
+                    "policy_decision": policy_decision,
+                }
+            ),
+            "market_snapshot_hash": sha256_prefixed(
+                {
+                    "pair": pair,
+                    "interval": interval,
+                    "candle_ts": int(candle_ts),
+                    "market_price": float(market_price),
+                }
+            ),
+            "market_feature_hash": sha256_prefixed(
+                {
+                    "candle_index": int(candle_index),
+                    "market_price": float(market_price),
+                    "feature_family": "canary_close_only",
+                }
+            ),
+            "canonical_feature_projection_hash": sha256_prefixed(
+                {
+                    "candle_index": int(candle_index),
+                    "market_price": float(market_price),
+                    "feature_family": "canary_close_only",
+                }
+            ),
+            "position_snapshot_hash": sha256_prefixed(
+                {"in_position": False, "entry_allowed": True, "exit_allowed": False}
+            ),
+            "execution_constraints_hash": sha256_prefixed({"fee_rate_for_decision": 0.0}),
+            "policy_config_hash": sha256_prefixed({"parameters": dict(resolved)}),
+            "exit_policy_config_hash": sha256_prefixed({"schema_version": 1, "rules": ()}),
+            "final_exit_decision_input_hash": sha256_prefixed(policy_decision),
+            "snapshot_projector_version": "canary_non_sma_snapshot_v1",
+            "snapshot_projector_hash": sha256_prefixed(
+                {
+                    "strategy_name": CANARY_NON_SMA_STRATEGY_NAME,
+                    "projector": "canary_non_sma_snapshot_v1",
+                }
+            ),
+        },
     )
-    policy_contract_hash = sha256_prefixed(policy_contract)
-    policy_input_hash = sha256_prefixed(policy_input)
-    policy_decision_hash = sha256_prefixed(policy_decision)
     return {
         "resolved": resolved,
         "final_signal": final_signal,
@@ -299,10 +354,12 @@ def _canary_policy_material(
         "policy_contract": policy_contract,
         "policy_input": policy_input,
         "policy_decision": policy_decision,
-        "policy_hash": policy_hash,
-        "policy_contract_hash": policy_contract_hash,
-        "policy_input_hash": policy_input_hash,
-        "policy_decision_hash": policy_decision_hash,
+        "policy_hash": evidence.policy_hash,
+        "policy_contract_hash": evidence.policy_contract_hash,
+        "policy_input_hash": evidence.policy_input_hash,
+        "policy_decision_hash": evidence.policy_decision_hash,
+        "replay_fingerprint": dict(evidence.replay_fingerprint),
+        "replay_fingerprint_hash": evidence.replay_fingerprint_hash,
     }
 
 
@@ -400,40 +457,28 @@ def _evaluate_canary_result(
     policy_contract_hash = str(material["policy_contract_hash"])
     policy_input_hash = str(material["policy_input_hash"])
     policy_decision_hash = str(material["policy_decision_hash"])
-    replay_fingerprint = {
-        "schema_version": 1,
-        "strategy_name": CANARY_NON_SMA_STRATEGY_NAME,
-        "policy_contract_version": CANARY_NON_SMA_POLICY_CONTRACT_VERSION,
-        "policy_contract_hash": policy_contract_hash,
-        "policy_input_hash": policy_input_hash,
-        "policy_decision_hash": policy_decision_hash,
-        "candle_ts": int(candle_ts),
-        "candle_index": int(candle_index),
-        "market_price": float(market_price),
-        "parameters": dict(resolved),
-    }
+    replay_fingerprint = dict(material["replay_fingerprint"])
     request_fields = (
         request.observability_fields()
         if request is not None and hasattr(request, "observability_fields")
         else {}
     )
     if isinstance(request_fields, dict):
-        replay_fingerprint.update(
-            {
-                key: value
-                for key, value in request_fields.items()
-                if key
-                in {
-                    "runtime_decision_request_hash",
-                    "strategy_instance_id",
-                    "strategy_parameters_hash",
-                    "approved_profile_hash",
-                    "runtime_contract_hash",
-                    "plugin_contract_hash",
-                    "through_ts_ms",
-                }
+        request_replay_fields = {
+            key: value
+            for key, value in request_fields.items()
+            if key
+            in {
+                "runtime_decision_request_hash",
+                "strategy_instance_id",
+                "strategy_parameters_hash",
+                "approved_profile_hash",
+                "runtime_contract_hash",
+                "plugin_contract_hash",
+                "through_ts_ms",
             }
-        )
+        }
+        replay_fingerprint.update(request_replay_fields)
     boundary = {
         "schema_version": 1,
         "decision_boundary_phase": "StrategyDecisionService.evaluate",
@@ -945,24 +990,19 @@ _CANARY_NON_SMA_PROMOTION_EXTENSION = PromotionGradeStrategyExtension(
 )
 
 
-CANARY_NON_SMA_PLUGIN = ResearchStrategyPlugin(
-    name=CANARY_NON_SMA_SPEC.strategy_name,
+_CANARY_NON_SMA_RESEARCH_PLUGIN = research_plugin_from_event_builder(
+    strategy_name=CANARY_NON_SMA_SPEC.strategy_name,
     version=CANARY_NON_SMA_SPEC.strategy_version,
     spec=CANARY_NON_SMA_SPEC,
     required_data=CANARY_NON_SMA_SPEC.required_data,
     optional_data=CANARY_NON_SMA_SPEC.optional_data,
-    runner=run_canary_non_sma_backtest,
-    research_event_builder=build_canary_non_sma_research_events,
-    runtime_replay_builder=_CANARY_NON_SMA_PROMOTION_EXTENSION.runtime_replay_builder,
-    runtime_parameter_adapter=_CANARY_NON_SMA_PROMOTION_EXTENSION.runtime_parameter_adapter,
-    decision_contract_version=CANARY_NON_SMA_SPEC.decision_contract_version,
+    build_research_events=build_canary_non_sma_research_events,
     diagnostics_namespace=CANARY_NON_SMA_STRATEGY_NAME,
-    decision_payload_adapter=_CANARY_NON_SMA_PROMOTION_EXTENSION.decision_payload_adapter,
-    research_policy_decision_builder=_CANARY_NON_SMA_PROMOTION_EXTENSION.research_policy_decision_builder,
-    runtime_decision_adapter_factory=_CANARY_NON_SMA_PROMOTION_EXTENSION.runtime_decision_adapter_factory,
-    single_replay_bundle_builder=_CANARY_NON_SMA_PROMOTION_EXTENSION.single_replay_bundle_builder,
-    policy_assembly_factory=_CANARY_NON_SMA_PROMOTION_EXTENSION.policy_assembly_factory,
-    runtime_capabilities=_CANARY_NON_SMA_PROMOTION_EXTENSION.runtime_capabilities(),
-    authoring_contract_kind="promotion_grade",
-    promotion_extension_payload=_CANARY_NON_SMA_PROMOTION_EXTENSION.contract_payload(),
 )
+
+
+CANARY_NON_SMA_PLUGIN = build_live_eligible_strategy_plugin(
+    research=_CANARY_NON_SMA_RESEARCH_PLUGIN,
+    extension=_CANARY_NON_SMA_PROMOTION_EXTENSION,
+    runner=run_canary_non_sma_backtest,
+).to_research_strategy_plugin()

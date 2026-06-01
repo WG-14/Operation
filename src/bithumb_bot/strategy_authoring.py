@@ -26,6 +26,7 @@ from bithumb_bot.research.strategy_spec import StrategySpec
 
 
 RESEARCH_ONLY_FAIL_CLOSED_REASON = "promotion_extension_missing"
+REPLAY_COMPATIBLE_FAIL_CLOSED_REASON = "replay_compatible_not_live_eligible"
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,119 @@ class PromotionGradeStrategyExtension:
             "live_real_order_allowed": bool(self.live_real_order_allowed),
             "fail_closed_reason": self.fail_closed_reason,
         }
+
+
+@dataclass(frozen=True)
+class ReplayCompatibleStrategyExtension:
+    runtime_replay_builder: RuntimeReplayBuilder
+    single_replay_bundle_builder: SingleReplayBundleBuilder | None = None
+    research_export_normalizer: ResearchExportNormalizer | None = None
+    decision_payload_adapter: DecisionPayloadAdapter | None = None
+    research_policy_decision_builder: ResearchPolicyDecisionBuilder | None = None
+    parameter_materializer: ResearchParameterMaterializer | None = None
+    fail_closed_reason: str = REPLAY_COMPATIBLE_FAIL_CLOSED_REASON
+
+    def runtime_capabilities(self) -> StrategyRuntimeCapabilities:
+        return StrategyRuntimeCapabilities(
+            promotion_runtime_decisions_supported=False,
+            runtime_replay_supported=True,
+            research_only=False,
+            baseline_only=False,
+            live_dry_run_allowed=False,
+            live_real_order_allowed=False,
+            approved_profile_required=False,
+            fail_closed_reason=self.fail_closed_reason,
+            replay_decisions_supported=True,
+            promotion_export_supported=True,
+            runtime_decision_supported=False,
+        )
+
+    def contract_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "replay_compatible_extension": True,
+            "runtime_replay_supported": True,
+            "single_replay_bundle_supported": self.single_replay_bundle_builder is not None,
+            "research_export_normalizer_supported": self.research_export_normalizer is not None,
+            "decision_payload_adapter_supported": self.decision_payload_adapter is not None,
+            "research_policy_decision_builder_supported": self.research_policy_decision_builder is not None,
+            "approved_profile_required": False,
+            "live_dry_run_allowed": False,
+            "live_real_order_allowed": False,
+            "fail_closed_reason": self.fail_closed_reason,
+        }
+
+
+@dataclass(frozen=True)
+class ReplayCompatibleStrategyPlugin:
+    research: ResearchOnlyStrategyPlugin
+    extension: ReplayCompatibleStrategyExtension
+    runner: Callable[..., BacktestRun] | None = None
+
+    def to_research_strategy_plugin(self) -> ResearchStrategyPlugin:
+        normalized = self.research.to_research_strategy_plugin()
+        materializer = self.extension.parameter_materializer or normalized.research_parameter_materializer
+        return ResearchStrategyPlugin(
+            name=normalized.name,
+            version=normalized.version,
+            spec=normalized.spec,
+            required_data=normalized.required_data,
+            optional_data=normalized.optional_data,
+            runner=self.runner or normalized.runner,
+            research_event_builder=normalized.research_event_builder,
+            research_parameter_materializer=materializer,
+            runtime_replay_builder=self.extension.runtime_replay_builder,
+            runtime_parameter_adapter=None,
+            decision_contract_version=normalized.decision_contract_version,
+            diagnostics_namespace=normalized.diagnostics_namespace,
+            decision_payload_adapter=self.extension.decision_payload_adapter,
+            research_policy_decision_builder=self.extension.research_policy_decision_builder,
+            research_export_normalizer=self.extension.research_export_normalizer,
+            single_replay_bundle_builder=self.extension.single_replay_bundle_builder,
+            runtime_capabilities=self.extension.runtime_capabilities(),
+            authoring_contract_kind="replay_compatible",
+            promotion_extension_payload=self.extension.contract_payload(),
+        )
+
+
+@dataclass(frozen=True)
+class LiveEligibleStrategyPlugin:
+    research: ResearchOnlyStrategyPlugin
+    extension: PromotionGradeStrategyExtension
+    runner: Callable[..., BacktestRun] | None = None
+
+    def to_research_strategy_plugin(self) -> ResearchStrategyPlugin:
+        return promotion_grade_plugin(
+            research=self.research,
+            extension=self.extension,
+            runner=self.runner,
+        )
+
+
+def build_replay_compatible_strategy_plugin(
+    *,
+    research: ResearchOnlyStrategyPlugin,
+    extension: ReplayCompatibleStrategyExtension,
+    runner: Callable[..., BacktestRun] | None = None,
+) -> ReplayCompatibleStrategyPlugin:
+    return ReplayCompatibleStrategyPlugin(
+        research=research,
+        extension=extension,
+        runner=runner,
+    )
+
+
+def build_live_eligible_strategy_plugin(
+    *,
+    research: ResearchOnlyStrategyPlugin,
+    extension: PromotionGradeStrategyExtension,
+    runner: Callable[..., BacktestRun] | None = None,
+) -> LiveEligibleStrategyPlugin:
+    return LiveEligibleStrategyPlugin(
+        research=research,
+        extension=extension,
+        runner=runner,
+    )
 
 
 def research_plugin_from_event_builder(

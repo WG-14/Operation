@@ -155,6 +155,11 @@ class SmaWithFilterPolicyAssembly:
             else {}
         )
         merged = {**profile_params, **raw_values}
+        execution_sizing_values = {
+            name: merged.pop(name)
+            for name in tuple(self.execution_sizing_defaults)
+            if name in merged
+        }
         runtime_bound = set(runtime_bound_behavior_parameter_names(self.strategy_name))
         if resolved_mode.strict_runtime_bound:
             missing = sorted(name for name in runtime_bound if name not in merged)
@@ -176,8 +181,12 @@ class SmaWithFilterPolicyAssembly:
         )
         for name, default in self.execution_sizing_defaults.items():
             if name not in values:
-                values[name] = default
-                sources[name] = "sma_policy_assembly_execution_sizing_default"
+                if name in execution_sizing_values:
+                    values[name] = execution_sizing_values[name]
+                    sources[name] = "sma_policy_assembly_execution_sizing_input"
+                else:
+                    values[name] = default
+                    sources[name] = "sma_policy_assembly_execution_sizing_default"
         legacy_defaults = tuple(
             sorted(name for name in runtime_bound if sources.get(name) == "strategy_spec_default")
         )

@@ -653,6 +653,11 @@ def runtime_decision_to_canonical_event(
         "snapshot_projector_version": str(context.get("snapshot_projector_version") or ""),
         "snapshot_projector_hash": str(context.get("snapshot_projector_hash") or ""),
         "replay_fingerprint_hash": canonical_payload_hash(context.get("replay_fingerprint") or {}),
+        "strategy_evaluation_provenance": (
+            context.get("strategy_evaluation_provenance")
+            if isinstance(context.get("strategy_evaluation_provenance"), dict)
+            else None
+        ),
         "runtime_decision_request_hash": str(
             context.get("runtime_decision_request_hash")
             or sha256_prefixed(
@@ -757,6 +762,7 @@ def runtime_decision_to_canonical_event(
         "artifact_grade",
         "authority_plane",
         "promotion_rejection_reason",
+        "strategy_evaluation_provenance",
     ):
         if key in payload:
             normalized[key] = payload[key]
