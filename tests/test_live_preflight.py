@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -28,67 +28,7 @@ _REAL_GET_EFFECTIVE_ORDER_RULES = order_rules.get_effective_order_rules
 
 @pytest.fixture(autouse=True)
 def _restore_settings():
-    old_values = {
-        "MODE": settings.MODE,
-        "DB_PATH": settings.DB_PATH,
-        "MAX_ORDER_KRW": settings.MAX_ORDER_KRW,
-        "MAX_DAILY_LOSS_KRW": settings.MAX_DAILY_LOSS_KRW,
-        "MAX_DAILY_ORDER_COUNT": settings.MAX_DAILY_ORDER_COUNT,
-        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
-        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
-        "LIVE_ALLOW_ORDER_RULE_FALLBACK": settings.LIVE_ALLOW_ORDER_RULE_FALLBACK,
-        "LIVE_ORDER_RULE_FALLBACK_PROFILE": settings.LIVE_ORDER_RULE_FALLBACK_PROFILE,
-        "LIVE_SUBMIT_CONTRACT_PROFILE": settings.LIVE_SUBMIT_CONTRACT_PROFILE,
-        "KILL_SWITCH_LIQUIDATE": settings.KILL_SWITCH_LIQUIDATE,
-        "BITHUMB_API_KEY": settings.BITHUMB_API_KEY,
-        "BITHUMB_API_SECRET": settings.BITHUMB_API_SECRET,
-        "LIVE_MIN_ORDER_QTY": settings.LIVE_MIN_ORDER_QTY,
-        "LIVE_ORDER_QTY_STEP": settings.LIVE_ORDER_QTY_STEP,
-        "MIN_ORDER_NOTIONAL_KRW": settings.MIN_ORDER_NOTIONAL_KRW,
-        "LIVE_ORDER_MAX_QTY_DECIMALS": settings.LIVE_ORDER_MAX_QTY_DECIMALS,
-        "MAX_ORDERBOOK_SPREAD_BPS": settings.MAX_ORDERBOOK_SPREAD_BPS,
-        "MAX_MARKET_SLIPPAGE_BPS": settings.MAX_MARKET_SLIPPAGE_BPS,
-        "LIVE_PRICE_PROTECTION_MAX_SLIPPAGE_BPS": settings.LIVE_PRICE_PROTECTION_MAX_SLIPPAGE_BPS,
-        "LIVE_FILL_FEE_STRICT_MODE": settings.LIVE_FILL_FEE_STRICT_MODE,
-        "LIVE_FILL_FEE_STRICT_MIN_NOTIONAL_KRW": settings.LIVE_FILL_FEE_STRICT_MIN_NOTIONAL_KRW,
-        "PAIR": settings.PAIR,
-        "MARKET_PREFLIGHT_BLOCK_ON_CATALOG_ERROR": settings.MARKET_PREFLIGHT_BLOCK_ON_CATALOG_ERROR,
-        "MARKET_PREFLIGHT_BLOCK_ON_WARNING": settings.MARKET_PREFLIGHT_BLOCK_ON_WARNING,
-        "MARKET_PREFLIGHT_WARNING_STATES": settings.MARKET_PREFLIGHT_WARNING_STATES,
-        "MARKET_REGISTRY_CACHE_TTL_SEC": settings.MARKET_REGISTRY_CACHE_TTL_SEC,
-        "MARKET_PREFLIGHT_FORCE_REGISTRY_REFRESH": settings.MARKET_PREFLIGHT_FORCE_REGISTRY_REFRESH,
-        "APPROVED_STRATEGY_PROFILE_PATH": settings.APPROVED_STRATEGY_PROFILE_PATH,
-        "STRATEGY_APPROVED_PROFILE_PATH": settings.STRATEGY_APPROVED_PROFILE_PATH,
-        "STRATEGY_NAME": settings.STRATEGY_NAME,
-        "ENTRY_EDGE_BUFFER_RATIO": settings.ENTRY_EDGE_BUFFER_RATIO,
-        "STRATEGY_MIN_EXPECTED_EDGE_RATIO": settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO,
-        "STRATEGY_EXIT_RULES": settings.STRATEGY_EXIT_RULES,
-        "STRATEGY_EXIT_MAX_HOLDING_MIN": settings.STRATEGY_EXIT_MAX_HOLDING_MIN,
-        "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO,
-        "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": settings.STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO,
-        "LIVE_FEE_RATE_ESTIMATE": settings.LIVE_FEE_RATE_ESTIMATE,
-        "STRATEGY_ENTRY_SLIPPAGE_BPS": settings.STRATEGY_ENTRY_SLIPPAGE_BPS,
-        "EXECUTION_FILL_REFERENCE_POLICY": settings.EXECUTION_FILL_REFERENCE_POLICY,
-        "EXECUTION_MISSING_QUOTE_POLICY": settings.EXECUTION_MISSING_QUOTE_POLICY,
-        "EXECUTION_MIN_REALITY_LEVEL_FOR_PROMOTION": settings.EXECUTION_MIN_REALITY_LEVEL_FOR_PROMOTION,
-        "EXECUTION_ALLOW_SAME_CANDLE_CLOSE_FILL": settings.EXECUTION_ALLOW_SAME_CANDLE_CLOSE_FILL,
-        "EXECUTION_TOP_OF_BOOK_REQUIRED": settings.EXECUTION_TOP_OF_BOOK_REQUIRED,
-        "EXECUTION_DEPTH_REQUIRED": settings.EXECUTION_DEPTH_REQUIRED,
-        "EXECUTION_TRADE_TICK_REQUIRED": settings.EXECUTION_TRADE_TICK_REQUIRED,
-        "EXECUTION_QUEUE_POSITION_REQUIRED": settings.EXECUTION_QUEUE_POSITION_REQUIRED,
-        "EXECUTION_MARKET_IMPACT_REQUIRED": settings.EXECUTION_MARKET_IMPACT_REQUIRED,
-        "EXECUTION_INTRA_CANDLE_PATH_AVAILABLE": settings.EXECUTION_INTRA_CANDLE_PATH_AVAILABLE,
-        "EXECUTION_LATENCY_MODEL_TYPE": settings.EXECUTION_LATENCY_MODEL_TYPE,
-        "EXECUTION_LATENCY_MS": settings.EXECUTION_LATENCY_MS,
-        "EXECUTION_PARTIAL_FILL_MODEL_TYPE": settings.EXECUTION_PARTIAL_FILL_MODEL_TYPE,
-        "EXECUTION_PARTIAL_FILL_RATE": settings.EXECUTION_PARTIAL_FILL_RATE,
-        "EXECUTION_ORDER_FAILURE_MODEL_TYPE": settings.EXECUTION_ORDER_FAILURE_MODEL_TYPE,
-        "EXECUTION_ORDER_FAILURE_RATE": settings.EXECUTION_ORDER_FAILURE_RATE,
-        "EXECUTION_FEE_SOURCE": settings.EXECUTION_FEE_SOURCE,
-        "EXECUTION_SLIPPAGE_SOURCE": settings.EXECUTION_SLIPPAGE_SOURCE,
-        "EXECUTION_CALIBRATION_REQUIRED": settings.EXECUTION_CALIBRATION_REQUIRED,
-        "EXECUTION_CALIBRATION_ARTIFACT_HASH": settings.EXECUTION_CALIBRATION_ARTIFACT_HASH,
-    }
+    old_values = {field.name: getattr(settings, field.name) for field in fields(type(settings))}
     old_cache = dict(order_rules._cached_rules)
     yield
     for key, value in old_values.items():
@@ -984,9 +924,24 @@ def test_live_execution_contract_emits_safe_env_metadata_and_lints(monkeypatch, 
     assert "paper_only_key_in_live_env:START_CASH_KRW" in summary["live_env_contract_lints"]
     assert "risky_live_limit:MAX_DAILY_ORDER_COUNT>=500" in summary["live_env_contract_lints"]
     assert "live_env_file_source_mismatch:BITHUMB_ENV_FILE!=BITHUMB_ENV_FILE_LIVE" in summary["live_env_contract_lints"]
+    lint_findings = summary["live_env_contract_lint_findings"]
+    reason_codes = {str(item["reason_code"]) for item in lint_findings}
+    assert "APPROVED_PROFILE_PLACEHOLDER" in reason_codes
+    assert "DEPRECATED_IGNORED_ENV_KEY" in reason_codes
+    assert "SECRET_VALUE_SURROUNDING_WHITESPACE" in reason_codes
+    assert "PAPER_ONLY_KEY_IN_LIVE_ENV" in reason_codes
+    assert "RISKY_LIVE_LIMIT" in reason_codes
+    assert "LIVE_ENV_FILE_SOURCE_MISMATCH" in reason_codes
+    for finding in lint_findings:
+        assert finding["severity"]
+        assert finding["recommended_action"]
+        assert "raw-key" not in str(finding)
+        assert "raw-secret" not in str(finding)
     config_contract = summary["config_contract"]
     assert config_contract["config_schema_version"] == "config_spec_v1"
     assert str(config_contract["config_spec_hash"]).startswith("sha256:")
+    assert str(config_contract["env_example_hash"]).startswith("sha256:")
+    assert str(config_contract["generated_docs_hash"]).startswith("sha256:")
     assert str(config_contract["settings_effective_hash"]).startswith("sha256:")
     assert "BUY_PRICE_NONE_MARKET_TO_PRICE_ALIAS_ENABLED" in config_contract["deprecated_env_keys"]
     assert "BITHUMB_API_SECRET" in config_contract["settings_explicit_keys"]
@@ -1021,6 +976,7 @@ def test_live_execution_contract_log_emits_redacted_fingerprint(
     assert "dataset_content_hash=" in caplog.text
     assert "config_schema_version=config_spec_v1" in caplog.text
     assert "config_spec_hash=sha256:" in caplog.text
+    assert "env_example_hash=sha256:" in caplog.text
     assert "settings_effective_hash=sha256:" in caplog.text
     assert "secret-value-must-not-log" not in caplog.text
 

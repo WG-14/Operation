@@ -400,3 +400,18 @@ def documentation_hash(path: Path) -> str:
     if not path.exists():
         return ""
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def artifact_hash(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def settings_contract_failures(settings_fields: set[str]) -> list[str]:
+    declared = set(SPEC_BY_NAME)
+    failures: list[str] = []
+    missing = sorted(settings_fields - declared)
+    if missing:
+        failures.append("Settings fields missing from ConfigSpec: " + ", ".join(missing))
+    return failures

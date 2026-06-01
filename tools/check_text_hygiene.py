@@ -92,8 +92,12 @@ def is_relevant_text_file(path: Path) -> bool:
     return False
 
 
-def _is_allowed_technical_identifier(line: str) -> bool:
+def _is_allowed_technical_identifier(path: Path, line: str) -> bool:
     stripped = line.strip()
+    if path.name == "check_text_hygiene.py" and stripped.startswith("r\""):
+        # Regex fragments inside this scanner intentionally contain the byte-
+        # pattern text that the scanner must detect elsewhere.
+        return True
     return (
         "korean_name" in stripped
         and not HANGUL_RE.search(stripped)
@@ -122,7 +126,7 @@ def scan_file(path: Path) -> list[Violation]:
         return violations
 
     for index, line in enumerate(text.splitlines(), start=1):
-        if _is_allowed_technical_identifier(line):
+        if _is_allowed_technical_identifier(path, line):
             continue
         if HANGUL_RE.search(line):
             violations.append(Violation(rel, index, "hangul", line))

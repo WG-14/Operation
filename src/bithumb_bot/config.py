@@ -26,14 +26,16 @@ from .paths import PathManager, PathPolicyError, validate_runtime_root_separatio
 from .messages import (
     ACCOUNTS_PREFLIGHT_AUTH_FAILED,
     ACCOUNTS_PREFLIGHT_TRANSPORT_FAILED,
+    CONFIG_LINT_MESSAGES,
     LIVE_DB_PATH_REQUIRED,
 )
 from .config_spec import (
     CONFIG_SCHEMA_VERSION,
     ENV_SPECS,
     SPEC_BY_NAME,
+    artifact_hash,
     config_spec_hash,
-    documentation_hash,
+    settings_contract_failures,
 )
 from .approved_profile import (
     approved_profile_path_from_env,
@@ -859,6 +861,15 @@ class Settings:
 settings = Settings()
 
 
+def _validate_settings_config_spec_contract() -> None:
+    failures = settings_contract_failures({field.name for field in fields(Settings)})
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
+_validate_settings_config_spec_contract()
+
+
 def validate_mode_or_raise(mode: str) -> None:
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode in ALLOWED_RUNTIME_MODES:
@@ -1487,6 +1498,7 @@ def config_contract_metadata(cfg: Settings) -> dict[str, object]:
             effective_payload[key] = value
     encoded = json.dumps(effective_payload, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=True)
     docs_path = PROJECT_ROOT / "docs" / "config-reference.md"
+    env_example_path = PROJECT_ROOT / ".env.example"
     return {
         "config_schema_version": CONFIG_SCHEMA_VERSION,
         "config_spec_hash": config_spec_hash(),
@@ -1495,7 +1507,8 @@ def config_contract_metadata(cfg: Settings) -> dict[str, object]:
         "settings_explicit_keys": explicit_keys,
         "unknown_env_keys": unknown_env_keys,
         "deprecated_env_keys": deprecated_env_keys,
-        "generated_docs_hash": documentation_hash(docs_path),
+        "generated_docs_hash": artifact_hash(docs_path),
+        "env_example_hash": artifact_hash(env_example_path),
     }
 
 
@@ -1523,13 +1536,32 @@ def _env_file_contract_metadata(env_summary: dict[str, object]) -> dict[str, obj
     return enriched
 
 
-def live_env_contract_lints(cfg: Settings) -> tuple[str, ...]:
+def _config_lint_finding(kind: str, *, legacy: str, details: dict[str, object] | None = None) -> dict[str, object]:
+    message = CONFIG_LINT_MESSAGES[kind]
+    return {
+        "reason_code": message.reason_code,
+        "severity": message.severity,
+        "message": message.message,
+        "recommended_action": message.recommended_action,
+        "docs_hint": message.docs_hint,
+        "legacy_text": legacy,
+        "details": details or {},
+    }
+
+
+def live_env_contract_lint_findings(cfg: Settings) -> tuple[dict[str, object], ...]:
     if str(cfg.MODE or "").strip().lower() != "live":
         return ()
-    issues: list[str] = []
+    findings: list[dict[str, object]] = []
     profile_path = str(cfg.APPROVED_STRATEGY_PROFILE_PATH or "").strip()
     if profile_path.startswith("<") and profile_path.endswith(">"):
-        issues.append("approved_profile_placeholder")
+        findings.append(
+            _config_lint_finding(
+                "approved_profile_placeholder",
+                legacy="approved_profile_placeholder",
+                details={"key": "APPROVED_STRATEGY_PROFILE_PATH"},
+            )
+        )
     deprecated_keys = [
         key
         for key in (
@@ -1539,27 +1571,75 @@ def live_env_contract_lints(cfg: Settings) -> tuple[str, ...]:
         if os.getenv(key) not in (None, "")
     ]
     for key in deprecated_keys:
-        issues.append(f"deprecated_ignored_env_key:{key}")
+        findings.append(
+            _config_lint_finding(
+                "deprecated_ignored_env_key",
+                legacy=f"deprecated_ignored_env_key:{key}",
+                details={"key": key},
+            )
+        )
     secret_keys = ("BITHUMB_API_KEY", "BITHUMB_API_SECRET", "SLACK_WEBHOOK_URL")
     for key in secret_keys:
         raw = os.getenv(key)
         if raw is not None and raw != raw.strip():
-            issues.append(f"secret_bearing_key_has_surrounding_whitespace:{key}")
+            findings.append(
+                _config_lint_finding(
+                    "secret_bearing_key_has_surrounding_whitespace",
+                    legacy=f"secret_bearing_key_has_surrounding_whitespace:{key}",
+                    details={"key": key, "value_present": True, "value_length": len(raw)},
+                )
+            )
     paper_keys = [key for key in PAPER_ONLY_ENV_KEYS if os.getenv(key) not in (None, "")]
     for key in paper_keys:
-        issues.append(f"paper_only_key_in_live_env:{key}")
+        findings.append(
+            _config_lint_finding(
+                "paper_only_key_in_live_env",
+                legacy=f"paper_only_key_in_live_env:{key}",
+                details={"key": key},
+            )
+        )
     try:
         if int(cfg.MAX_DAILY_ORDER_COUNT) >= 500:
-            issues.append("risky_live_limit:MAX_DAILY_ORDER_COUNT>=500")
+            findings.append(
+                _config_lint_finding(
+                    "risky_live_limit",
+                    legacy="risky_live_limit:MAX_DAILY_ORDER_COUNT>=500",
+                    details={"key": "MAX_DAILY_ORDER_COUNT", "threshold": 500, "value": int(cfg.MAX_DAILY_ORDER_COUNT)},
+                )
+            )
     except (TypeError, ValueError):
         pass
     if not profile_path:
-        issues.append("approved_profile_not_configured")
+        findings.append(
+            _config_lint_finding(
+                "approved_profile_not_configured",
+                legacy="approved_profile_not_configured",
+                details={"key": "APPROVED_STRATEGY_PROFILE_PATH"},
+            )
+        )
     explicit_env_file = str(os.getenv("BITHUMB_ENV_FILE") or "").strip()
     live_env_file = str(os.getenv("BITHUMB_ENV_FILE_LIVE") or "").strip()
     if explicit_env_file and live_env_file and explicit_env_file != live_env_file:
-        issues.append("live_env_file_source_mismatch:BITHUMB_ENV_FILE!=BITHUMB_ENV_FILE_LIVE")
-    return tuple(issues)
+        findings.append(
+            _config_lint_finding(
+                "live_env_file_source_mismatch",
+                legacy="live_env_file_source_mismatch:BITHUMB_ENV_FILE!=BITHUMB_ENV_FILE_LIVE",
+                details={"source_key": "BITHUMB_ENV_FILE", "live_key": "BITHUMB_ENV_FILE_LIVE"},
+            )
+        )
+    for key in sorted(_bot_related_env_keys() - set(SPEC_BY_NAME)):
+        findings.append(
+            _config_lint_finding(
+                "unknown_bot_related_env_key",
+                legacy=f"unknown_bot_related_env_key:{key}",
+                details={"key": key},
+            )
+        )
+    return tuple(findings)
+
+
+def live_env_contract_lints(cfg: Settings) -> tuple[str, ...]:
+    return tuple(str(finding["legacy_text"]) for finding in live_env_contract_lint_findings(cfg))
 
 
 def live_execution_contract_summary(
@@ -1609,6 +1689,7 @@ def live_execution_contract_summary(
         "explicit_env": explicit_env,
         "explicit_env_file": explicit_env_file,
         "live_env_contract_lints": list(live_env_contract_lints(cfg)),
+        "live_env_contract_lint_findings": list(live_env_contract_lint_findings(cfg)),
         "config_contract": config_contract,
         "managed_roots": managed_roots,
         "runtime_paths": runtime_paths,
@@ -1638,6 +1719,12 @@ def log_live_execution_contract(
     code_provenance = summary.get("code_provenance") if isinstance(summary.get("code_provenance"), dict) else {}
     approved_profile = summary.get("approved_profile") if isinstance(summary.get("approved_profile"), dict) else {}
     config_contract = summary.get("config_contract") if isinstance(summary.get("config_contract"), dict) else {}
+    lint_findings = summary.get("live_env_contract_lint_findings") or []
+    lint_reason_codes = [
+        str(item.get("reason_code"))
+        for item in lint_findings
+        if isinstance(item, dict) and item.get("reason_code")
+    ]
     logging.getLogger("bithumb_bot.run").info(
         format_log_kv(
             "[LIVE_EXECUTION_CONTRACT]",
@@ -1693,6 +1780,7 @@ def log_live_execution_contract(
             env_file_inode=explicit_env_file.get("inode"),
             env_file_hash_prefix=explicit_env_file.get("content_hash_prefix"),
             live_env_contract_lints=",".join(str(item) for item in summary.get("live_env_contract_lints") or []) or "none",
+            live_env_contract_lint_reason_codes=",".join(lint_reason_codes) or "none",
             config_schema_version=config_contract.get("config_schema_version"),
             config_spec_hash=config_contract.get("config_spec_hash"),
             settings_effective_hash=config_contract.get("settings_effective_hash"),
@@ -1701,6 +1789,7 @@ def log_live_execution_contract(
             unknown_env_keys=",".join(str(item) for item in config_contract.get("unknown_env_keys") or []) or "none",
             deprecated_env_keys=",".join(str(item) for item in config_contract.get("deprecated_env_keys") or []) or "none",
             generated_docs_hash=config_contract.get("generated_docs_hash"),
+            env_example_hash=config_contract.get("env_example_hash"),
             env_root=roots.get("ENV_ROOT"),
             run_root=roots.get("RUN_ROOT"),
             data_root=roots.get("DATA_ROOT"),

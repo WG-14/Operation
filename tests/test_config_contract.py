@@ -9,6 +9,7 @@ from bithumb_bot.config import Settings
 from bithumb_bot.config_spec import SPEC_BY_NAME
 from tools.check_env_drift import _failures
 from tools.generate_config_docs import render_config_reference
+from tools.generate_env_example import check_env_example, check_env_example_text
 
 
 def test_config_spec_covers_current_drift_candidates() -> None:
@@ -21,6 +22,28 @@ def test_config_spec_covers_current_drift_candidates() -> None:
 
 def test_env_drift_checker_passes() -> None:
     assert _failures() == []
+
+
+def test_env_example_contract_is_in_sync() -> None:
+    assert check_env_example() == []
+
+
+def test_env_example_contract_rejects_undeclared_key() -> None:
+    text = "MODE=paper\nUNKNOWN_BOT_SETTING=true\n"
+    failures = check_env_example_text(text)
+    assert any(".env.example keys missing from ConfigSpec: UNKNOWN_BOT_SETTING" in item for item in failures)
+
+
+def test_env_example_contract_rejects_unsafe_secret_default() -> None:
+    text = "MODE=paper\nBITHUMB_API_KEY=real-looking-token\n"
+    failures = check_env_example_text(text)
+    assert any("secret key has unsafe .env.example value" in item for item in failures)
+
+
+def test_env_example_contract_rejects_unlabeled_deprecated_key() -> None:
+    text = "MODE=paper\nLIVE_ALLOW_ORDER_RULE_FALLBACK=true\n"
+    failures = check_env_example_text(text)
+    assert any("deprecated/ignored key lacks label" in item for item in failures)
 
 
 def test_config_reference_is_in_sync() -> None:
@@ -39,6 +62,17 @@ def test_settings_restore_fixture_tracks_all_settings_fields() -> None:
 def test_env_drift_tool_cli_passes() -> None:
     completed = subprocess.run(
         [sys.executable, "tools/check_env_drift.py"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": "src"},
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
+def test_env_example_tool_cli_passes() -> None:
+    completed = subprocess.run(
+        [sys.executable, "tools/generate_env_example.py", "--check"],
         check=False,
         capture_output=True,
         text=True,

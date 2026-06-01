@@ -12,9 +12,11 @@ SRC_ROOT = PROJECT_ROOT / "src" / "bithumb_bot"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 CONFIG_REFERENCE = PROJECT_ROOT / "docs" / "config-reference.md"
 
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from bithumb_bot.config_spec import ENV_SPECS, SPEC_BY_NAME  # noqa: E402
+from bithumb_bot.config_spec import ENV_SPECS, SPEC_BY_NAME, settings_contract_failures  # noqa: E402
+from tools.generate_env_example import check_env_example  # noqa: E402
 
 
 ENV_CALL_RE = re.compile(
@@ -46,6 +48,20 @@ def discover_env_reads() -> set[str]:
     return keys
 
 
+def discover_settings_fields() -> set[str]:
+    path = SRC_ROOT / "config.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != "Settings":
+            continue
+        fields: set[str] = set()
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                fields.add(stmt.target.id)
+        return fields
+    return set()
+
+
 def env_example_keys() -> set[str]:
     keys: set[str] = set()
     assignment = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]*)=")
@@ -66,9 +82,12 @@ def _failures() -> list[str]:
     if missing_from_spec:
         failures.append("env reads missing from config spec: " + ", ".join(missing_from_spec))
 
+    failures.extend(settings_contract_failures(discover_settings_fields()))
+
     undeclared_example = sorted(example_keys - declared)
     if undeclared_example:
         failures.append(".env.example keys missing from config spec: " + ", ".join(undeclared_example))
+    failures.extend(check_env_example(ENV_EXAMPLE))
 
     docs_text = CONFIG_REFERENCE.read_text(encoding="utf-8") if CONFIG_REFERENCE.exists() else ""
     for spec in ENV_SPECS:

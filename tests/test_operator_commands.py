@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -77,19 +78,7 @@ from bithumb_bot.utils_time import kst_str
 
 @pytest.fixture(autouse=True)
 def _restore_settings_state(monkeypatch: pytest.MonkeyPatch):
-    original_mode = settings.MODE
-    original_live_dry_run = settings.LIVE_DRY_RUN
-    original_live_real_order_armed = settings.LIVE_REAL_ORDER_ARMED
-    original_execution_engine = settings.EXECUTION_ENGINE
-    original_target_exposure_krw = settings.TARGET_EXPOSURE_KRW
-    original_max_order_krw = settings.MAX_ORDER_KRW
-    original_start_cash = settings.START_CASH_KRW
-    original_db_path = settings.DB_PATH
-    original_live_fill_fee_alert_min_notional_krw = settings.LIVE_FILL_FEE_ALERT_MIN_NOTIONAL_KRW
-    original_live_min_order_qty = settings.LIVE_MIN_ORDER_QTY
-    original_live_order_qty_step = settings.LIVE_ORDER_QTY_STEP
-    original_live_order_max_qty_decimals = settings.LIVE_ORDER_MAX_QTY_DECIMALS
-    original_min_order_notional_krw = settings.MIN_ORDER_NOTIONAL_KRW
+    original_values = {field.name: getattr(settings, field.name) for field in fields(type(settings))}
 
     monkeypatch.setenv("MODE", "paper")
     object.__setattr__(settings, "MODE", "paper")
@@ -99,23 +88,8 @@ def _restore_settings_state(monkeypatch: pytest.MonkeyPatch):
     try:
         yield
     finally:
-        object.__setattr__(settings, "MODE", original_mode)
-        object.__setattr__(settings, "LIVE_DRY_RUN", original_live_dry_run)
-        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", original_live_real_order_armed)
-        object.__setattr__(settings, "EXECUTION_ENGINE", original_execution_engine)
-        object.__setattr__(settings, "TARGET_EXPOSURE_KRW", original_target_exposure_krw)
-        object.__setattr__(settings, "MAX_ORDER_KRW", original_max_order_krw)
-        object.__setattr__(settings, "START_CASH_KRW", original_start_cash)
-        object.__setattr__(settings, "DB_PATH", original_db_path)
-        object.__setattr__(
-            settings,
-            "LIVE_FILL_FEE_ALERT_MIN_NOTIONAL_KRW",
-            original_live_fill_fee_alert_min_notional_krw,
-        )
-        object.__setattr__(settings, "LIVE_MIN_ORDER_QTY", original_live_min_order_qty)
-        object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", original_live_order_qty_step)
-        object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", original_live_order_max_qty_decimals)
-        object.__setattr__(settings, "MIN_ORDER_NOTIONAL_KRW", original_min_order_notional_krw)
+        for key, value in original_values.items():
+            object.__setattr__(settings, key, value)
 
 
 def _set_tmp_db(tmp_path, monkeypatch: pytest.MonkeyPatch | None = None):
