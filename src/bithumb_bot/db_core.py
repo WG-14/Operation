@@ -5,7 +5,7 @@ import math
 import json
 import sqlite3
 from decimal import Decimal, ROUND_HALF_EVEN
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -17,6 +17,7 @@ from .decision_context import (
     materialize_strategy_decision_context,
     normalize_strategy_decision_context,
 )
+from .canonical_decision import sha256_prefixed
 from .experiment_fingerprint import experiment_context
 from .target_position import TargetPositionState
 
@@ -140,6 +141,91 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "accounting_status",
     ),
     "schema_meta": ("key", "schema_version", "schema_fingerprint", "accounting_projection_model", "updated_ts"),
+    "runtime_strategy_decision_bundle": (
+        "id",
+        "candle_ts",
+        "pair",
+        "interval",
+        "strategy_set_manifest_hash",
+        "bundle_hash",
+        "result_count",
+        "created_ts",
+    ),
+    "runtime_strategy_decision_result": (
+        "id",
+        "bundle_id",
+        "strategy_instance_id",
+        "strategy_name",
+        "raw_signal",
+        "final_signal",
+        "final_reason",
+        "market_price",
+        "runtime_decision_request_hash",
+        "strategy_parameters_hash",
+        "approved_profile_hash",
+        "runtime_contract_hash",
+        "plugin_contract_hash",
+        "policy_input_hash",
+        "policy_decision_hash",
+        "replay_fingerprint_hash",
+        "decision_hash",
+        "full_decision_json",
+    ),
+    "portfolio_allocation_decision": (
+        "id",
+        "bundle_id",
+        "allocation_decision_hash",
+        "allocation_input_hash",
+        "allocator_config_hash",
+        "strategy_contribution_hash",
+        "selected_signal",
+        "selected_priority",
+        "authoritative",
+        "primary_block_reason",
+        "reason",
+        "conflict_resolution_json",
+        "allocation_decision_json",
+    ),
+    "strategy_contribution": (
+        "id",
+        "allocation_id",
+        "strategy_instance_id",
+        "strategy_name",
+        "pair",
+        "signal_direction",
+        "priority",
+        "weight",
+        "desired_exposure_krw",
+        "risk_budget_krw",
+        "preference_hash",
+        "reason",
+        "contribution_json",
+    ),
+    "portfolio_target": (
+        "id",
+        "allocation_id",
+        "pair",
+        "target_exposure_krw",
+        "target_qty",
+        "authoritative",
+        "fail_closed_reason",
+        "final_portfolio_target_hash",
+        "conflict_resolution_json",
+        "target_json",
+    ),
+    "execution_plan": (
+        "id",
+        "allocation_id",
+        "portfolio_target_hash",
+        "execution_plan_bundle_hash",
+        "execution_submit_plan_hash",
+        "submit_expected",
+        "final_action",
+        "block_reason",
+        "status",
+        "execution_plan_bundle_json",
+        "execution_submit_plan_json",
+    ),
 }
 
 DIAGNOSTIC_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -743,6 +829,243 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
     names = {str(row[1]) for row in cols}
     if column not in names:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def _json_dumps_stable(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _json_loads_object(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    loaded = json.loads(value)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_strategy_decision_bundle (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candle_ts INTEGER NOT NULL,
+            pair TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            strategy_set_manifest_hash TEXT NOT NULL,
+            bundle_hash TEXT NOT NULL UNIQUE,
+            result_count INTEGER NOT NULL,
+            created_ts INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runtime_strategy_bundle_candle
+        ON runtime_strategy_decision_bundle(candle_ts, pair, interval)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runtime_strategy_bundle_hash
+        ON runtime_strategy_decision_bundle(bundle_hash)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_strategy_decision_result (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundle_id INTEGER NOT NULL,
+            strategy_instance_id TEXT NOT NULL,
+            strategy_name TEXT NOT NULL,
+            raw_signal TEXT NOT NULL,
+            final_signal TEXT NOT NULL,
+            final_reason TEXT NOT NULL,
+            market_price REAL,
+            runtime_decision_request_hash TEXT,
+            strategy_parameters_hash TEXT,
+            approved_profile_hash TEXT,
+            runtime_contract_hash TEXT,
+            plugin_contract_hash TEXT,
+            policy_input_hash TEXT,
+            policy_decision_hash TEXT,
+            replay_fingerprint_hash TEXT NOT NULL,
+            decision_hash TEXT NOT NULL,
+            full_decision_json TEXT NOT NULL,
+            FOREIGN KEY(bundle_id) REFERENCES runtime_strategy_decision_bundle(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_strategy_result_bundle_instance
+        ON runtime_strategy_decision_result(bundle_id, strategy_instance_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runtime_strategy_result_instance
+        ON runtime_strategy_decision_result(strategy_instance_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_runtime_strategy_result_decision_hash
+        ON runtime_strategy_decision_result(decision_hash)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_allocation_decision (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundle_id INTEGER NOT NULL,
+            allocation_decision_hash TEXT NOT NULL UNIQUE,
+            allocation_input_hash TEXT NOT NULL,
+            allocator_config_hash TEXT NOT NULL,
+            strategy_contribution_hash TEXT NOT NULL,
+            selected_signal TEXT NOT NULL DEFAULT '',
+            selected_priority INTEGER,
+            authoritative INTEGER NOT NULL,
+            primary_block_reason TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            conflict_resolution_json TEXT NOT NULL,
+            allocation_decision_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(bundle_id) REFERENCES runtime_strategy_decision_bundle(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_portfolio_allocation_bundle
+        ON portfolio_allocation_decision(bundle_id)
+        """
+    )
+    _ensure_column(
+        conn,
+        "portfolio_allocation_decision",
+        "allocation_decision_json",
+        "allocation_decision_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_portfolio_allocation_hash
+        ON portfolio_allocation_decision(allocation_decision_hash)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_contribution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            allocation_id INTEGER NOT NULL,
+            strategy_instance_id TEXT NOT NULL,
+            strategy_name TEXT NOT NULL,
+            pair TEXT NOT NULL,
+            signal_direction TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            weight REAL NOT NULL,
+            desired_exposure_krw REAL,
+            risk_budget_krw REAL,
+            preference_hash TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            contribution_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(allocation_id) REFERENCES portfolio_allocation_decision(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_contribution_allocation_instance
+        ON strategy_contribution(allocation_id, strategy_instance_id)
+        """
+    )
+    _ensure_column(
+        conn,
+        "strategy_contribution",
+        "contribution_json",
+        "contribution_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_strategy_contribution_instance
+        ON strategy_contribution(strategy_instance_id)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_target (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            allocation_id INTEGER NOT NULL,
+            pair TEXT NOT NULL,
+            target_exposure_krw REAL,
+            target_qty REAL,
+            authoritative INTEGER NOT NULL,
+            fail_closed_reason TEXT NOT NULL,
+            final_portfolio_target_hash TEXT NOT NULL UNIQUE,
+            conflict_resolution_json TEXT NOT NULL,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(allocation_id) REFERENCES portfolio_allocation_decision(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_portfolio_target_allocation
+        ON portfolio_target(allocation_id)
+        """
+    )
+    _ensure_column(conn, "portfolio_target", "target_json", "target_json TEXT NOT NULL DEFAULT '{}'")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_portfolio_target_hash
+        ON portfolio_target(final_portfolio_target_hash)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_plan (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            allocation_id INTEGER NOT NULL,
+            portfolio_target_hash TEXT,
+            execution_plan_bundle_hash TEXT NOT NULL,
+            execution_submit_plan_hash TEXT,
+            submit_expected INTEGER NOT NULL,
+            final_action TEXT NOT NULL,
+            block_reason TEXT NOT NULL,
+            status TEXT NOT NULL,
+            execution_plan_bundle_json TEXT NOT NULL DEFAULT '{}',
+            execution_submit_plan_json TEXT,
+            FOREIGN KEY(allocation_id) REFERENCES portfolio_allocation_decision(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_plan_allocation_bundle
+        ON execution_plan(allocation_id, execution_plan_bundle_hash)
+        """
+    )
+    _ensure_column(
+        conn,
+        "execution_plan",
+        "execution_plan_bundle_json",
+        "execution_plan_bundle_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    _ensure_column(conn, "execution_plan", "execution_submit_plan_json", "execution_submit_plan_json TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_plan_bundle_hash
+        ON execution_plan(execution_plan_bundle_hash)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_plan_submit_hash
+        ON execution_plan(execution_submit_plan_hash)
+        """
+    )
 
 
 def _ensure_open_position_lot_invariant_triggers(conn: sqlite3.Connection) -> None:
@@ -2558,6 +2881,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
+    _ensure_multi_strategy_artifact_schema(conn)
     _ensure_schema_meta_table(conn)
     structural_errors = _runtime_schema_errors(conn, require_metadata=False)
     if structural_errors:
@@ -2621,6 +2945,377 @@ def record_strategy_decision(
         ),
     )
     return int(row.lastrowid)
+
+
+def _runtime_result_instance_id(result: object) -> str:
+    base_context = getattr(result, "base_context", {})
+    if isinstance(base_context, Mapping):
+        value = str(base_context.get("strategy_instance_id") or "").strip()
+        if value:
+            return value
+    replay = getattr(result, "replay_fingerprint", {})
+    if isinstance(replay, Mapping):
+        value = str(replay.get("strategy_instance_id") or "").strip()
+        if value:
+            return value
+    decision = getattr(result, "decision", None)
+    return str(getattr(decision, "strategy_name", "") or "").strip().lower()
+
+
+def _runtime_result_full_decision_payload(result: object) -> dict[str, Any]:
+    decision = getattr(result, "decision", None)
+    base_context = getattr(result, "base_context", {})
+    replay = getattr(result, "replay_fingerprint", {})
+    trace = decision.as_trace() if hasattr(decision, "as_trace") else {}
+    payload = {
+        "schema_version": 1,
+        "strategy_instance_id": _runtime_result_instance_id(result),
+        "strategy_name": str(getattr(decision, "strategy_name", "") or "").strip().lower(),
+        "candle_ts": int(getattr(result, "candle_ts", 0) or 0),
+        "market_price": float(getattr(result, "market_price", 0.0) or 0.0),
+        "raw_signal": str(getattr(decision, "raw_signal", "HOLD") or "HOLD").upper(),
+        "final_signal": str(getattr(decision, "final_signal", "HOLD") or "HOLD").upper(),
+        "final_reason": str(getattr(decision, "final_reason", "") or ""),
+        "policy_input_hash": str(getattr(decision, "policy_input_hash", "") or ""),
+        "policy_decision_hash": str(getattr(decision, "policy_decision_hash", "") or ""),
+        "base_context": dict(base_context) if isinstance(base_context, Mapping) else {},
+        "replay_fingerprint": dict(replay) if isinstance(replay, Mapping) else {},
+        "trace": trace if isinstance(trace, dict) else {},
+    }
+    payload["decision_hash"] = sha256_prefixed(
+        {key: value for key, value in payload.items() if key != "decision_hash"}
+    )
+    return payload
+
+
+def record_runtime_strategy_decision_bundle(
+    conn: sqlite3.Connection,
+    *,
+    result_bundle: object,
+    pair: str,
+    interval: str,
+    created_ts: int,
+) -> dict[str, Any]:
+    """Persist typed runtime strategy results as first-class replay artifacts."""
+    bundle_hash = str(result_bundle.content_hash())
+    strategy_set = getattr(result_bundle, "strategy_set")
+    strategy_set_manifest_hash = str(
+        result_bundle.as_dict().get("runtime_strategy_set_manifest_hash")
+    )
+    results = tuple(getattr(result_bundle, "results"))
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO runtime_strategy_decision_bundle(
+            candle_ts, pair, interval, strategy_set_manifest_hash, bundle_hash,
+            result_count, created_ts
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(getattr(result_bundle, "candle_ts")),
+            str(pair),
+            str(interval),
+            strategy_set_manifest_hash,
+            bundle_hash,
+            len(results),
+            int(created_ts),
+        ),
+    )
+    row = conn.execute(
+        "SELECT id FROM runtime_strategy_decision_bundle WHERE bundle_hash=?",
+        (bundle_hash,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("runtime_strategy_decision_bundle_persist_failed")
+    bundle_id = int(row["id"])
+
+    result_ids: dict[str, int] = {}
+    for result in results:
+        decision = getattr(result, "decision", None)
+        base_context = getattr(result, "base_context", {})
+        replay = getattr(result, "replay_fingerprint", {})
+        base = dict(base_context) if isinstance(base_context, Mapping) else {}
+        replay_payload = dict(replay) if isinstance(replay, Mapping) else {}
+        full_decision = _runtime_result_full_decision_payload(result)
+        decision_hash = str(full_decision["decision_hash"])
+        instance_id = _runtime_result_instance_id(result)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO runtime_strategy_decision_result(
+                bundle_id, strategy_instance_id, strategy_name, raw_signal, final_signal,
+                final_reason, market_price, runtime_decision_request_hash,
+                strategy_parameters_hash, approved_profile_hash, runtime_contract_hash,
+                plugin_contract_hash, policy_input_hash, policy_decision_hash,
+                replay_fingerprint_hash, decision_hash, full_decision_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                bundle_id,
+                instance_id,
+                str(getattr(decision, "strategy_name", "") or "").strip().lower(),
+                str(getattr(decision, "raw_signal", "HOLD") or "HOLD").upper(),
+                str(getattr(decision, "final_signal", "HOLD") or "HOLD").upper(),
+                str(getattr(decision, "final_reason", "") or ""),
+                float(getattr(result, "market_price", 0.0) or 0.0),
+                base.get("runtime_decision_request_hash"),
+                base.get("strategy_parameters_hash"),
+                base.get("approved_profile_hash"),
+                base.get("runtime_contract_hash"),
+                base.get("plugin_contract_hash"),
+                str(getattr(decision, "policy_input_hash", "") or ""),
+                str(getattr(decision, "policy_decision_hash", "") or ""),
+                sha256_prefixed(replay_payload),
+                decision_hash,
+                _json_dumps_stable(full_decision),
+            ),
+        )
+        result_row = conn.execute(
+            """
+            SELECT id FROM runtime_strategy_decision_result
+            WHERE bundle_id=? AND strategy_instance_id=?
+            """,
+            (bundle_id, instance_id),
+        ).fetchone()
+        if result_row is not None:
+            result_ids[instance_id] = int(result_row["id"])
+    return {
+        "runtime_strategy_decision_bundle_id": bundle_id,
+        "runtime_strategy_decision_bundle_hash": bundle_hash,
+        "runtime_strategy_decision_result_ids": result_ids,
+        "runtime_strategy_set_manifest_hash": strategy_set_manifest_hash,
+        "runtime_strategy_set_source": str(getattr(strategy_set, "source", "")),
+    }
+
+
+def record_portfolio_allocation_decision(
+    conn: sqlite3.Connection,
+    *,
+    bundle_id: int,
+    allocation_decision: dict[str, Any],
+) -> dict[str, Any]:
+    allocation_hash = str(allocation_decision.get("allocation_decision_hash") or "")
+    if not allocation_hash:
+        raise RuntimeError("allocation_decision_hash_missing")
+    conflict = allocation_decision.get("conflict_resolution")
+    conflict_payload = dict(conflict) if isinstance(conflict, dict) else {}
+    targets = allocation_decision.get("targets")
+    target_payloads = list(targets) if isinstance(targets, list) else []
+    contributions = allocation_decision.get("contributions")
+    contribution_payloads = list(contributions) if isinstance(contributions, list) else []
+    selected_signal = ""
+    selected_priority: int | None = None
+    if target_payloads and isinstance(target_payloads[0], dict):
+        target_conflict = target_payloads[0].get("conflict_resolution")
+        if isinstance(target_conflict, dict):
+            selected_signal = str(target_conflict.get("selected_signal") or "")
+            raw_priority = target_conflict.get("selected_priority")
+            selected_priority = None if raw_priority is None else int(raw_priority)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO portfolio_allocation_decision(
+            bundle_id, allocation_decision_hash, allocation_input_hash,
+            allocator_config_hash, strategy_contribution_hash, selected_signal,
+            selected_priority, authoritative, primary_block_reason, reason,
+            conflict_resolution_json, allocation_decision_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(bundle_id),
+            allocation_hash,
+            str(allocation_decision.get("allocation_input_hash") or ""),
+            str(allocation_decision.get("allocator_config_hash") or ""),
+            str(allocation_decision.get("strategy_contribution_hash") or ""),
+            selected_signal,
+            selected_priority,
+            1 if bool(allocation_decision.get("authoritative")) else 0,
+            str(allocation_decision.get("primary_block_reason") or ""),
+            str(allocation_decision.get("reason") or ""),
+            _json_dumps_stable(conflict_payload),
+            _json_dumps_stable(allocation_decision),
+        ),
+    )
+    row = conn.execute(
+        "SELECT id FROM portfolio_allocation_decision WHERE allocation_decision_hash=?",
+        (allocation_hash,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("portfolio_allocation_decision_persist_failed")
+    allocation_id = int(row["id"])
+
+    for contribution in contribution_payloads:
+        if not isinstance(contribution, dict):
+            continue
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO strategy_contribution(
+                allocation_id, strategy_instance_id, strategy_name, pair, signal_direction,
+                priority, weight, desired_exposure_krw, risk_budget_krw, preference_hash,
+                reason, contribution_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                allocation_id,
+                str(contribution.get("strategy_instance_id") or ""),
+                str(contribution.get("strategy_name") or ""),
+                str(contribution.get("pair") or ""),
+                str(contribution.get("signal_direction") or ""),
+                int(contribution.get("priority") or 0),
+                float(contribution.get("weight") or 0.0),
+                contribution.get("desired_exposure_krw"),
+                contribution.get("risk_budget_krw"),
+                str(contribution.get("preference_hash") or ""),
+                str(contribution.get("reason") or ""),
+                _json_dumps_stable(contribution),
+            ),
+        )
+
+    target_ids: dict[str, int] = {}
+    for target in target_payloads:
+        if not isinstance(target, dict):
+            continue
+        target_hash = str(target.get("final_portfolio_target_hash") or "")
+        target_conflict = target.get("conflict_resolution")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO portfolio_target(
+                allocation_id, pair, target_exposure_krw, target_qty, authoritative,
+                fail_closed_reason, final_portfolio_target_hash, conflict_resolution_json,
+                target_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                allocation_id,
+                str(target.get("pair") or ""),
+                target.get("target_exposure_krw"),
+                target.get("target_qty"),
+                1 if bool(target.get("authoritative")) else 0,
+                str(target.get("fail_closed_reason") or ""),
+                target_hash,
+                _json_dumps_stable(target_conflict if isinstance(target_conflict, dict) else {}),
+                _json_dumps_stable(target),
+            ),
+        )
+        target_row = conn.execute(
+            "SELECT id FROM portfolio_target WHERE final_portfolio_target_hash=?",
+            (target_hash,),
+        ).fetchone()
+        if target_row is not None:
+            target_ids[str(target.get("pair") or "")] = int(target_row["id"])
+    first_target = target_payloads[0] if target_payloads and isinstance(target_payloads[0], dict) else {}
+    return {
+        "portfolio_allocation_decision_id": allocation_id,
+        "allocation_decision_hash": allocation_hash,
+        "portfolio_target_ids": target_ids,
+        "portfolio_target_id": next(iter(target_ids.values()), None),
+        "portfolio_target_hash": str(first_target.get("final_portfolio_target_hash") or ""),
+    }
+
+
+def record_execution_plan(
+    conn: sqlite3.Connection,
+    *,
+    allocation_id: int,
+    portfolio_target_hash: str | None,
+    execution_plan_bundle: object,
+) -> dict[str, Any]:
+    bundle_payload = execution_plan_bundle.as_dict()
+    bundle_hash = str(execution_plan_bundle.content_hash())
+    submit_plan = getattr(execution_plan_bundle, "submit_plan", None)
+    submit_payload = submit_plan.as_dict() if submit_plan is not None and hasattr(submit_plan, "as_dict") else None
+    submit_hash = None if submit_payload is None else sha256_prefixed(submit_payload)
+    status = getattr(execution_plan_bundle, "status", None)
+    status_text = ""
+    if status is not None and hasattr(status, "status"):
+        status_text = str(status.status)
+    elif isinstance(bundle_payload.get("status"), dict):
+        status_text = str(bundle_payload["status"].get("status") or "")
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO execution_plan(
+            allocation_id, portfolio_target_hash, execution_plan_bundle_hash,
+            execution_submit_plan_hash, submit_expected, final_action, block_reason,
+            status, execution_plan_bundle_json, execution_submit_plan_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(allocation_id),
+            portfolio_target_hash,
+            bundle_hash,
+            submit_hash,
+            1 if bool(getattr(submit_plan, "submit_expected", False)) else 0,
+            str(getattr(submit_plan, "final_action", "") or ""),
+            str(getattr(submit_plan, "block_reason", "") or ""),
+            status_text,
+            _json_dumps_stable(bundle_payload),
+            None if submit_payload is None else _json_dumps_stable(submit_payload),
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM execution_plan
+        WHERE allocation_id=? AND execution_plan_bundle_hash=?
+        """,
+        (int(allocation_id), bundle_hash),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("execution_plan_persist_failed")
+    return {
+        "execution_plan_id": int(row["id"]),
+        "execution_plan_bundle_hash": bundle_hash,
+        "execution_submit_plan_hash": submit_hash,
+    }
+
+
+def replay_allocation_decision_hash(conn: sqlite3.Connection, allocation_id: int) -> str:
+    row = conn.execute(
+        "SELECT allocation_decision_json FROM portfolio_allocation_decision WHERE id=?",
+        (int(allocation_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("portfolio_allocation_decision_not_found")
+    payload = _json_loads_object(str(row["allocation_decision_json"]))
+    recorded = str(payload.pop("allocation_decision_hash", "") or "")
+    replayed = sha256_prefixed(payload)
+    if recorded and recorded != replayed:
+        raise RuntimeError("portfolio_allocation_decision_hash_mismatch")
+    return replayed
+
+
+def replay_portfolio_target_hash(conn: sqlite3.Connection, portfolio_target_id: int) -> str:
+    row = conn.execute(
+        "SELECT target_json FROM portfolio_target WHERE id=?",
+        (int(portfolio_target_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("portfolio_target_not_found")
+    payload = _json_loads_object(str(row["target_json"]))
+    recorded = str(payload.pop("final_portfolio_target_hash", "") or "")
+    replayed = sha256_prefixed(payload)
+    if recorded and recorded != replayed:
+        raise RuntimeError("portfolio_target_hash_mismatch")
+    return replayed
+
+
+def replay_execution_submit_plan_hash(conn: sqlite3.Connection, execution_plan_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT execution_submit_plan_json, execution_submit_plan_hash FROM execution_plan WHERE id=?",
+        (int(execution_plan_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("execution_plan_not_found")
+    if row["execution_submit_plan_json"] is None:
+        return None
+    payload = json.loads(str(row["execution_submit_plan_json"]))
+    replayed = sha256_prefixed(payload)
+    recorded = row["execution_submit_plan_hash"]
+    if recorded is not None and str(recorded) != replayed:
+        raise RuntimeError("execution_submit_plan_hash_mismatch")
+    return replayed
 
 
 def load_target_position_state(conn: sqlite3.Connection, *, pair: str) -> TargetPositionState | None:

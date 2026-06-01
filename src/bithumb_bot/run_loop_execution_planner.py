@@ -631,15 +631,22 @@ class ExecutionPlanner:
                     pair=str(settings.PAIR),
                 )
             reference_price = context.get("market_price", context.get("last_close", context.get("close")))
-            target_resolution = self.target_state_resolver(
-                conn,
-                readiness_payload=readiness_payload,
-                reference_price=reference_price,
-                raw_signal=planning_input.final_signal,
-                updated_ts=int(updated_ts),
-            )
-            previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
-            target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
+            if runtime_result_bundle is None:
+                target_resolution = self.target_state_resolver(
+                    conn,
+                    readiness_payload=readiness_payload,
+                    reference_price=reference_price,
+                    raw_signal=planning_input.final_signal,
+                    updated_ts=int(updated_ts),
+                )
+                previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
+                target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
+            else:
+                try:
+                    previous_target_exposure_krw = load_previous_target_exposure_for_run_loop(conn)
+                except AttributeError:
+                    previous_target_exposure_krw = None
+                target_policy_metadata = {}
             allocation_config = PortfolioAllocatorConfig(
                 target_exposure_krw=_allocator_target_exposure_krw(),
                 strategy_priorities=(
@@ -744,6 +751,19 @@ class ExecutionPlanner:
             authoritative_signal = str(
                 context.get("allocation_selected_signal") or planning_input.final_signal or "HOLD"
             ).upper()
+            if runtime_result_bundle is not None:
+                target_resolution = self.target_state_resolver(
+                    conn,
+                    readiness_payload=readiness_payload,
+                    reference_price=reference_price,
+                    raw_signal=authoritative_signal,
+                    updated_ts=int(updated_ts),
+                )
+                resolved_previous_target_exposure = target_resolution.get("previous_target_exposure_krw")
+                if previous_target_exposure_krw is None:
+                    previous_target_exposure_krw = resolved_previous_target_exposure
+                target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
+                context.update(target_policy_metadata)
             if runtime_result_bundle is not None and authoritative_signal in {"BUY", "SELL", "HOLD"}:
                 planning_input = replace(
                     planning_input,

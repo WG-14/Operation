@@ -5,7 +5,14 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..config import settings
-from ..db_core import ensure_db, record_strategy_decision, upsert_target_position_state
+from ..db_core import (
+    ensure_db,
+    record_execution_plan,
+    record_portfolio_allocation_decision,
+    record_runtime_strategy_decision_bundle,
+    record_strategy_decision,
+    upsert_target_position_state,
+)
 from ..decision_equivalence import sha256_prefixed
 from ..observability import format_log_kv
 from ..run_loop_execution_planner import (
@@ -192,7 +199,47 @@ class DecisionCoordinator:
                 typed_bundle,
                 updated_ts=updated_ts,
             )
-            context = planning_bundle.persistence_context
+            context = dict(planning_bundle.persistence_context)
+            bundle_refs = record_runtime_strategy_decision_bundle(
+                conn,
+                result_bundle=typed_bundle,
+                pair=str(settings.PAIR),
+                interval=str(settings.INTERVAL),
+                created_ts=updated_ts,
+            )
+            context.update(bundle_refs)
+            allocation_payload = context.get("portfolio_allocation_decision")
+            if not isinstance(allocation_payload, dict):
+                raise RuntimeError("portfolio_allocation_decision_missing")
+            allocation_refs = record_portfolio_allocation_decision(
+                conn,
+                bundle_id=int(bundle_refs["runtime_strategy_decision_bundle_id"]),
+                allocation_decision=allocation_payload,
+            )
+            context.update(allocation_refs)
+            execution_refs = record_execution_plan(
+                conn,
+                allocation_id=int(allocation_refs["portfolio_allocation_decision_id"]),
+                portfolio_target_hash=str(allocation_refs.get("portfolio_target_hash") or ""),
+                execution_plan_bundle=planning_bundle,
+            )
+            context.update(execution_refs)
+            if typed_bundle.strategy_set.multi_strategy_enabled:
+                context["strategy_decision_projection_type"] = (
+                    "multi_strategy_compatibility_projection"
+                )
+                context["strategy_decisions_authority"] = (
+                    "compatibility_projection_not_execution_authority"
+                )
+                context["runtime_strategy_decision_bundle_hash"] = bundle_refs[
+                    "runtime_strategy_decision_bundle_hash"
+                ]
+                context["portfolio_allocation_decision_hash"] = allocation_refs[
+                    "allocation_decision_hash"
+                ]
+                context["execution_submit_plan_hash"] = execution_refs[
+                    "execution_submit_plan_hash"
+                ]
             if typed_bundle.strategy_set.multi_strategy_enabled:
                 target_payload = context.get("portfolio_target")
                 if isinstance(target_payload, dict):

@@ -6,6 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from bithumb_bot.db_core import (
+    ensure_db,
+    record_execution_plan,
+    record_portfolio_allocation_decision,
+    record_runtime_strategy_decision_bundle,
+    replay_allocation_decision_hash,
+    replay_execution_submit_plan_hash,
+    replay_portfolio_target_hash,
+)
 from bithumb_bot.config import settings
 from bithumb_bot.execution_service import (
     ExecutionDecisionSummary,
@@ -677,6 +686,60 @@ def test_run_loop_multi_strategy_allocator_signal_overrides_representative_hold(
     assert result.submit_plan.submit_expected is True
 
 
+def test_run_loop_multi_strategy_target_policy_uses_allocator_signal_not_representative() -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    seen_signals: list[str] = []
+    old_engine = settings.EXECUTION_ENGINE
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+
+        def _target_state_resolver(*_args, **kwargs) -> dict[str, object]:
+            signal = str(kwargs["raw_signal"])
+            seen_signals.append(signal)
+            return {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {
+                    "target_policy_signal": signal,
+                    "target_origin": "allocator_selected_signal",
+                },
+            }
+
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=_target_state_resolver,
+        )
+        hold_spec = RuntimeStrategySpec(
+            "safe_hold",
+            strategy_instance_id="aaa_strategy_hold",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+        )
+        buy_spec = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="zzz_strategy_buy",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+        )
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(hold_spec, buy_spec)),
+            results=(
+                _runtime_result("HOLD", "safe_hold", spec=hold_spec),
+                _runtime_result("BUY", "canary_non_sma", spec=buy_spec),
+            ),
+        )
+        result = planner.plan_runtime_strategy_results(object(), bundle, updated_ts=456)
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+
+    assert bundle.results[0].decision.final_signal == "HOLD"
+    assert seen_signals == ["BUY"]
+    assert result.persistence_context["target_policy_signal"] == "BUY"
+    assert result.persistence_context["target_origin"] == "allocator_selected_signal"
+    assert result.submit_plan is not None
+    assert result.submit_plan.side == "BUY"
+
+
 def test_run_loop_multi_strategy_conflict_fails_closed_without_submit() -> None:
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -723,6 +786,95 @@ def test_run_loop_multi_strategy_conflict_fails_closed_without_submit() -> None:
         "canary_non_sma",
         "sma_with_filter",
     ]
+
+
+def test_multi_strategy_artifacts_persist_and_replay_without_strategy_context_json(tmp_path) -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    old_engine = settings.EXECUTION_ENGINE
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {"target_origin": "runtime_state"},
+            },
+        )
+        buy_spec = RuntimeStrategySpec("canary_non_sma", priority=10)
+        hold_spec = RuntimeStrategySpec("safe_hold", priority=10)
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(buy_spec, hold_spec)),
+            results=(
+                _runtime_result("BUY", "canary_non_sma", spec=buy_spec),
+                _runtime_result("HOLD", "safe_hold", spec=hold_spec),
+            ),
+        )
+        plan = planner.plan_runtime_strategy_results(object(), bundle, updated_ts=456)
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+
+    conn = ensure_db(str(tmp_path / "multi_strategy_artifacts.sqlite"))
+    try:
+        bundle_refs = record_runtime_strategy_decision_bundle(
+            conn,
+            result_bundle=bundle,
+            pair="KRW-BTC",
+            interval="1m",
+            created_ts=456,
+        )
+        allocation_refs = record_portfolio_allocation_decision(
+            conn,
+            bundle_id=int(bundle_refs["runtime_strategy_decision_bundle_id"]),
+            allocation_decision=plan.persistence_context["portfolio_allocation_decision"],  # type: ignore[arg-type]
+        )
+        execution_refs = record_execution_plan(
+            conn,
+            allocation_id=int(allocation_refs["portfolio_allocation_decision_id"]),
+            portfolio_target_hash=str(allocation_refs["portfolio_target_hash"]),
+            execution_plan_bundle=plan,
+        )
+        conn.commit()
+
+        assert (
+            conn.execute("SELECT COUNT(*) FROM runtime_strategy_decision_bundle").fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM runtime_strategy_decision_result").fetchone()[0]
+            == 2
+        )
+        assert conn.execute("SELECT COUNT(*) FROM strategy_contribution").fetchone()[0] == 2
+        joined = conn.execute(
+            """
+            SELECT b.bundle_hash, r.strategy_instance_id, r.final_signal,
+                   a.selected_signal, t.final_portfolio_target_hash,
+                   e.execution_submit_plan_hash
+            FROM runtime_strategy_decision_bundle b
+            JOIN runtime_strategy_decision_result r ON r.bundle_id = b.id
+            JOIN portfolio_allocation_decision a ON a.bundle_id = b.id
+            JOIN portfolio_target t ON t.allocation_id = a.id
+            JOIN execution_plan e ON e.allocation_id = a.id
+            ORDER BY r.strategy_instance_id
+            """
+        ).fetchall()
+        assert len(joined) == 2
+        assert {row["final_signal"] for row in joined} == {"BUY", "HOLD"}
+        assert {row["selected_signal"] for row in joined} == {"BUY"}
+        assert str(joined[0]["bundle_hash"]).startswith("sha256:")
+        assert str(joined[0]["final_portfolio_target_hash"]).startswith("sha256:")
+        assert str(joined[0]["execution_submit_plan_hash"]).startswith("sha256:")
+        assert replay_allocation_decision_hash(
+            conn, int(allocation_refs["portfolio_allocation_decision_id"])
+        ) == allocation_refs["allocation_decision_hash"]
+        assert replay_portfolio_target_hash(
+            conn, int(allocation_refs["portfolio_target_id"])
+        ) == allocation_refs["portfolio_target_hash"]
+        assert replay_execution_submit_plan_hash(
+            conn, int(execution_refs["execution_plan_id"])
+        ) == execution_refs["execution_submit_plan_hash"]
+    finally:
+        conn.close()
 
 
 def test_target_delta_typed_planning_fails_closed_without_portfolio_target() -> None:
