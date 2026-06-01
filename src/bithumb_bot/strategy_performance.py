@@ -33,6 +33,7 @@ class StrategyPerformanceSummary:
     traded_notional_total: float | None
     worst_trade: float | None
     best_trade: float | None
+    filter_scope: dict[str, object] = field(default_factory=dict)
     by_strategy_name: dict[str, dict[str, float | int]] = field(default_factory=dict)
     by_exit_rule_name: dict[str, dict[str, float | int]] = field(default_factory=dict)
 
@@ -54,6 +55,7 @@ class StrategyPerformanceSummary:
             "traded_notional_total": self.traded_notional_total,
             "worst_trade": self.worst_trade,
             "best_trade": self.best_trade,
+            "filter_scope": dict(self.filter_scope),
             "by_strategy_name": self.by_strategy_name,
             "by_exit_rule_name": self.by_exit_rule_name,
         }
@@ -79,6 +81,7 @@ class StrategyPerformanceGateResult:
             "recommended_next_action": self.recommended_next_action,
             "summary": self.summary.as_dict(),
             "thresholds": dict(self.thresholds),
+            "filter_scope": dict(self.summary.filter_scope),
         }
 
 
@@ -129,8 +132,10 @@ def _bucket(rows: list[sqlite3.Row], key: str) -> dict[str, dict[str, float | in
 def fetch_strategy_performance_summary(
     conn: sqlite3.Connection,
     *,
+    strategy_instance_id: str | None = None,
     strategy_name: str | None = None,
     pair: str | None = None,
+    runtime_strategy_set_manifest_hash: str | None = None,
     recent_limit: int = 200,
 ) -> StrategyPerformanceSummary:
     try:
@@ -140,19 +145,49 @@ def fetch_strategy_performance_summary(
     if not {"gross_pnl", "fee_total", "net_pnl", "exit_ts"}.issubset(cols):
         return _empty_summary()
     has_notional_cols = {"matched_qty", "entry_price", "exit_price"}.issubset(cols)
+    has_instance_col = "strategy_instance_id" in cols
+    has_manifest_col = "runtime_strategy_set_manifest_hash" in cols
 
     filters: list[str] = []
     params: list[object] = []
-    if strategy_name:
+    instance_filter_applied = False
+    manifest_filter_applied = False
+    if strategy_instance_id and has_instance_col:
+        filters.append("COALESCE(strategy_instance_id, '') = ?")
+        params.append(str(strategy_instance_id))
+        instance_filter_applied = True
+    elif strategy_name:
         filters.append("COALESCE(strategy_name, '<unknown>') = ?")
         params.append(str(strategy_name))
     if pair:
         filters.append("COALESCE(pair, '<unknown>') = ?")
         params.append(str(pair))
+    if runtime_strategy_set_manifest_hash and has_manifest_col and not instance_filter_applied:
+        filters.append("COALESCE(runtime_strategy_set_manifest_hash, '') = ?")
+        params.append(str(runtime_strategy_set_manifest_hash))
+        manifest_filter_applied = True
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    scope = {
+        "strategy_instance_id": strategy_instance_id,
+        "strategy_name": strategy_name,
+        "pair": pair,
+        "runtime_strategy_set_manifest_hash": runtime_strategy_set_manifest_hash,
+        "strategy_instance_id_filter_available": has_instance_col,
+        "strategy_instance_id_filter_applied": instance_filter_applied,
+        "runtime_strategy_set_manifest_hash_filter_available": has_manifest_col,
+        "runtime_strategy_set_manifest_hash_filter_applied": manifest_filter_applied,
+        "fallback_filter_applied": bool(strategy_instance_id and not has_instance_col),
+        "filter_precedence": (
+            "strategy_instance_id"
+            if instance_filter_applied
+            else "strategy_name_pair_compatibility"
+        ),
+    }
     rows = conn.execute(
         f"""
         SELECT
+            {"COALESCE(strategy_instance_id, '') AS strategy_instance_id," if has_instance_col else ""}
+            {"COALESCE(runtime_strategy_set_manifest_hash, '') AS runtime_strategy_set_manifest_hash," if has_manifest_col else ""}
             COALESCE(strategy_name, '<unknown>') AS strategy_name,
             COALESCE(exit_rule_name, '<unknown>') AS exit_rule_name,
             gross_pnl,
@@ -167,7 +202,8 @@ def fetch_strategy_performance_summary(
         (*params, max(1, int(recent_limit))),
     ).fetchall()
     if not rows:
-        return _empty_summary()
+        empty = _empty_summary()
+        return StrategyPerformanceSummary(**{**empty.__dict__, "filter_scope": scope})
 
     net_values = [float(row["net_pnl"] or 0.0) for row in rows]
     gross_pnl = float(sum(float(row["gross_pnl"] or 0.0) for row in rows))
@@ -210,6 +246,7 @@ def fetch_strategy_performance_summary(
         traded_notional_total=traded_notional_total,
         worst_trade=min(net_values),
         best_trade=max(net_values),
+        filter_scope=scope,
         by_strategy_name=_bucket(rows, "strategy_name"),
         by_exit_rule_name=_bucket(rows, "exit_rule_name"),
     )
@@ -218,27 +255,33 @@ def fetch_strategy_performance_summary(
 def evaluate_strategy_performance_gate(
     conn: sqlite3.Connection,
     *,
+    strategy_instance_id: str | None = None,
     strategy_name: str | None = None,
     pair: str | None = None,
+    runtime_strategy_set_manifest_hash: str | None = None,
+    settings_obj: object = settings,
 ) -> StrategyPerformanceGateResult:
-    enabled = bool(getattr(settings, "LIVE_PERFORMANCE_GATE_ENABLED", True))
-    min_sample = max(1, int(getattr(settings, "LIVE_PERFORMANCE_GATE_MIN_SAMPLE", 30)))
-    recent_limit = max(min_sample, int(getattr(settings, "LIVE_PERFORMANCE_GATE_RECENT_LIMIT", 200)))
+    enabled = bool(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_ENABLED", True))
+    min_sample = max(1, int(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_MIN_SAMPLE", 30)))
+    recent_limit = max(min_sample, int(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_RECENT_LIMIT", 200)))
     summary = fetch_strategy_performance_summary(
         conn,
+        strategy_instance_id=strategy_instance_id,
         strategy_name=strategy_name,
         pair=pair,
+        runtime_strategy_set_manifest_hash=runtime_strategy_set_manifest_hash,
         recent_limit=recent_limit,
     )
     thresholds = {
-        "scope": str(getattr(settings, "LIVE_PERFORMANCE_GATE_SCOPE", "closed_lifecycles_recent")),
+        "scope": str(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_SCOPE", "closed_lifecycles_recent")),
         "min_sample": min_sample,
         "recent_limit": recent_limit,
-        "min_expectancy_krw": float(getattr(settings, "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW", 0.0)),
-        "min_net_pnl_krw": float(getattr(settings, "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW", 0.0)),
-        "min_profit_factor": float(getattr(settings, "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR", 1.0)),
-        "max_fee_drag_ratio": getattr(settings, "LIVE_PERFORMANCE_GATE_MAX_FEE_DRAG_RATIO", None),
+        "min_expectancy_krw": float(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW", 0.0)),
+        "min_net_pnl_krw": float(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW", 0.0)),
+        "min_profit_factor": float(getattr(settings_obj, "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR", 1.0)),
+        "max_fee_drag_ratio": getattr(settings_obj, "LIVE_PERFORMANCE_GATE_MAX_FEE_DRAG_RATIO", None),
         "max_fee_drag_ratio_basis": FEE_TO_GROSS_PNL_RATIO_BASIS,
+        "filter_scope": dict(summary.filter_scope),
     }
     if not enabled:
         return StrategyPerformanceGateResult(

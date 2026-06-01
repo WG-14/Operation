@@ -971,6 +971,107 @@ def test_single_pair_planner_rejects_target_pair_mismatch_before_submit() -> Non
     assert result.persistence_context["allocation_target_pairs"] == ["KRW-ETH"]
 
 
+def test_planner_runtime_pair_uses_injected_scope_when_global_pair_changes(tmp_path) -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from bithumb_bot.db_core import load_target_position_state, upsert_target_position_state
+
+    @dataclass(frozen=True)
+    class _Settings:
+        PAIR: str = "KRW-BTC"
+        INTERVAL: str = "1m"
+        EXECUTION_ENGINE: str = "target_delta"
+        TARGET_EXPOSURE_KRW: float | None = 80_000.0
+        MAX_ORDER_KRW: float = 90_000.0
+        MODE: str = "paper"
+        LIVE_REAL_ORDER_ARMED: bool = False
+        LIVE_DRY_RUN: bool = True
+
+    old_pair = settings.PAIR
+    conn = ensure_db(str(tmp_path / "runtime-pair-injected.sqlite"))
+    try:
+        upsert_target_position_state(
+            conn,
+            pair="KRW-BTC",
+            target_exposure_krw=12_345.0,
+            target_qty=0.00012345,
+            last_signal="HOLD",
+            last_decision_id=None,
+            last_reference_price=100_000_000.0,
+            updated_ts=1,
+        )
+        object.__setattr__(settings, "PAIR", "KRW-ETH")
+        planner = ExecutionPlanner(
+            settings_obj=_Settings(),
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+        )
+        spec = RuntimeStrategySpec(
+            "safe_hold",
+            strategy_instance_id="hold",
+            pair="KRW-BTC",
+            desired_exposure_krw=80_000.0,
+        )
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(
+                source="unit",
+                market_scope=RuntimeMarketScope(mode="single_pair", pair="KRW-BTC", interval="1m"),
+                strategies=(spec,),
+            ),
+            results=(_runtime_result("HOLD", "safe_hold", spec=spec),),
+        )
+        result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+    finally:
+        object.__setattr__(settings, "PAIR", old_pair)
+        conn.close()
+
+    assert result.planning_error is None
+    assert result.persistence_context["runtime_pair"] == "KRW-BTC"
+    assert result.persistence_context["allocation_target_pairs"] == ["KRW-BTC"]
+    assert result.persistence_context["portfolio_target"]["pair"] == "KRW-BTC"
+    assert result.persistence_context["portfolio_target"]["target_exposure_krw"] == pytest.approx(12_345.0)
+
+
+def test_persist_target_position_state_uses_runtime_pair_not_global_pair(tmp_path) -> None:
+    from bithumb_bot.db_core import load_target_position_state
+    from bithumb_bot.runtime.decision_coordinator import persist_target_position_state_for_run_loop
+
+    @dataclass(frozen=True)
+    class _Settings:
+        PAIR: str = "KRW-BTC"
+        EXECUTION_ENGINE: str = "target_delta"
+
+    old_pair = settings.PAIR
+    conn = ensure_db(str(tmp_path / "target-state-runtime-pair.sqlite"))
+    try:
+        object.__setattr__(settings, "PAIR", "KRW-ETH")
+        persisted = persist_target_position_state_for_run_loop(
+            conn,
+            execution_decision={
+                "target_shadow_decision": {
+                    "target_new_exposure_krw": 70_000.0,
+                    "target_qty": 0.0007,
+                    "target_reference_price": 100_000_000.0,
+                    "target_origin": "allocator",
+                }
+            },
+            signal="BUY",
+            decision_id=123,
+            updated_ts=456,
+            settings_obj=_Settings(),
+            runtime_pair="KRW-BTC",
+        )
+        conn.commit()
+        btc = load_target_position_state(conn, pair="KRW-BTC")
+        eth = load_target_position_state(conn, pair="KRW-ETH")
+    finally:
+        object.__setattr__(settings, "PAIR", old_pair)
+        conn.close()
+
+    assert persisted is True
+    assert btc is not None
+    assert btc.target_exposure_krw == pytest.approx(70_000.0)
+    assert eth is None
+
+
 def test_live_performance_gate_uses_allocator_selected_contributions_not_global_strategy() -> None:
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -1098,6 +1199,203 @@ def test_selected_buy_performance_gate_failure_blocks_before_submit_plan() -> No
     assert result.persistence_context["execution_block_reason"] == "selected_strategy_performance_gate_blocked"
     assert result.persistence_context["performance_gate_scope"]["blocking_strategy_instance_ids"] == ["selected_buy"]
     assert result.persistence_context["strategy_performance_gate_reason_code"] == "STRATEGY_PERFORMANCE_BLOCKED:SELECTED_ALLOCATOR_CONTRIBUTION"
+
+
+def _insert_performance_lifecycle(
+    conn,
+    *,
+    idx: int,
+    strategy_name: str,
+    strategy_instance_id: str,
+    net_pnl: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO trade_lifecycles(
+            id, pair, entry_trade_id, exit_trade_id, entry_client_order_id, exit_client_order_id,
+            entry_fill_id, exit_fill_id, entry_ts, exit_ts, matched_qty, entry_price, exit_price,
+            gross_pnl, fee_total, net_pnl, holding_time_sec, strategy_name, strategy_instance_id
+        ) VALUES (?, 'KRW-BTC', ?, ?, ?, ?, NULL, NULL, ?, ?, 0.0004, 100.0, 100.0, ?, 0.0, ?, 60.0, ?, ?)
+        """,
+        (
+            idx,
+            idx,
+            idx,
+            f"entry-{idx}",
+            f"exit-{idx}",
+            1_710_000_000_000 + idx,
+            1_710_000_060_000 + idx,
+            float(net_pnl),
+            float(net_pnl),
+            strategy_name,
+            strategy_instance_id,
+        ),
+    )
+
+
+def test_selected_performance_gate_uses_real_strategy_instance_filter(tmp_path) -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    old_values = {
+        "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
+        "MODE": settings.MODE,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_PERFORMANCE_GATE_ENABLED": settings.LIVE_PERFORMANCE_GATE_ENABLED,
+        "LIVE_PERFORMANCE_GATE_MIN_SAMPLE": settings.LIVE_PERFORMANCE_GATE_MIN_SAMPLE,
+        "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR": settings.LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR,
+    }
+    conn = ensure_db(str(tmp_path / "selected-instance-gate.sqlite"))
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+        object.__setattr__(settings, "LIVE_DRY_RUN", False)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_ENABLED", True)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_SAMPLE", 2)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR", 1.0)
+        _insert_performance_lifecycle(
+            conn,
+            idx=1,
+            strategy_name="canary_non_sma",
+            strategy_instance_id="selected_buy",
+            net_pnl=100.0,
+        )
+        _insert_performance_lifecycle(
+            conn,
+            idx=2,
+            strategy_name="canary_non_sma",
+            strategy_instance_id="selected_buy",
+            net_pnl=120.0,
+        )
+        _insert_performance_lifecycle(
+            conn,
+            idx=3,
+            strategy_name="canary_non_sma",
+            strategy_instance_id="unselected_buy",
+            net_pnl=-500.0,
+        )
+        _insert_performance_lifecycle(
+            conn,
+            idx=4,
+            strategy_name="canary_non_sma",
+            strategy_instance_id="unselected_buy",
+            net_pnl=-100.0,
+        )
+        conn.commit()
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+        selected = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="selected_buy",
+            priority=10,
+            parameters=_complete_canary_parameters(),
+        )
+        unselected = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="unselected_buy",
+            priority=20,
+            parameters=_complete_canary_parameters(CANARY_ORDER_REASON="loser"),
+        )
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(selected, unselected)),
+            results=(
+                _runtime_result("BUY", "canary_non_sma", spec=selected),
+                _runtime_result("BUY", "canary_non_sma", spec=unselected),
+            ),
+        )
+        result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+    finally:
+        for key, value in old_values.items():
+            object.__setattr__(settings, key, value)
+        conn.close()
+
+    assert result.planning_error is None
+    assert result.submit_plan is not None
+    gate = result.persistence_context["per_strategy_gate_results"][0]
+    assert gate["strategy_instance_id"] == "selected_buy"
+    assert gate["strategy_instance_id_filter_applied"] is True
+    assert gate["gate"]["summary"]["sample_count"] == 2
+    assert result.persistence_context["blocking_strategy_instance_ids"] == []
+
+
+def test_selected_failing_instance_blocks_even_when_same_name_pair_history_passes(tmp_path) -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    old_values = {
+        "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
+        "MODE": settings.MODE,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_PERFORMANCE_GATE_ENABLED": settings.LIVE_PERFORMANCE_GATE_ENABLED,
+        "LIVE_PERFORMANCE_GATE_MIN_SAMPLE": settings.LIVE_PERFORMANCE_GATE_MIN_SAMPLE,
+        "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR": settings.LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR,
+    }
+    conn = ensure_db(str(tmp_path / "selected-failing-instance-gate.sqlite"))
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+        object.__setattr__(settings, "LIVE_DRY_RUN", False)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_ENABLED", True)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_SAMPLE", 2)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR", 1.0)
+        _insert_performance_lifecycle(conn, idx=1, strategy_name="canary_non_sma", strategy_instance_id="selected_buy", net_pnl=-500.0)
+        _insert_performance_lifecycle(conn, idx=2, strategy_name="canary_non_sma", strategy_instance_id="selected_buy", net_pnl=-100.0)
+        _insert_performance_lifecycle(conn, idx=3, strategy_name="canary_non_sma", strategy_instance_id="unselected_buy", net_pnl=1000.0)
+        _insert_performance_lifecycle(conn, idx=4, strategy_name="canary_non_sma", strategy_instance_id="unselected_buy", net_pnl=900.0)
+        conn.commit()
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+        selected = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="selected_buy",
+            priority=10,
+            parameters=_complete_canary_parameters(),
+        )
+        unselected = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="unselected_buy",
+            priority=20,
+            parameters=_complete_canary_parameters(CANARY_ORDER_REASON="winner"),
+        )
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(selected, unselected)),
+            results=(
+                _runtime_result("BUY", "canary_non_sma", spec=selected),
+                _runtime_result("BUY", "canary_non_sma", spec=unselected),
+            ),
+        )
+        result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+    finally:
+        for key, value in old_values.items():
+            object.__setattr__(settings, key, value)
+        conn.close()
+
+    assert result.submit_plan is None
+    assert result.planning_error == "selected_strategy_performance_gate_blocked"
+    assert result.persistence_context["blocking_strategy_instance_ids"] == ["selected_buy"]
+    gate = result.persistence_context["per_strategy_gate_results"][0]
+    assert gate["strategy_instance_id_filter_applied"] is True
+    assert gate["gate"]["summary"]["sample_count"] == 2
 
 
 def test_performance_gate_threshold_changes_execution_plan_hash_when_blocking() -> None:
@@ -1398,6 +1696,74 @@ def test_multi_strategy_artifacts_persist_and_replay_without_strategy_context_js
         with pytest.raises(RuntimeError, match="strategy_contribution_rebuild_hash_mismatch"):
             rebuild_allocation_decision_from_bundle(
                 conn, int(bundle_refs["runtime_strategy_decision_bundle_id"])
+            )
+    finally:
+        conn.close()
+
+
+def test_multi_target_allocation_persistence_does_not_return_singular_first_target(tmp_path) -> None:
+    btc_pref = strategy_decision_to_preference(
+        _decision(final_signal="BUY", strategy_name="canary_non_sma"),
+        pair="KRW-BTC",
+        strategy_instance_id="btc_buy",
+        desired_exposure_krw=70_000.0,
+    )
+    eth_pref = strategy_decision_to_preference(
+        _decision(final_signal="BUY", strategy_name="canary_non_sma"),
+        pair="KRW-ETH",
+        strategy_instance_id="eth_buy",
+        desired_exposure_krw=70_000.0,
+    )
+    allocation = _allocate((btc_pref, eth_pref))
+    assert len(allocation.targets) == 2
+    btc_spec = RuntimeStrategySpec("canary_non_sma", strategy_instance_id="btc_buy", pair="KRW-BTC")
+    eth_spec = RuntimeStrategySpec("canary_non_sma", strategy_instance_id="eth_buy", pair="KRW-ETH")
+    bundle = RuntimeStrategyDecisionResultBundle(
+        strategy_set=RuntimeStrategySet(source="unit_bypass", strategies=(btc_spec, eth_spec)),
+        results=(
+            _runtime_result("BUY", "canary_non_sma", spec=btc_spec),
+            _runtime_result("BUY", "canary_non_sma", spec=eth_spec),
+        ),
+    )
+    conn = ensure_db(str(tmp_path / "multi-target-singular.sqlite"))
+    try:
+        conn.execute(
+            """
+            INSERT INTO runtime_strategy_decision_bundle(
+                candle_ts, pair, interval, runtime_strategy_set_manifest_id,
+                strategy_set_manifest_hash, bundle_hash, result_count, created_ts
+            ) VALUES (?, ?, ?, NULL, '', ?, ?, ?)
+            """,
+            (123, "KRW-BTC", "1m", bundle.content_hash(), 2, 456),
+        )
+        bundle_refs = {
+            "runtime_strategy_decision_bundle_id": int(
+                conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            )
+        }
+        allocation_refs = record_portfolio_allocation_decision(
+            conn,
+            bundle_id=int(bundle_refs["runtime_strategy_decision_bundle_id"]),
+            allocation_decision=allocation.as_dict(),
+        )
+        conn.commit()
+
+        assert allocation_refs["portfolio_target_id"] is None
+        assert allocation_refs["portfolio_target_hash"] == ""
+        assert allocation_refs["portfolio_target_singular_available"] is False
+        assert (
+            allocation_refs["portfolio_target_singular_reason"]
+            == "multiple_portfolio_targets_singular_compatibility_fail_closed"
+        )
+        with pytest.raises(RuntimeError, match="portfolio_target_singular_requires_exactly_one_target"):
+            rebuild_portfolio_target_from_allocation(
+                conn,
+                int(allocation_refs["portfolio_allocation_decision_id"]),
+            )
+        with pytest.raises(RuntimeError, match="portfolio_target_singular_requires_exactly_one_target"):
+            replay_portfolio_target_from_allocation(
+                conn,
+                int(allocation_refs["portfolio_allocation_decision_id"]),
             )
     finally:
         conn.close()

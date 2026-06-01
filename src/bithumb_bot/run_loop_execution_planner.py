@@ -256,18 +256,18 @@ class ExecutionAuthorityEnvelope:
         )
 
 
-def _allocator_target_exposure_krw() -> float:
-    explicit = getattr(settings, "TARGET_EXPOSURE_KRW", None)
+def _allocator_target_exposure_krw(settings_obj: object = settings) -> float:
+    explicit = getattr(settings_obj, "TARGET_EXPOSURE_KRW", None)
     if explicit is not None:
         try:
             return max(0.0, float(explicit))
         except (TypeError, ValueError):
             pass
-    return max(0.0, float(getattr(settings, "MAX_ORDER_KRW", 0.0) or 0.0))
+    return max(0.0, float(getattr(settings_obj, "MAX_ORDER_KRW", 0.0) or 0.0))
 
 
-def _allocation_context_fields(decision) -> dict[str, object]:
-    target = decision.target_for_pair(str(settings.PAIR))
+def _allocation_context_fields(decision, *, runtime_pair: str) -> dict[str, object]:
+    target = decision.target_for_pair(str(runtime_pair))
     target_payload = None if target is None else target.as_dict()
     target_conflict = {}
     if target_payload is not None:
@@ -319,9 +319,14 @@ def _runtime_strategy_set_context_fields(strategy_set: RuntimeStrategySet | None
     }
 
 
-def _runtime_pair_for_planning(strategy_set: RuntimeStrategySet | None) -> str:
-    del strategy_set
-    return str(settings.PAIR)
+def _runtime_pair_for_planning(
+    strategy_set: RuntimeStrategySet | None,
+    *,
+    settings_obj: object = settings,
+) -> str:
+    if strategy_set is not None and strategy_set.market_scope is not None:
+        return str(strategy_set.market_scope.pair)
+    return str(getattr(settings_obj, "PAIR"))
 
 
 def _allocation_single_pair_invariant_error(decision, *, runtime_pair: str) -> str | None:
@@ -399,6 +404,7 @@ def _aggregate_selected_performance_gate(
     *,
     runtime_pair: str,
     manifest_hash: str | None,
+    settings_obj: object = settings,
 ) -> dict[str, object] | None:
     scope = _selected_performance_gate_scope(
         decision,
@@ -428,18 +434,38 @@ def _aggregate_selected_performance_gate(
     results: list[dict[str, object]] = []
     blocking_ids: list[str] = []
     for contribution in selected:
-        raw = evaluator(
-            conn,
-            strategy_name=str(contribution.strategy_name),
-            pair=str(contribution.pair),
-        )
+        try:
+            raw = evaluator(
+                conn,
+                strategy_instance_id=str(contribution.strategy_instance_id),
+                strategy_name=str(contribution.strategy_name),
+                pair=str(contribution.pair),
+                runtime_strategy_set_manifest_hash=manifest_hash,
+                settings_obj=settings_obj,
+            )
+        except TypeError:
+            raw = evaluator(
+                conn,
+                strategy_name=str(contribution.strategy_name),
+                pair=str(contribution.pair),
+            )
         payload = _gate_payload(raw)
+        filter_scope = dict(
+            payload.get("filter_scope")
+            or dict(payload.get("thresholds") or {}).get("filter_scope")
+            or dict(payload.get("summary") or {}).get("filter_scope")
+            or {}
+        )
         item = {
             "strategy_instance_id": contribution.strategy_instance_id,
             "strategy_name": contribution.strategy_name,
             "pair": contribution.pair,
             "selected_signal": contribution.signal_direction,
             "gate": payload,
+            "filter_scope": filter_scope,
+            "strategy_instance_id_filter_applied": bool(
+                filter_scope.get("strategy_instance_id_filter_applied")
+            ),
             "allowed": bool(payload.get("allowed", True)),
             "reason_code": payload.get("reason_code"),
         }
@@ -544,17 +570,23 @@ def _runtime_result_bundle_context_fields(
     }
 
 
-def run_loop_uses_target_delta() -> bool:
+def run_loop_uses_target_delta(settings_obj: object = settings) -> bool:
     return (
-        str(getattr(settings, "EXECUTION_ENGINE", "lot_native") or "lot_native").strip().lower()
+        str(getattr(settings_obj, "EXECUTION_ENGINE", "lot_native") or "lot_native").strip().lower()
         == "target_delta"
     )
 
 
-def load_previous_target_exposure_for_run_loop(conn) -> float | None:
-    if not run_loop_uses_target_delta():
+def load_previous_target_exposure_for_run_loop(
+    conn,
+    *,
+    settings_obj: object = settings,
+    runtime_pair: str | None = None,
+) -> float | None:
+    if not run_loop_uses_target_delta(settings_obj):
         return None
-    previous_target_state = load_target_position_state(conn, pair=settings.PAIR)
+    pair = str(runtime_pair or getattr(settings_obj, "PAIR"))
+    previous_target_state = load_target_position_state(conn, pair=pair)
     if previous_target_state is None:
         return None
     return float(previous_target_state.target_exposure_krw)
@@ -567,15 +599,18 @@ def resolve_target_position_state_for_run_loop(
     reference_price: float | None,
     raw_signal: str,
     updated_ts: int,
+    settings_obj: object = settings,
+    runtime_pair: str | None = None,
 ) -> dict[str, object]:
-    if not run_loop_uses_target_delta():
+    if not run_loop_uses_target_delta(settings_obj):
         return {
             "previous_target_exposure_krw": None,
             "target_policy_metadata": {},
             "target_state": None,
         }
-    previous_target_state = load_target_position_state(conn, pair=settings.PAIR)
-    execution_order_rules = resolve_execution_order_rules(readiness_payload, market=str(settings.PAIR))
+    pair = str(runtime_pair or getattr(settings_obj, "PAIR"))
+    previous_target_state = load_target_position_state(conn, pair=pair)
+    execution_order_rules = resolve_execution_order_rules(readiness_payload, market=pair)
     policy = resolve_startup_target_position_policy(
         existing_target_state=previous_target_state,
         readiness_payload=readiness_payload,
@@ -591,7 +626,7 @@ def resolve_target_position_state_for_run_loop(
     }:
         upsert_target_position_state(
             conn,
-            pair=settings.PAIR,
+            pair=pair,
             target_exposure_krw=float(policy.target_exposure_krw or 0.0),
             target_qty=float(policy.target_qty or 0.0),
             last_signal=str(raw_signal or "HOLD").upper(),
@@ -604,7 +639,7 @@ def resolve_target_position_state_for_run_loop(
             adopted_broker_exposure_krw=policy.adopted_broker_exposure_krw,
             created_from_signal=policy.created_from_signal,
         )
-        previous_target_state = load_target_position_state(conn, pair=settings.PAIR)
+        previous_target_state = load_target_position_state(conn, pair=pair)
     previous_exposure = (
         None if previous_target_state is None else float(previous_target_state.target_exposure_krw)
     )
@@ -650,12 +685,12 @@ def prepare_strategy_decision_persistence_context(
     return context
 
 
-def _live_real_target_delta_performance_gate_applies() -> bool:
+def _live_real_target_delta_performance_gate_applies(settings_obj: object = settings) -> bool:
     return bool(
-        run_loop_uses_target_delta()
-        and str(settings.MODE).strip().lower() == "live"
-        and bool(settings.LIVE_REAL_ORDER_ARMED)
-        and not bool(settings.LIVE_DRY_RUN)
+        run_loop_uses_target_delta(settings_obj)
+        and str(getattr(settings_obj, "MODE")).strip().lower() == "live"
+        and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED"))
+        and not bool(getattr(settings_obj, "LIVE_DRY_RUN"))
     )
 
 
@@ -669,6 +704,7 @@ def _live_real_order_submit_plan_required() -> bool:
 
 @dataclass(frozen=True)
 class ExecutionPlanner:
+    settings_obj: object = settings
     readiness_snapshot_builder: Callable[..., object] = compute_runtime_readiness_snapshot
     performance_gate_evaluator: Callable[..., object] = evaluate_strategy_performance_gate
     summary_builder: Callable[..., ExecutionDecisionSummary] = build_typed_execution_decision_summary
@@ -856,8 +892,10 @@ class ExecutionPlanner:
         context = self._planning_context_from_envelope_input(planning_input)
         try:
             strategy_set = None if runtime_result_bundle is None else runtime_result_bundle.strategy_set
+            runtime_pair = _runtime_pair_for_planning(strategy_set, settings_obj=self.settings_obj)
             context.update(_runtime_strategy_set_context_fields(strategy_set))
             context.update(_runtime_result_bundle_context_fields(runtime_result_bundle))
+            context["runtime_pair"] = runtime_pair
             readiness_payload = self.readiness_snapshot_builder(conn).as_dict()
             strategy_performance_gate = None
             reference_price = context.get("market_price", context.get("last_close", context.get("close")))
@@ -868,17 +906,23 @@ class ExecutionPlanner:
                     reference_price=reference_price,
                     raw_signal=planning_input.final_signal,
                     updated_ts=int(updated_ts),
+                    settings_obj=self.settings_obj,
+                    runtime_pair=runtime_pair,
                 )
                 previous_target_exposure_krw = target_resolution.get("previous_target_exposure_krw")
                 target_policy_metadata = dict(target_resolution.get("target_policy_metadata", {}))
             else:
                 try:
-                    previous_target_exposure_krw = load_previous_target_exposure_for_run_loop(conn)
+                    previous_target_exposure_krw = load_previous_target_exposure_for_run_loop(
+                        conn,
+                        settings_obj=self.settings_obj,
+                        runtime_pair=runtime_pair,
+                    )
                 except AttributeError:
                     previous_target_exposure_krw = None
                 target_policy_metadata = {}
             allocation_config = PortfolioAllocatorConfig(
-                target_exposure_krw=_allocator_target_exposure_krw(),
+                target_exposure_krw=_allocator_target_exposure_krw(self.settings_obj),
                 strategy_priorities=(
                     {}
                     if strategy_set is None
@@ -893,12 +937,12 @@ class ExecutionPlanner:
             if runtime_result_bundle is None:
                 strategy_preference = strategy_decision_to_preference(
                     planning_input.strategy_decision,
-                    pair=str(settings.PAIR),
+                    pair=runtime_pair,
                     strategy_instance_id=str(
                         context.get("strategy_instance_id")
                         or planning_input.strategy_decision.strategy_name
                     ),
-                    desired_exposure_krw=_allocator_target_exposure_krw(),
+                    desired_exposure_krw=_allocator_target_exposure_krw(self.settings_obj),
                 )
                 preferences = (strategy_preference,)
             else:
@@ -975,9 +1019,8 @@ class ExecutionPlanner:
                 ),
             )
             allocation_decision = PortfolioAllocator(allocation_config).allocate(allocation_input)
-            allocation_context = _allocation_context_fields(allocation_decision)
+            allocation_context = _allocation_context_fields(allocation_decision, runtime_pair=runtime_pair)
             context.update(allocation_context)
-            runtime_pair = _runtime_pair_for_planning(strategy_set)
             context.update(
                 _allocation_single_pair_invariant_context(
                     allocation_decision,
@@ -997,7 +1040,7 @@ class ExecutionPlanner:
             selected_signal = str(context.get("allocation_selected_signal") or "").upper()
             target_authoritative = bool(portfolio_target is not None and portfolio_target.authoritative)
             allocation_authoritative = bool(allocation_decision.authoritative and target_authoritative)
-            if _live_real_target_delta_performance_gate_applies() and allocation_authoritative:
+            if _live_real_target_delta_performance_gate_applies(self.settings_obj) and allocation_authoritative:
                 strategy_performance_gate = _aggregate_selected_performance_gate(
                     self.performance_gate_evaluator,
                     conn,
@@ -1008,6 +1051,7 @@ class ExecutionPlanner:
                         if context.get("runtime_strategy_set_manifest_hash")
                         else None
                     ),
+                    settings_obj=self.settings_obj,
                 )
                 context.update(_performance_gate_context_fields(strategy_performance_gate))
                 if bool(strategy_performance_gate.get("blocked")):
@@ -1042,6 +1086,8 @@ class ExecutionPlanner:
                     reference_price=reference_price,
                     raw_signal=authoritative_signal,
                     updated_ts=int(updated_ts),
+                    settings_obj=self.settings_obj,
+                    runtime_pair=runtime_pair,
                 )
                 resolved_previous_target_exposure = target_resolution.get("previous_target_exposure_krw")
                 if previous_target_exposure_krw is None:

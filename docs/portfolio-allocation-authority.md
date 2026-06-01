@@ -66,6 +66,11 @@ allocator authority. The planner evaluates only allocator-selected BUY/SELL
 strategy contributions, keyed by `strategy_instance_id`, `strategy_name`, and
 `pair`; allocator-unselected strategies do not block submit. HOLD-only selected
 allocations are not blocked by unrelated BUY/SELL strategy history.
+`strategy_instance_id` is persisted on closed lifecycle performance rows and is
+the primary performance query filter when present. Historical rows from before
+that column existed can only use the broader `strategy_name`/`pair`
+compatibility filter; that fallback is compatibility-only and is not treated as
+instance-level authority.
 
 All selected BUY/SELL contributions must pass. A selected contribution failure
 fails closed with `selected_strategy_performance_gate_blocked` and records

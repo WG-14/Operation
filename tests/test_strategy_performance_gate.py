@@ -11,15 +11,25 @@ from bithumb_bot.strategy_performance import (
 from bithumb_bot.research.metrics_contract import ClosedTradeRecord, EquityPoint, ExecutionRecord, build_metrics_v2
 
 
-def _insert_lifecycle(conn, *, idx: int, net_pnl: float, fee_total: float = 10.0, exit_rule_name: str = "opposite_cross") -> None:
+def _insert_lifecycle(
+    conn,
+    *,
+    idx: int,
+    net_pnl: float,
+    fee_total: float = 10.0,
+    exit_rule_name: str = "opposite_cross",
+    strategy_instance_id: str | None = None,
+    runtime_strategy_set_manifest_hash: str | None = None,
+) -> None:
     gross_pnl = float(net_pnl) + float(fee_total)
     conn.execute(
         """
         INSERT INTO trade_lifecycles(
             id, pair, entry_trade_id, exit_trade_id, entry_client_order_id, exit_client_order_id,
             entry_fill_id, exit_fill_id, entry_ts, exit_ts, matched_qty, entry_price, exit_price,
-            gross_pnl, fee_total, net_pnl, holding_time_sec, strategy_name, exit_rule_name
-        ) VALUES (?, 'KRW-BTC', ?, ?, ?, ?, NULL, NULL, ?, ?, 0.0004, 100.0, 100.0, ?, ?, ?, 60.0, 'sma_with_filter', ?)
+            gross_pnl, fee_total, net_pnl, holding_time_sec, strategy_name, strategy_instance_id,
+            runtime_strategy_set_manifest_hash, exit_rule_name
+        ) VALUES (?, 'KRW-BTC', ?, ?, ?, ?, NULL, NULL, ?, ?, 0.0004, 100.0, 100.0, ?, ?, ?, 60.0, 'sma_with_filter', ?, ?, ?)
         """,
         (
             idx,
@@ -32,6 +42,8 @@ def _insert_lifecycle(conn, *, idx: int, net_pnl: float, fee_total: float = 10.0
             gross_pnl,
             fee_total,
             net_pnl,
+            strategy_instance_id,
+            runtime_strategy_set_manifest_hash,
             exit_rule_name,
         ),
     )
@@ -204,3 +216,72 @@ def test_strategy_performance_gate_fails_closed_on_insufficient_sample(tmp_path)
 
     assert gate.allowed is False
     assert "STRATEGY_SAMPLE_INSUFFICIENT" in gate.reason_code
+
+
+def test_strategy_performance_summary_prefers_strategy_instance_id_scope(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "performance-instance-scope.sqlite"))
+    try:
+        _insert_lifecycle(conn, idx=1, net_pnl=-500.0, strategy_instance_id="losing-instance")
+        _insert_lifecycle(conn, idx=2, net_pnl=100.0, strategy_instance_id="winning-instance")
+        _insert_lifecycle(conn, idx=3, net_pnl=120.0, strategy_instance_id="winning-instance")
+        conn.commit()
+
+        summary = fetch_strategy_performance_summary(
+            conn,
+            strategy_instance_id="winning-instance",
+            strategy_name="sma_with_filter",
+            pair="KRW-BTC",
+        )
+    finally:
+        conn.close()
+
+    assert summary.sample_count == 2
+    assert summary.net_pnl == 220.0
+    assert summary.filter_scope["strategy_instance_id_filter_applied"] is True
+    assert summary.filter_scope["filter_precedence"] == "strategy_instance_id"
+
+
+def test_strategy_performance_gate_instance_scope_blocks_only_selected_instance(tmp_path) -> None:
+    old_values = {
+        "LIVE_PERFORMANCE_GATE_ENABLED": settings.LIVE_PERFORMANCE_GATE_ENABLED,
+        "LIVE_PERFORMANCE_GATE_MIN_SAMPLE": settings.LIVE_PERFORMANCE_GATE_MIN_SAMPLE,
+        "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW": settings.LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW,
+        "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR": settings.LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR,
+    }
+    conn = ensure_db(str(tmp_path / "performance-instance-gate.sqlite"))
+    try:
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_ENABLED", True)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_SAMPLE", 2)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_EXPECTANCY_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_NET_PNL_KRW", 0.0)
+        object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_MIN_PROFIT_FACTOR", 1.0)
+        _insert_lifecycle(conn, idx=1, net_pnl=-500.0, strategy_instance_id="losing-instance")
+        _insert_lifecycle(conn, idx=2, net_pnl=-100.0, strategy_instance_id="losing-instance")
+        _insert_lifecycle(conn, idx=3, net_pnl=100.0, strategy_instance_id="winning-instance")
+        _insert_lifecycle(conn, idx=4, net_pnl=120.0, strategy_instance_id="winning-instance")
+        conn.commit()
+
+        winning = evaluate_strategy_performance_gate(
+            conn,
+            strategy_instance_id="winning-instance",
+            strategy_name="sma_with_filter",
+            pair="KRW-BTC",
+        )
+        losing = evaluate_strategy_performance_gate(
+            conn,
+            strategy_instance_id="losing-instance",
+            strategy_name="sma_with_filter",
+            pair="KRW-BTC",
+        )
+    finally:
+        for key, value in old_values.items():
+            object.__setattr__(settings, key, value)
+        conn.close()
+
+    assert winning.allowed is True
+    assert winning.summary.sample_count == 2
+    assert winning.summary.filter_scope["strategy_instance_id_filter_applied"] is True
+    assert losing.allowed is False
+    assert "STRATEGY_EXPECTANCY_NEGATIVE" in losing.reason_code
+    assert losing.summary.sample_count == 2

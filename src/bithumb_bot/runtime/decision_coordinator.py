@@ -70,8 +70,10 @@ def persist_target_position_state_for_run_loop(
     signal: str,
     decision_id: int | None,
     updated_ts: int,
+    settings_obj: object = settings,
+    runtime_pair: str | None = None,
 ) -> bool:
-    if not run_loop_uses_target_delta():
+    if not run_loop_uses_target_delta(settings_obj):
         return False
     target_decision = (
         execution_decision.get("target_shadow_decision")
@@ -89,7 +91,7 @@ def persist_target_position_state_for_run_loop(
         return False
     upsert_target_position_state(
         conn,
-        pair=settings.PAIR,
+        pair=str(runtime_pair or getattr(settings_obj, "PAIR")),
         target_exposure_krw=float(target_decision["target_new_exposure_krw"] or 0.0),
         target_qty=float(target_decision["target_qty"] or 0.0),
         last_signal=signal,
@@ -244,10 +246,17 @@ class DecisionCoordinator:
         exit_rule_name: str | None = None
         persistence_status = "not_attempted"
         try:
-            planner = self.planner_factory(
-                target_state_resolver=self.target_state_resolver,
-                persistence_context_builder=self.persistence_context_builder,
-            )
+            try:
+                planner = self.planner_factory(
+                    settings_obj=self.settings_obj,
+                    target_state_resolver=self.target_state_resolver,
+                    persistence_context_builder=self.persistence_context_builder,
+                )
+            except TypeError:
+                planner = self.planner_factory(
+                    target_state_resolver=self.target_state_resolver,
+                    persistence_context_builder=self.persistence_context_builder,
+                )
             planning_bundle = planner.plan_runtime_strategy_results(
                 conn,
                 typed_bundle,
@@ -257,8 +266,8 @@ class DecisionCoordinator:
             bundle_refs = self.record_runtime_strategy_decision_bundle_fn(
                 conn,
                 result_bundle=typed_bundle,
-                pair=str(self.settings_obj.PAIR),
-                interval=str(self.settings_obj.INTERVAL),
+                pair=str(typed_bundle.strategy_set.market_scope.pair),
+                interval=str(typed_bundle.strategy_set.market_scope.interval),
                 created_ts=updated_ts,
                 settings_obj=self.settings_obj,
                 manifest_payload=self.run_start_manifest_payload,
@@ -332,13 +341,24 @@ class DecisionCoordinator:
                 strategy_decision_projection_type=context.get("strategy_decision_projection_type"),
                 strategy_decisions_authority=context.get("strategy_decisions_authority"),
             )
-            self.target_position_state_persister(
-                conn,
-                execution_decision=execution_decision,
-                signal=signal,
-                decision_id=decision_id,
-                updated_ts=updated_ts,
-            )
+            try:
+                self.target_position_state_persister(
+                    conn,
+                    execution_decision=execution_decision,
+                    signal=signal,
+                    decision_id=decision_id,
+                    updated_ts=updated_ts,
+                    settings_obj=self.settings_obj,
+                    runtime_pair=str(context.get("runtime_pair") or typed_bundle.strategy_set.market_scope.pair),
+                )
+            except TypeError:
+                self.target_position_state_persister(
+                    conn,
+                    execution_decision=execution_decision,
+                    signal=signal,
+                    decision_id=decision_id,
+                    updated_ts=updated_ts,
+                )
             conn.commit()
             persistence_status = "persisted"
         except Exception as exc:

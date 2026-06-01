@@ -864,6 +864,44 @@ def _json_loads_object(value: str | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _strategy_scope_from_decision_context(context_json: str | None) -> tuple[str | None, str | None]:
+    try:
+        context = _json_loads_object(context_json)
+    except json.JSONDecodeError:
+        return (None, None)
+    instance_id = str(context.get("strategy_instance_id") or "").strip()
+    manifest_hash = str(context.get("runtime_strategy_set_manifest_hash") or "").strip()
+    if not instance_id:
+        ids = context.get("allocation_selected_strategy_instance_ids")
+        if isinstance(ids, list) and len(ids) == 1:
+            instance_id = str(ids[0] or "").strip()
+    return (instance_id or None, manifest_hash or None)
+
+
+def _backfill_trade_lifecycle_strategy_scope(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT tl.id, sd.context_json
+        FROM trade_lifecycles tl
+        JOIN strategy_decisions sd ON sd.id = tl.entry_decision_id
+        WHERE (tl.strategy_instance_id IS NULL OR TRIM(tl.strategy_instance_id) = '')
+           OR (tl.runtime_strategy_set_manifest_hash IS NULL OR TRIM(tl.runtime_strategy_set_manifest_hash) = '')
+        """
+    ).fetchall()
+    for row in rows:
+        instance_id, manifest_hash = _strategy_scope_from_decision_context(row["context_json"])
+        conn.execute(
+            """
+            UPDATE trade_lifecycles
+            SET
+                strategy_instance_id = COALESCE(NULLIF(strategy_instance_id, ''), ?),
+                runtime_strategy_set_manifest_hash = COALESCE(NULLIF(runtime_strategy_set_manifest_hash, ''), ?)
+            WHERE id=?
+            """,
+            (instance_id, manifest_hash, int(row["id"])),
+        )
+
+
 def _strategy_decision_experiment_context(*, strategy_name: str) -> dict[str, Any]:
     payload = {
         "strategy_name": str(strategy_name).strip().lower(),
@@ -2981,6 +3019,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "trade_lifecycles", "entry_fill_id", "entry_fill_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_fill_id", "exit_fill_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "strategy_name", "strategy_name TEXT")
+    _ensure_column(conn, "trade_lifecycles", "strategy_instance_id", "strategy_instance_id TEXT")
+    _ensure_column(
+        conn,
+        "trade_lifecycles",
+        "runtime_strategy_set_manifest_hash",
+        "runtime_strategy_set_manifest_hash TEXT",
+    )
     _ensure_column(conn, "trade_lifecycles", "entry_decision_id", "entry_decision_id INTEGER")
     _ensure_column(conn, "trade_lifecycles", "entry_decision_linkage", "entry_decision_linkage TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_decision_id", "exit_decision_id INTEGER")
@@ -2999,6 +3044,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ON trade_lifecycles(entry_trade_id, id)
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_lifecycles_strategy_instance_pair_exit
+        ON trade_lifecycles(strategy_instance_id, pair, exit_ts, id)
+        """
+    )
+    _backfill_trade_lifecycle_strategy_scope(conn)
 
     _ensure_multi_strategy_artifact_schema(conn)
     _ensure_schema_meta_table(conn)
@@ -3479,13 +3531,25 @@ def record_portfolio_allocation_decision(
         ).fetchone()
         if target_row is not None:
             target_ids[str(target.get("pair") or "")] = int(target_row["id"])
-    first_target = target_payloads[0] if target_payloads and isinstance(target_payloads[0], dict) else {}
+    singular_target_id: int | None = None
+    singular_target_hash = ""
+    singular_reason = "portfolio_target_singular_not_available"
+    if len(target_payloads) == 1 and len(target_ids) == 1 and isinstance(target_payloads[0], dict):
+        first_target = target_payloads[0]
+        pair = str(first_target.get("pair") or "")
+        singular_target_id = target_ids.get(pair)
+        singular_target_hash = str(first_target.get("final_portfolio_target_hash") or "")
+        singular_reason = "exactly_one_portfolio_target"
+    elif len(target_payloads) > 1:
+        singular_reason = "multiple_portfolio_targets_singular_compatibility_fail_closed"
     return {
         "portfolio_allocation_decision_id": allocation_id,
         "allocation_decision_hash": allocation_hash,
         "portfolio_target_ids": target_ids,
-        "portfolio_target_id": next(iter(target_ids.values()), None),
-        "portfolio_target_hash": str(first_target.get("final_portfolio_target_hash") or ""),
+        "portfolio_target_id": singular_target_id,
+        "portfolio_target_hash": singular_target_hash,
+        "portfolio_target_singular_available": singular_target_id is not None,
+        "portfolio_target_singular_reason": singular_reason,
         "runtime_strategy_set_manifest_id": manifest_id,
         "runtime_strategy_set_manifest_hash": manifest_hash,
     }
@@ -3518,6 +3582,21 @@ def record_execution_plan(
     ).fetchone()
     manifest_id = None if allocation_manifest_row is None else allocation_manifest_row["runtime_strategy_set_manifest_id"]
     manifest_hash = "" if allocation_manifest_row is None else str(allocation_manifest_row["runtime_strategy_set_manifest_hash"] or "")
+    target_rows = conn.execute(
+        """
+        SELECT final_portfolio_target_hash
+        FROM portfolio_target
+        WHERE allocation_id=?
+        ORDER BY pair, id
+        """,
+        (int(allocation_id),),
+    ).fetchall()
+    if len(target_rows) == 1:
+        authoritative_target_hash = str(target_rows[0]["final_portfolio_target_hash"] or "")
+        if str(portfolio_target_hash or "") != authoritative_target_hash:
+            raise RuntimeError("portfolio_target_hash_not_planner_validated_runtime_pair_target")
+    elif len(target_rows) > 1 and str(portfolio_target_hash or ""):
+        raise RuntimeError("portfolio_target_hash_singular_requires_exactly_one_target")
     bundle_payload = {
         **bundle_payload,
         "runtime_strategy_set_manifest_id": manifest_id,
@@ -3749,18 +3828,20 @@ def rebuild_portfolio_target_from_allocation(
     conn: sqlite3.Connection,
     allocation_id: int,
 ) -> dict[str, Any]:
-    row = conn.execute(
+    rows = conn.execute(
         """
         SELECT *
         FROM portfolio_target
         WHERE allocation_id=?
         ORDER BY pair, id
-        LIMIT 1
         """,
         (int(allocation_id),),
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    if not rows:
         raise RuntimeError("portfolio_target_not_found")
+    if len(rows) != 1:
+        raise RuntimeError("portfolio_target_singular_requires_exactly_one_target")
+    row = rows[0]
     payload = _portfolio_target_payload_from_row(row)
     recorded = str(row["final_portfolio_target_hash"] or "")
     if recorded and str(payload["final_portfolio_target_hash"]) != recorded:

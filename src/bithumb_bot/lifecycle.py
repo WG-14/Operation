@@ -39,6 +39,33 @@ ENTRY_DECISION_LINKAGE_DEGRADED_RECOVERY_UNATTRIBUTED = "degraded_recovery_unatt
 LOT_SEMANTIC_VERSION_V1 = 1
 
 
+def _strategy_scope_for_decision_id(
+    conn: sqlite3.Connection,
+    decision_id: int | None,
+) -> tuple[str | None, str | None]:
+    if decision_id is None:
+        return (None, None)
+    row = conn.execute(
+        "SELECT context_json FROM strategy_decisions WHERE id=?",
+        (int(decision_id),),
+    ).fetchone()
+    if row is None:
+        return (None, None)
+    try:
+        context = json.loads(str(row["context_json"] or "{}"))
+    except json.JSONDecodeError:
+        return (None, None)
+    if not isinstance(context, dict):
+        return (None, None)
+    instance_id = str(context.get("strategy_instance_id") or "").strip()
+    manifest_hash = str(context.get("runtime_strategy_set_manifest_hash") or "").strip()
+    if not instance_id:
+        ids = context.get("allocation_selected_strategy_instance_ids")
+        if isinstance(ids, list) and len(ids) == 1:
+            instance_id = str(ids[0] or "").strip()
+    return (instance_id or None, manifest_hash or None)
+
+
 @dataclass(frozen=True)
 class LotDefinitionSnapshot:
     semantic_version: int | None
@@ -1253,6 +1280,13 @@ def apply_fill_lifecycle(
         fee_total = entry_fee_alloc + exit_fee_alloc
         net_pnl = gross_pnl - fee_total
         holding_time_seconds = max(0.0, (int(fill_ts) - int(_row_value(lot, "entry_ts", 4) or 0)) / 1000.0)
+        effective_entry_decision_id = (
+            entry_decision_id if entry_decision_id is not None else _row_value(lot, "entry_decision_id", 12)
+        )
+        strategy_instance_id, manifest_hash = _strategy_scope_for_decision_id(
+            conn,
+            int(effective_entry_decision_id) if effective_entry_decision_id is not None else None,
+        )
 
         conn.execute(
             """
@@ -1274,12 +1308,14 @@ def apply_fill_lifecycle(
                 net_pnl,
                 holding_time_sec,
                 strategy_name,
+                strategy_instance_id,
+                runtime_strategy_set_manifest_hash,
                 entry_decision_id,
                 entry_decision_linkage,
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(pair),
@@ -1299,7 +1335,9 @@ def apply_fill_lifecycle(
                 float(net_pnl),
                 float(holding_time_seconds),
                 strategy_name or _row_value(lot, "strategy_name", 11),
-                entry_decision_id if entry_decision_id is not None else _row_value(lot, "entry_decision_id", 12),
+                strategy_instance_id,
+                manifest_hash,
+                effective_entry_decision_id,
                 (
                     ENTRY_DECISION_LINKAGE_DIRECT
                     if entry_decision_id is not None
@@ -1333,6 +1371,7 @@ def apply_fill_lifecycle(
     if remaining_lots > 0:
         remaining_qty = lot_count_to_qty(lot_count=remaining_lots, lot_size=float(lot_rules.lot_size))
         fallback_exit_fee = float(fee) * (remaining_qty / total_exit_qty) if total_exit_qty > eps else 0.0
+        strategy_instance_id, manifest_hash = _strategy_scope_for_decision_id(conn, entry_decision_id)
         conn.execute(
             """
             INSERT INTO trade_lifecycles(
@@ -1353,12 +1392,14 @@ def apply_fill_lifecycle(
                 net_pnl,
                 holding_time_sec,
                 strategy_name,
+                strategy_instance_id,
+                runtime_strategy_set_manifest_hash,
                 entry_decision_id,
                 entry_decision_linkage,
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(pair),
@@ -1378,6 +1419,8 @@ def apply_fill_lifecycle(
                 float(-fallback_exit_fee),
                 0.0,
                 strategy_name,
+                strategy_instance_id,
+                manifest_hash,
                 entry_decision_id,
                 "unattributed_unknown_entry",
                 exit_decision_id,
