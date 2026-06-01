@@ -452,13 +452,16 @@ class RuntimeStrategySetResolver:
         payload = json.loads(raw_json)
         market_scope_payload: Mapping[str, object] = {}
         if isinstance(payload, Mapping):
+            strategies_payload = payload.get("strategies", ())
+            if "strategies" in payload and not isinstance(strategies_payload, list):
+                raise ValueError("runtime_strategy_set_json_must_be_list")
             if "market_scope" not in payload:
                 raise ValueError("runtime_strategy_set_market_scope_required")
             raw_scope = payload.get("market_scope", {})
             if raw_scope is not None and not isinstance(raw_scope, Mapping):
                 raise ValueError("runtime_market_scope_must_be_object")
             market_scope_payload = raw_scope if isinstance(raw_scope, Mapping) else {}
-            payload = payload.get("strategies", ())
+            payload = strategies_payload
         if not isinstance(payload, list):
             raise ValueError("runtime_strategy_set_json_must_be_list")
         specs: list[Mapping[str, object]] = []
@@ -1224,6 +1227,7 @@ def validate_runtime_strategy_set_profile_binding(
     global_profile = (
         str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
         or str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+        or str(approved_profile_path_from_env() or "").strip()
     )
     issues: list[str] = []
     if global_profile:
@@ -1231,9 +1235,15 @@ def validate_runtime_strategy_set_profile_binding(
     for spec in strategy_set.active_strategies:
         instance_id = derive_strategy_instance_id(spec)
         if not str(spec.approved_profile_path or "").strip():
-            issues.append(f"{instance_id}:live_multi_strategy_requires_spec_bound_approved_profiles:path")
+            issues.append(
+                f"{instance_id}:multi_strategy_requires_spec_bound_approved_profile:"
+                "live_multi_strategy_requires_spec_bound_approved_profiles:path"
+            )
         if not str(spec.approved_profile_hash or "").strip():
-            issues.append(f"{instance_id}:live_multi_strategy_requires_spec_bound_approved_profiles:hash")
+            issues.append(
+                f"{instance_id}:multi_strategy_requires_spec_bound_approved_profile:"
+                "live_multi_strategy_requires_spec_bound_approved_profiles:hash"
+            )
     return tuple(issues)
 
 
@@ -1257,6 +1267,14 @@ def normalized_runtime_strategy_set_manifest(
         raise RuntimeError("; ".join(market_issues))
     builder = RuntimeDecisionRequestBuilder(settings_obj=settings_obj)
     active_instances = tuple(builder.materialize_instance(spec) for spec in resolved.active_strategies)
+    run_start_requests = tuple(
+        builder.build_for_spec(spec, through_ts_ms=None)
+        for spec in resolved.active_strategies
+    )
+    run_start_request_hashes = {
+        request.strategy_instance_id: request.request_hash
+        for request in run_start_requests
+    }
     market_scope = resolved.market_scope or RuntimeMarketScope(
         pair=str(getattr(settings_obj, "PAIR", "")),
         interval=str(getattr(settings_obj, "INTERVAL", "")),
@@ -1274,7 +1292,14 @@ def normalized_runtime_strategy_set_manifest(
         "active_strategy_count": len(active_instances),
         "active_strategy_pairs": sorted({instance.pair for instance in active_instances}),
         "active_strategy_intervals": sorted({instance.interval for instance in active_instances}),
-        "active_instances": [instance.as_dict() for instance in active_instances],
+        "active_instances": [
+            {
+                **instance.as_dict(),
+                "runtime_decision_request_hash": run_start_request_hashes[instance.strategy_instance_id],
+                "runtime_decision_request_hash_scope": "run_start_blueprint_through_ts_null",
+            }
+            for instance in active_instances
+        ],
         "execution_config_hash": execution_config_hash(settings_obj),
         "risk_config_hash": risk_config_hash(settings_obj),
     }

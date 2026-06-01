@@ -1863,8 +1863,12 @@ def test_normalized_runtime_strategy_set_manifest_materializes_active_instances(
             "runtime_adapter_config",
             "parameter_authority_audit",
             "legacy_compatibility_used",
+            "runtime_decision_request_hash",
+            "runtime_decision_request_hash_scope",
         ):
             assert key in item
+        assert str(item["runtime_decision_request_hash"]).startswith("sha256:")
+        assert item["runtime_decision_request_hash_scope"] == "run_start_blueprint_through_ts_null"
     assert len(manifest["strategy_instance_profile_bindings"]) == 2
 
 
@@ -1882,6 +1886,8 @@ def test_runtime_manifest_replays_decision_request_hashes_exactly() -> None:
     assert instance["strategy_parameters_hash"] == request.strategy_parameters_hash
     assert instance["runtime_contract_hash"] == request.runtime_contract_hash
     assert instance["plugin_contract_hash"] == request.plugin_contract_hash
+    run_start_request = RuntimeDecisionRequestBuilder().build_for_spec(spec, through_ts_ms=None)
+    assert instance["runtime_decision_request_hash"] == run_start_request.request_hash
     assert str(manifest["runtime_strategy_set_manifest_hash"]).startswith("sha256:")
 
 

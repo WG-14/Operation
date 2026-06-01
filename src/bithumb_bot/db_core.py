@@ -3532,7 +3532,10 @@ def replay_manifest_request_hashes(conn: sqlite3.Connection, manifest_id: int) -
         instance_id = str(instance.get("strategy_instance_id") or "")
         if not instance_id:
             raise RuntimeError("runtime_strategy_set_manifest_instance_missing")
-        result[instance_id] = str(instance.get("strategy_parameters_hash") or "")
+        request_hash = str(instance.get("runtime_decision_request_hash") or "")
+        if not request_hash.startswith("sha256:"):
+            raise RuntimeError("runtime_strategy_set_manifest_request_hash_missing")
+        result[instance_id] = request_hash
     return result
 
 

@@ -69,6 +69,30 @@ Promotion-bound strategies must preserve existing evidence:
 
 Production-bound manifests still fail closed when runtime-bound behavior parameters, replay support, runtime adapters, policy assembly, approved-profile evidence, or decision equivalence evidence are missing.
 
+Runtime parameter authority is centralized at the runtime strategy boundary. A
+promotion-grade strategy must accept parameters from an approved profile or from
+`RuntimeStrategySpec.parameters`; `runtime_parameter_adapter.from_settings()` is
+paper legacy compatibility only and must not be required for strict runtime
+operation. New strategies should not add strategy-specific fields to
+`Settings`.
+
+Structured runtime selection uses `RUNTIME_STRATEGY_SET_JSON` with
+`market_scope.mode="single_pair"` for the current runtime. Every active strategy
+instance must match the configured pair and interval. Multi-pair runtime remains
+unsupported until readiness, target state, allocation, execution submit, and
+persistence are pair-scoped.
+
+Use `max_target_exposure_krw` for allocator exposure caps. Historical
+`risk_budget_krw` inputs are compatibility aliases for that exposure cap and are
+not maximum-loss budgets.
+
+At run start, the runtime persists a materialized strategy-set manifest in the
+trade DB. It records active instance ids, raw and materialized parameters,
+parameter source/audit, approved-profile bindings, plugin/runtime/strategy
+hashes, execution and risk config hashes, market scope, exposure-cap semantics,
+and deterministic run-start request hashes. Decision bundles, allocation
+decisions, and execution plans reference the same manifest hash.
+
 ## Required Architecture
 
 The supported research architecture is:

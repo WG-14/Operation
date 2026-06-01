@@ -23,6 +23,7 @@ from bithumb_bot.db_core import (
     replay_portfolio_target_from_allocation,
     replay_portfolio_target_hash,
     replay_runtime_strategy_set_manifest,
+    replay_manifest_request_hashes,
 )
 from bithumb_bot.config import settings
 from bithumb_bot.execution_service import (
@@ -1208,6 +1209,21 @@ def test_manifest_contains_execution_and_risk_config_hashes(tmp_path) -> None:
         conn.close()
 
 
+def test_runtime_manifest_replays_decision_request_hashes_exactly(tmp_path) -> None:
+    spec = RuntimeStrategySpec("safe_hold", strategy_instance_id="hold")
+    strategy_set = RuntimeStrategySet(source="unit", strategies=(spec,))
+    expected = RuntimeDecisionRequestBuilder().build_for_spec(spec, through_ts_ms=None)
+    conn = ensure_db(str(tmp_path / "manifest_request_hashes.sqlite"))
+    try:
+        refs = record_runtime_strategy_set_manifest(conn, strategy_set=strategy_set, created_ts=123)
+
+        replayed = replay_manifest_request_hashes(conn, int(refs["runtime_strategy_set_manifest_id"]))
+
+        assert replayed == {"hold": expected.request_hash}
+    finally:
+        conn.close()
+
+
 def test_replay_fails_when_manifest_strategy_instance_is_missing(tmp_path) -> None:
     conn = ensure_db(str(tmp_path / "manifest_missing.sqlite"))
     try:
@@ -1223,8 +1239,6 @@ def test_replay_fails_when_manifest_strategy_instance_is_missing(tmp_path) -> No
             ("sha256:bad", "unit", "{}", 1, 1, "sha256:e", "sha256:r", '{"active_instances":[]}', 123),
         )
         manifest_id = conn.execute("SELECT id FROM runtime_strategy_set_manifest").fetchone()[0]
-        from bithumb_bot.db_core import replay_manifest_request_hashes
-
         with pytest.raises(RuntimeError, match="runtime_strategy_set_manifest_instances_missing"):
             replay_manifest_request_hashes(conn, int(manifest_id))
     finally:
