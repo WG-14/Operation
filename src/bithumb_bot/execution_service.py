@@ -690,6 +690,63 @@ def _typed_submit_plan(
     return plan if isinstance(plan, ExecutionSubmitPlan) else None
 
 
+def primary_execution_submit_plan(
+    summary: ExecutionDecisionSummary | None,
+) -> ExecutionSubmitPlan | None:
+    if summary is None:
+        return None
+    if not all(
+        callable(getattr(summary, name, None))
+        for name in (
+            "typed_target_submit_plan",
+            "typed_residual_submit_plan",
+            "typed_buy_submit_plan",
+        )
+    ):
+        return None
+    return (
+        summary.typed_target_submit_plan()
+        or summary.typed_residual_submit_plan()
+        or summary.typed_buy_submit_plan()
+    )
+
+
+def execution_submit_plan_invariant_error(
+    plan: ExecutionSubmitPlan | Mapping[str, object] | None,
+    *,
+    compatibility_signal: object,
+) -> str | None:
+    if plan is None:
+        return None
+    payload = plan.as_dict() if isinstance(plan, ExecutionSubmitPlan) else dict(plan)
+    if not bool(payload.get("submit_expected")):
+        return None
+    side = str(payload.get("side") or "").strip().upper()
+    if side not in {"BUY", "SELL"}:
+        return "execution_submit_plan_non_submittable_side"
+    try:
+        qty = float(payload.get("qty") or 0.0)
+    except (TypeError, ValueError):
+        return "execution_submit_plan_invalid_qty"
+    if qty <= 0.0:
+        return "execution_submit_plan_non_positive_qty"
+    notional = payload.get("notional_krw")
+    try:
+        notional_value = None if notional is None else float(notional or 0.0)
+    except (TypeError, ValueError):
+        return "execution_submit_plan_invalid_notional"
+    if notional_value is not None and notional_value <= 0.0:
+        return "execution_submit_plan_non_positive_notional"
+    if str(payload.get("block_reason") or "none") != "none":
+        return "execution_submit_plan_block_reason_not_none"
+    if not bool(payload.get("submit_expected")):
+        return "execution_submit_plan_submit_not_expected"
+    scalar_signal = str(compatibility_signal or "HOLD").strip().upper()
+    if scalar_signal in {"BUY", "SELL"} and scalar_signal != side:
+        return "execution_signal_submit_plan_mismatch"
+    return None
+
+
 def _with_submit_plan_extra(
     plan: ExecutionSubmitPlan,
     extra: dict[str, object],
@@ -886,11 +943,7 @@ def require_typed_execution_decision_summary_for_live_real_order(
     bundle_plan = getattr(request.execution_plan_bundle, "submit_plan", None)
     if bundle_plan is not None and not isinstance(bundle_plan, ExecutionSubmitPlan):
         return None, "live_real_order_invalid_execution_plan_bundle_submit_plan"
-    summary_plan = (
-        typed_summary.typed_target_submit_plan()
-        or typed_summary.typed_residual_submit_plan()
-        or typed_summary.typed_buy_submit_plan()
-    )
+    summary_plan = primary_execution_submit_plan(typed_summary)
     if (
         isinstance(bundle_plan, ExecutionSubmitPlan)
         and summary_plan is not None
@@ -1906,6 +1959,12 @@ def _paper_typed_submit_plan(
         return None, str(plan.block_reason or "paper_submit_plan_submit_not_expected")
     if str(plan.block_reason or "none") != "none":
         return None, str(plan.block_reason or "paper_submit_plan_blocked")
+    invariant_error = execution_submit_plan_invariant_error(
+        plan,
+        compatibility_signal=request.signal,
+    )
+    if invariant_error is not None:
+        return None, invariant_error
     if str(plan.side or "").upper() not in {"BUY", "SELL"}:
         return None, "paper_submit_plan_non_submittable_side"
     if plan.qty is None or float(plan.qty or 0.0) <= 0.0:
@@ -2109,6 +2168,19 @@ class LiveSignalExecutionService:
                     side=request.signal,
                 )
                 return None
+        primary_plan = target_plan or residual_plan or buy_plan
+        invariant_error = execution_submit_plan_invariant_error(
+            primary_plan,
+            compatibility_signal=request.signal,
+        )
+        if invariant_error == "execution_signal_submit_plan_mismatch":
+            _log_live_submit_plan_block(
+                reason=invariant_error,
+                field_name="execution_submit_plan",
+                source=primary_plan.get("source") if isinstance(primary_plan, dict) else None,
+                side=primary_plan.get("side") if isinstance(primary_plan, dict) else request.signal,
+            )
+            return None
         if submit_plan_required and not target_plan and not residual_plan and not buy_plan:
             _log_live_submit_plan_block(
                 reason="live_real_order_missing_typed_submit_plan",

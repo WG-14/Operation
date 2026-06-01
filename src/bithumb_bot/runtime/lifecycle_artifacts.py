@@ -169,7 +169,16 @@ class RuntimeCycleArtifact:
     startup_state: str | None = None
     readiness_hash: str | None = None
     strategy_decision_hash: str | None = None
+    runtime_strategy_decision_bundle_id: int | None = None
+    runtime_strategy_decision_bundle_hash: str | None = None
+    portfolio_allocation_decision_id: int | None = None
+    portfolio_allocation_decision_hash: str | None = None
+    portfolio_target_id: int | None = None
+    portfolio_target_hash: str | None = None
+    strategy_contribution_hash: str | None = None
+    execution_plan_id: int | None = None
     execution_plan_bundle_hash: str | None = None
+    execution_submit_plan_hash: str | None = None
     execution_result_hash: str | None = None
     safety_decision_hash: str | None = None
     recovery_decision_hash: str | None = None
@@ -185,7 +194,16 @@ class RuntimeCycleArtifact:
             "startup_state": self.startup_state,
             "readiness_hash": self.readiness_hash,
             "strategy_decision_hash": self.strategy_decision_hash,
+            "runtime_strategy_decision_bundle_id": self.runtime_strategy_decision_bundle_id,
+            "runtime_strategy_decision_bundle_hash": self.runtime_strategy_decision_bundle_hash,
+            "portfolio_allocation_decision_id": self.portfolio_allocation_decision_id,
+            "portfolio_allocation_decision_hash": self.portfolio_allocation_decision_hash,
+            "portfolio_target_id": self.portfolio_target_id,
+            "portfolio_target_hash": self.portfolio_target_hash,
+            "strategy_contribution_hash": self.strategy_contribution_hash,
+            "execution_plan_id": self.execution_plan_id,
             "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
+            "execution_submit_plan_hash": self.execution_submit_plan_hash,
             "execution_result_hash": self.execution_result_hash,
             "safety_decision_hash": self.safety_decision_hash,
             "recovery_decision_hash": self.recovery_decision_hash,
@@ -203,7 +221,12 @@ class RuntimeCycleArtifact:
             {
                 "readiness_hash": self.readiness_hash,
                 "strategy_decision_hash": self.strategy_decision_hash,
+                "runtime_strategy_decision_bundle_hash": self.runtime_strategy_decision_bundle_hash,
+                "portfolio_allocation_decision_hash": self.portfolio_allocation_decision_hash,
+                "portfolio_target_hash": self.portfolio_target_hash,
+                "strategy_contribution_hash": self.strategy_contribution_hash,
                 "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
+                "execution_submit_plan_hash": self.execution_submit_plan_hash,
                 "execution_result_hash": self.execution_result_hash,
                 "safety_decision_hash": self.safety_decision_hash,
                 "recovery_decision_hash": self.recovery_decision_hash,

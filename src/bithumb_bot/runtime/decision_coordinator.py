@@ -47,6 +47,22 @@ def _artifact_hash(value: object) -> str | None:
     return None
 
 
+def _context_str(context: dict[str, object] | None, key: str) -> str | None:
+    if not isinstance(context, dict):
+        return None
+    value = context.get(key)
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _context_int(context: dict[str, object] | None, key: str) -> int | None:
+    if not isinstance(context, dict) or context.get(key) is None:
+        return None
+    return int(context[key])
+
+
 def persist_target_position_state_for_run_loop(
     conn,
     *,
@@ -111,7 +127,17 @@ class DecisionCycleResult:
     execution_plan_bundle_hash: str | None
     persistence_status: str
     mark_processed_candidate: bool
+    runtime_strategy_decision_bundle_id: int | None = None
+    runtime_strategy_decision_bundle_hash: str | None = None
+    portfolio_allocation_decision_id: int | None = None
+    portfolio_allocation_decision_hash: str | None = None
+    portfolio_target_id: int | None = None
+    portfolio_target_hash: str | None = None
+    strategy_contribution_hash: str | None = None
+    execution_plan_id: int | None = None
+    execution_submit_plan_hash: str | None = None
     typed_runtime_decision: RuntimeStrategyDecisionResult | None = None
+    representative_runtime_decision_for_observability: RuntimeStrategyDecisionResult | None = None
     typed_runtime_decision_bundle: RuntimeStrategyDecisionResultBundle | None = None
     market_price: float | None = None
     exit_rule_name: str | None = None
@@ -126,7 +152,16 @@ class DecisionCycleResult:
             "reason": self.reason,
             "decision_id": self.decision_id,
             "strategy_decision_hash": self.strategy_decision_hash,
+            "runtime_strategy_decision_bundle_id": self.runtime_strategy_decision_bundle_id,
+            "runtime_strategy_decision_bundle_hash": self.runtime_strategy_decision_bundle_hash,
+            "portfolio_allocation_decision_id": self.portfolio_allocation_decision_id,
+            "portfolio_allocation_decision_hash": self.portfolio_allocation_decision_hash,
+            "portfolio_target_id": self.portfolio_target_id,
+            "portfolio_target_hash": self.portfolio_target_hash,
+            "strategy_contribution_hash": self.strategy_contribution_hash,
+            "execution_plan_id": self.execution_plan_id,
             "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
+            "execution_submit_plan_hash": self.execution_submit_plan_hash,
             "persistence_status": self.persistence_status,
             "mark_processed_candidate": bool(self.mark_processed_candidate),
             "market_price": self.market_price,
@@ -174,14 +209,21 @@ class DecisionCoordinator:
                 mark_processed_candidate=False,
             )
 
-        typed_decision = typed_bundle.results[0]
+        representative_observability_decision = typed_bundle.results[0]
+        single_runtime_decision = (
+            None if typed_bundle.strategy_set.multi_strategy_enabled else representative_observability_decision
+        )
         strategy_name = (
             "multi_strategy"
             if typed_bundle.strategy_set.multi_strategy_enabled
-            else typed_decision.decision.strategy_name
+            else representative_observability_decision.decision.strategy_name
         )
-        signal = typed_decision.decision.final_signal
-        reason = typed_decision.decision.final_reason
+        signal = "HOLD" if typed_bundle.strategy_set.multi_strategy_enabled else representative_observability_decision.decision.final_signal
+        reason = (
+            "multi_strategy_allocator_pending"
+            if typed_bundle.strategy_set.multi_strategy_enabled
+            else representative_observability_decision.decision.final_reason
+        )
 
         conn = self.db_factory()
         decision_id: int | None = None
@@ -241,12 +283,15 @@ class DecisionCoordinator:
                     "execution_submit_plan_hash"
                 ]
             if typed_bundle.strategy_set.multi_strategy_enabled:
-                target_payload = context.get("portfolio_target")
-                if isinstance(target_payload, dict):
-                    target_conflict = target_payload.get("conflict_resolution")
-                    if isinstance(target_conflict, dict):
-                        signal = str(target_conflict.get("selected_signal") or signal)
-                reason = str(context.get("allocator_reason") or reason)
+                signal = str(context.get("authoritative_execution_signal") or "HOLD").upper()
+                if signal not in {"BUY", "SELL", "HOLD"}:
+                    signal = "HOLD"
+                reason = str(
+                    context.get("final_reason")
+                    or context.get("allocation_primary_block_reason")
+                    or context.get("allocator_reason")
+                    or "portfolio_allocation_not_authoritative"
+                )
             exit_ctx = context.get("exit")
             if isinstance(exit_ctx, dict) and exit_ctx.get("rule") is not None:
                 exit_rule_name = str(exit_ctx.get("rule"))
@@ -264,6 +309,12 @@ class DecisionCoordinator:
                 market_price=float(market_price_raw) if market_price_raw is not None else None,
                 confidence=float(confidence_raw) if confidence_raw is not None else None,
                 context=context,
+                runtime_strategy_decision_bundle_id=bundle_refs.get("runtime_strategy_decision_bundle_id"),
+                portfolio_allocation_decision_id=allocation_refs.get("portfolio_allocation_decision_id"),
+                portfolio_target_id=allocation_refs.get("portfolio_target_id"),
+                execution_plan_id=execution_refs.get("execution_plan_id"),
+                strategy_decision_projection_type=context.get("strategy_decision_projection_type"),
+                strategy_decisions_authority=context.get("strategy_decisions_authority"),
             )
             persist_target_position_state_for_run_loop(
                 conn,
@@ -288,7 +339,7 @@ class DecisionCoordinator:
             conn.close()
 
         return DecisionCycleResult(
-            candle_ts=typed_decision.candle_ts,
+            candle_ts=typed_bundle.candle_ts,
             strategy_name=strategy_name,
             signal=signal,
             reason=reason,
@@ -298,11 +349,21 @@ class DecisionCoordinator:
             execution_plan_bundle=planning_bundle,
             strategy_decision_hash=_artifact_hash(context or {}),
             execution_plan_bundle_hash=_artifact_hash(planning_bundle),
+            runtime_strategy_decision_bundle_id=_context_int(context, "runtime_strategy_decision_bundle_id"),
+            runtime_strategy_decision_bundle_hash=_context_str(context, "runtime_strategy_decision_bundle_hash"),
+            portfolio_allocation_decision_id=_context_int(context, "portfolio_allocation_decision_id"),
+            portfolio_allocation_decision_hash=_context_str(context, "portfolio_allocation_decision_hash"),
+            portfolio_target_id=_context_int(context, "portfolio_target_id"),
+            portfolio_target_hash=_context_str(context, "portfolio_target_hash"),
+            strategy_contribution_hash=_context_str(context, "strategy_contribution_hash"),
+            execution_plan_id=_context_int(context, "execution_plan_id"),
+            execution_submit_plan_hash=_context_str(context, "execution_submit_plan_hash"),
             persistence_status=persistence_status,
             mark_processed_candidate=decision_id is not None and planning_bundle is not None,
-            typed_runtime_decision=typed_decision,
+            typed_runtime_decision=single_runtime_decision,
+            representative_runtime_decision_for_observability=representative_observability_decision,
             typed_runtime_decision_bundle=typed_bundle,
-            market_price=typed_decision.market_price,
+            market_price=typed_bundle.market_price,
             exit_rule_name=exit_rule_name,
         )
 

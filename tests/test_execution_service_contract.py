@@ -341,6 +341,48 @@ def test_production_execution_request_is_typed_only() -> None:
     assert typed.observability_payload.as_dict()["execution_decision"] == {"dict": "observability_only"}
 
 
+def test_paper_target_delta_fails_closed_on_scalar_signal_submit_plan_mismatch() -> None:
+    calls: list[dict[str, object]] = []
+    object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+    service = _paper_service(calls)
+
+    result = service.execute(
+        TypedExecutionRequest(
+            signal="SELL",
+            ts=123,
+            market_price=100_000_000.0,
+            strategy_name="multi_strategy",
+            execution_decision_summary=_typed_target_execution_summary(),
+        )
+    )
+
+    assert result is None
+    assert calls == []
+
+
+def test_live_target_delta_fails_closed_on_scalar_signal_submit_plan_mismatch() -> None:
+    calls: list[dict[str, object]] = []
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "LIVE_DRY_RUN", True)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", False)
+    object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+    service = _service(calls)
+
+    result = service.execute(
+        SignalExecutionRequest(
+            signal="SELL",
+            ts=123,
+            market_price=100_000_000.0,
+            strategy_name="multi_strategy",
+            execution_decision_summary=_typed_target_execution_summary(),
+            observability_payload=ExecutionObservabilityPayload({}),
+        )
+    )
+
+    assert result is None
+    assert calls == []
+
+
 def test_final_submit_payload_requires_typed_serialization_proof() -> None:
     raw_plan = _valid_buy_submit_plan()
     with pytest.raises(ValueError, match="execution_submit_plan_schema_missing_fields:authority_label,content_hash,schema_version"):

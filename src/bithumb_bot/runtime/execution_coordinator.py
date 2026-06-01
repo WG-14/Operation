@@ -9,6 +9,8 @@ from ..execution_service import (
     ExecutionObservabilityPayload,
     SignalExecutionRequest,
     TypedExecutionRequest,
+    execution_submit_plan_invariant_error,
+    primary_execution_submit_plan,
 )
 from .lifecycle_artifacts import StateTransitionResult
 
@@ -114,6 +116,22 @@ class ExecutionCoordinator:
                 input_hash=input_hash,
             )
         expectation = self.resolve_submit_expectation(execution_decision_summary)
+        primary_plan = primary_execution_submit_plan(execution_decision_summary)
+        invariant_error = execution_submit_plan_invariant_error(
+            primary_plan,
+            compatibility_signal=signal or "HOLD",
+        )
+        if invariant_error is not None:
+            return ExecutionCycleResult(
+                candle_ts=candle_ts,
+                decision_id=decision_id,
+                planning_status=invariant_error,
+                submit_expected=False,
+                submitted=False,
+                post_trade_reconciled=False,
+                mark_processed_allowed=True,
+                input_hash=input_hash,
+            )
         if not expectation.submit_expected:
             if execution_service is not None and signal == "SELL":
                 request = build_signal_execution_request(

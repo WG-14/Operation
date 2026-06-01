@@ -18,7 +18,6 @@ from .decision_context import (
     normalize_strategy_decision_context,
 )
 from .canonical_decision import sha256_prefixed
-from .experiment_fingerprint import experiment_context
 from .target_position import TargetPositionState
 
 
@@ -219,6 +218,12 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "portfolio_target_hash",
         "execution_plan_bundle_hash",
         "execution_submit_plan_hash",
+        "submit_plan_side",
+        "submit_plan_qty",
+        "submit_plan_notional_krw",
+        "submit_plan_idempotency_key",
+        "submit_plan_source",
+        "submit_plan_authority",
         "submit_expected",
         "final_action",
         "block_reason",
@@ -842,6 +847,23 @@ def _json_loads_object(value: str | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _strategy_decision_experiment_context(*, strategy_name: str) -> dict[str, Any]:
+    payload = {
+        "strategy_name": str(strategy_name).strip().lower(),
+        "market": str(settings.PAIR),
+        "interval": str(settings.INTERVAL),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "experiment_id": digest,
+        "experiment_fingerprint": digest,
+        "experiment_fingerprint_version": "experiment_fingerprint_v1",
+        "experiment_fingerprint_inputs": payload,
+    }
+
+
 def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -1031,6 +1053,12 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
             portfolio_target_hash TEXT,
             execution_plan_bundle_hash TEXT NOT NULL,
             execution_submit_plan_hash TEXT,
+            submit_plan_side TEXT,
+            submit_plan_qty REAL,
+            submit_plan_notional_krw REAL,
+            submit_plan_idempotency_key TEXT,
+            submit_plan_source TEXT,
+            submit_plan_authority TEXT,
             submit_expected INTEGER NOT NULL,
             final_action TEXT NOT NULL,
             block_reason TEXT NOT NULL,
@@ -1054,6 +1082,12 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
         "execution_plan_bundle_json TEXT NOT NULL DEFAULT '{}'",
     )
     _ensure_column(conn, "execution_plan", "execution_submit_plan_json", "execution_submit_plan_json TEXT")
+    _ensure_column(conn, "execution_plan", "submit_plan_side", "submit_plan_side TEXT")
+    _ensure_column(conn, "execution_plan", "submit_plan_qty", "submit_plan_qty REAL")
+    _ensure_column(conn, "execution_plan", "submit_plan_notional_krw", "submit_plan_notional_krw REAL")
+    _ensure_column(conn, "execution_plan", "submit_plan_idempotency_key", "submit_plan_idempotency_key TEXT")
+    _ensure_column(conn, "execution_plan", "submit_plan_source", "submit_plan_source TEXT")
+    _ensure_column(conn, "execution_plan", "submit_plan_authority", "submit_plan_authority TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_execution_plan_bundle_hash
@@ -2664,6 +2698,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             candle_ts INTEGER,
             market_price REAL,
             confidence REAL,
+            runtime_strategy_decision_bundle_id INTEGER,
+            portfolio_allocation_decision_id INTEGER,
+            portfolio_target_id INTEGER,
+            execution_plan_id INTEGER,
+            strategy_decision_projection_type TEXT,
+            strategy_decisions_authority TEXT,
             context_json TEXT NOT NULL
         )
         """
@@ -2672,12 +2712,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "strategy_decisions", "candle_ts", "candle_ts INTEGER")
     _ensure_column(conn, "strategy_decisions", "market_price", "market_price REAL")
     _ensure_column(conn, "strategy_decisions", "confidence", "confidence REAL")
+    _ensure_column(conn, "strategy_decisions", "runtime_strategy_decision_bundle_id", "runtime_strategy_decision_bundle_id INTEGER")
+    _ensure_column(conn, "strategy_decisions", "portfolio_allocation_decision_id", "portfolio_allocation_decision_id INTEGER")
+    _ensure_column(conn, "strategy_decisions", "portfolio_target_id", "portfolio_target_id INTEGER")
+    _ensure_column(conn, "strategy_decisions", "execution_plan_id", "execution_plan_id INTEGER")
+    _ensure_column(conn, "strategy_decisions", "strategy_decision_projection_type", "strategy_decision_projection_type TEXT")
+    _ensure_column(conn, "strategy_decisions", "strategy_decisions_authority", "strategy_decisions_authority TEXT")
     _ensure_column(conn, "strategy_decisions", "context_json", "context_json TEXT NOT NULL DEFAULT '{}'")
 
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_strategy_decisions_lookup
         ON strategy_decisions(strategy_name, decision_ts, signal)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_strategy_decisions_artifact_chain
+        ON strategy_decisions(runtime_strategy_decision_bundle_id, portfolio_allocation_decision_id, portfolio_target_id, execution_plan_id)
         """
     )
 
@@ -2906,6 +2958,12 @@ def record_strategy_decision(
     market_price: float | None,
     context: dict[str, Any] | None,
     confidence: float | None = None,
+    runtime_strategy_decision_bundle_id: int | None = None,
+    portfolio_allocation_decision_id: int | None = None,
+    portfolio_target_id: int | None = None,
+    execution_plan_id: int | None = None,
+    strategy_decision_projection_type: str | None = None,
+    strategy_decisions_authority: str | None = None,
 ) -> int:
     normalized_context = normalize_strategy_decision_context(
         context=context,
@@ -2920,14 +2978,17 @@ def record_strategy_decision(
     )
     normalized_context = {
         **normalized_context,
-        **experiment_context(strategy_name=str(strategy_name)),
+        **_strategy_decision_experiment_context(strategy_name=str(strategy_name)),
     }
     row = conn.execute(
         """
         INSERT INTO strategy_decisions(
-            decision_ts, strategy_name, signal, reason, candle_ts, market_price, confidence, context_json
+            decision_ts, strategy_name, signal, reason, candle_ts, market_price, confidence,
+            runtime_strategy_decision_bundle_id, portfolio_allocation_decision_id,
+            portfolio_target_id, execution_plan_id, strategy_decision_projection_type,
+            strategy_decisions_authority, context_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(decision_ts),
@@ -2937,6 +2998,12 @@ def record_strategy_decision(
             None if candle_ts is None else int(candle_ts),
             None if market_price is None else float(market_price),
             None if confidence is None else float(confidence),
+            None if runtime_strategy_decision_bundle_id is None else int(runtime_strategy_decision_bundle_id),
+            None if portfolio_allocation_decision_id is None else int(portfolio_allocation_decision_id),
+            None if portfolio_target_id is None else int(portfolio_target_id),
+            None if execution_plan_id is None else int(execution_plan_id),
+            strategy_decision_projection_type,
+            strategy_decisions_authority,
             json.dumps(
                 materialize_strategy_decision_context(normalized_context),
                 ensure_ascii=False,
@@ -3237,16 +3304,24 @@ def record_execution_plan(
         """
         INSERT OR IGNORE INTO execution_plan(
             allocation_id, portfolio_target_hash, execution_plan_bundle_hash,
-            execution_submit_plan_hash, submit_expected, final_action, block_reason,
+            execution_submit_plan_hash, submit_plan_side, submit_plan_qty,
+            submit_plan_notional_krw, submit_plan_idempotency_key, submit_plan_source,
+            submit_plan_authority, submit_expected, final_action, block_reason,
             status, execution_plan_bundle_json, execution_submit_plan_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(allocation_id),
             portfolio_target_hash,
             bundle_hash,
             submit_hash,
+            None if submit_payload is None else str(submit_payload.get("side") or ""),
+            None if submit_payload is None or submit_payload.get("qty") is None else float(submit_payload.get("qty") or 0.0),
+            None if submit_payload is None or submit_payload.get("notional_krw") is None else float(submit_payload.get("notional_krw") or 0.0),
+            None if submit_payload is None else submit_payload.get("idempotency_key"),
+            None if submit_payload is None else str(submit_payload.get("source") or ""),
+            None if submit_payload is None else str(submit_payload.get("authority") or ""),
             1 if bool(getattr(submit_plan, "submit_expected", False)) else 0,
             str(getattr(submit_plan, "final_action", "") or ""),
             str(getattr(submit_plan, "block_reason", "") or ""),
@@ -3316,6 +3391,200 @@ def replay_execution_submit_plan_hash(conn: sqlite3.Connection, execution_plan_i
     if recorded is not None and str(recorded) != replayed:
         raise RuntimeError("execution_submit_plan_hash_mismatch")
     return replayed
+
+
+def _strategy_contribution_payload_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "strategy_instance_id": str(row["strategy_instance_id"] or ""),
+        "strategy_name": str(row["strategy_name"] or ""),
+        "pair": str(row["pair"] or ""),
+        "signal_direction": str(row["signal_direction"] or ""),
+        "priority": int(row["priority"] or 0),
+        "weight": float(row["weight"] or 0.0),
+        "preference_hash": str(row["preference_hash"] or ""),
+        "desired_exposure_krw": row["desired_exposure_krw"],
+        "risk_budget_krw": row["risk_budget_krw"],
+        "reason": str(row["reason"] or ""),
+    }
+
+
+def _portfolio_target_payload_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "pair": str(row["pair"] or ""),
+        "target_exposure_krw": row["target_exposure_krw"],
+        "target_qty": row["target_qty"],
+        "allocator_policy_name": "",
+        "allocator_policy_version": "",
+        "allocator_config_hash": "",
+        "strategy_contribution_hash": "",
+        "allocation_input_hash": "",
+        "reason": "",
+        "conflict_resolution": _json_loads_object(str(row["conflict_resolution_json"] or "{}")),
+        "authoritative": bool(row["authoritative"]),
+        "fail_closed_reason": str(row["fail_closed_reason"] or ""),
+    }
+    target_json = _json_loads_object(str(row["target_json"] or "{}"))
+    for key in (
+        "allocator_policy_name",
+        "allocator_policy_version",
+        "allocator_config_hash",
+        "strategy_contribution_hash",
+        "allocation_input_hash",
+        "reason",
+    ):
+        payload[key] = target_json.get(key, payload[key])
+    payload["final_portfolio_target_hash"] = sha256_prefixed(payload)
+    return payload
+
+
+def rebuild_portfolio_target_from_allocation(
+    conn: sqlite3.Connection,
+    allocation_id: int,
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM portfolio_target
+        WHERE allocation_id=?
+        ORDER BY pair, id
+        LIMIT 1
+        """,
+        (int(allocation_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("portfolio_target_not_found")
+    payload = _portfolio_target_payload_from_row(row)
+    recorded = str(row["final_portfolio_target_hash"] or "")
+    if recorded and str(payload["final_portfolio_target_hash"]) != recorded:
+        raise RuntimeError("portfolio_target_rebuild_hash_mismatch")
+    return payload
+
+
+def replay_portfolio_target_from_allocation(
+    conn: sqlite3.Connection,
+    allocation_id: int,
+) -> str:
+    return str(rebuild_portfolio_target_from_allocation(conn, allocation_id)["final_portfolio_target_hash"])
+
+
+def rebuild_allocation_decision_from_bundle(
+    conn: sqlite3.Connection,
+    bundle_id: int,
+) -> dict[str, Any]:
+    allocation = conn.execute(
+        "SELECT * FROM portfolio_allocation_decision WHERE bundle_id=?",
+        (int(bundle_id),),
+    ).fetchone()
+    if allocation is None:
+        raise RuntimeError("portfolio_allocation_decision_not_found")
+    allocation_id = int(allocation["id"])
+    contribution_rows = conn.execute(
+        """
+        SELECT *
+        FROM strategy_contribution
+        WHERE allocation_id=?
+        ORDER BY pair, strategy_instance_id, id
+        """,
+        (allocation_id,),
+    ).fetchall()
+    contributions = [_strategy_contribution_payload_from_row(row) for row in contribution_rows]
+    contribution_hash = sha256_prefixed(contributions)
+    recorded_contribution_hash = str(allocation["strategy_contribution_hash"] or "")
+    if recorded_contribution_hash and contribution_hash != recorded_contribution_hash:
+        raise RuntimeError("strategy_contribution_rebuild_hash_mismatch")
+    target_rows = conn.execute(
+        """
+        SELECT *
+        FROM portfolio_target
+        WHERE allocation_id=?
+        ORDER BY pair, id
+        """,
+        (allocation_id,),
+    ).fetchall()
+    targets = [_portfolio_target_payload_from_row(row) for row in target_rows]
+    for row, target in zip(target_rows, targets, strict=True):
+        recorded_target_hash = str(row["final_portfolio_target_hash"] or "")
+        if recorded_target_hash and str(target["final_portfolio_target_hash"]) != recorded_target_hash:
+            raise RuntimeError("portfolio_target_rebuild_hash_mismatch")
+    conflict_count = sum(
+        int(dict(target.get("conflict_resolution") or {}).get("conflict_count") or 0)
+        for target in targets
+    )
+    conflict_resolution = {
+        "policy": _json_loads_object(str(allocation["conflict_resolution_json"] or "{}")).get(
+            "policy", "fail_closed_equal_priority"
+        ),
+        "target_count": len(targets),
+        "blocked_target_count": sum(1 for target in targets if not bool(target.get("authoritative"))),
+        "conflict_count": conflict_count,
+    }
+    payload = {
+        "schema_version": 1,
+        "allocation_input_hash": str(allocation["allocation_input_hash"] or ""),
+        "allocator_config_hash": str(allocation["allocator_config_hash"] or ""),
+        "strategy_contribution_hash": contribution_hash,
+        "targets": targets,
+        "contributions": contributions,
+        "conflict_resolution": conflict_resolution,
+        "reason": str(allocation["reason"] or ""),
+        "authoritative": bool(allocation["authoritative"]),
+        "primary_block_reason": str(allocation["primary_block_reason"] or ""),
+    }
+    payload["allocation_decision_hash"] = sha256_prefixed(payload)
+    recorded = str(allocation["allocation_decision_hash"] or "")
+    if recorded and str(payload["allocation_decision_hash"]) != recorded:
+        raise RuntimeError("portfolio_allocation_decision_rebuild_hash_mismatch")
+    return payload
+
+
+def replay_allocation_decision_from_bundle(
+    conn: sqlite3.Connection,
+    bundle_id: int,
+) -> str:
+    return str(rebuild_allocation_decision_from_bundle(conn, bundle_id)["allocation_decision_hash"])
+
+
+def rebuild_execution_submit_plan_from_execution_plan(
+    conn: sqlite3.Connection,
+    execution_plan_id: int,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM execution_plan WHERE id=?",
+        (int(execution_plan_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("execution_plan_not_found")
+    if row["execution_submit_plan_json"] is None:
+        return None
+    payload = _json_loads_object(str(row["execution_submit_plan_json"]))
+    payload.update(
+        {
+            "side": row["submit_plan_side"],
+            "qty": row["submit_plan_qty"],
+            "notional_krw": row["submit_plan_notional_krw"],
+            "idempotency_key": row["submit_plan_idempotency_key"],
+            "source": row["submit_plan_source"],
+            "authority": row["submit_plan_authority"],
+            "submit_expected": bool(row["submit_expected"]),
+            "final_action": row["final_action"],
+            "block_reason": row["block_reason"],
+        }
+    )
+    replayed = sha256_prefixed(payload)
+    recorded = row["execution_submit_plan_hash"]
+    if recorded is not None and str(recorded) != replayed:
+        raise RuntimeError("execution_submit_plan_rebuild_hash_mismatch")
+    return payload
+
+
+def replay_execution_submit_plan_from_execution_plan(
+    conn: sqlite3.Connection,
+    execution_plan_id: int,
+) -> str | None:
+    payload = rebuild_execution_submit_plan_from_execution_plan(conn, execution_plan_id)
+    return None if payload is None else sha256_prefixed(payload)
 
 
 def load_target_position_state(conn: sqlite3.Connection, *, pair: str) -> TargetPositionState | None:

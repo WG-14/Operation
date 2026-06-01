@@ -147,6 +147,59 @@ class ExecutionPlanningInput:
             policy_hashes=envelope._policy_hashes_as_dict(),
         )
 
+    @classmethod
+    def from_runtime_result_bundle(
+        cls,
+        result_bundle: RuntimeStrategyDecisionResultBundle,
+    ) -> "ExecutionPlanningInput":
+        """Build a multi-strategy planning boundary without representative signal authority."""
+        if not result_bundle.results:
+            raise ValueError("runtime_strategy_result_bundle_empty")
+        candle_ts = int(result_bundle.candle_ts)
+        market_price = float(result_bundle.market_price)
+        for result in result_bundle.results:
+            if int(result.candle_ts) != candle_ts:
+                raise ValueError("runtime_strategy_results_must_share_candle")
+            if abs(float(result.market_price) - market_price) > 1e-9:
+                raise ValueError("runtime_strategy_results_must_share_market_price")
+        observability_template = result_bundle.results[0].decision
+        safe_decision = replace(
+            observability_template,
+            strategy_name="multi_strategy",
+            raw_signal="HOLD",
+            raw_reason="multi_strategy_allocator_pending",
+            entry_signal="HOLD",
+            entry_reason="multi_strategy_allocator_pending",
+            exit_signal="HOLD",
+            exit_reason="multi_strategy_allocator_pending",
+            final_signal="HOLD",
+            final_reason="multi_strategy_allocator_pending",
+        )
+        bundle_hash = result_bundle.content_hash()
+        return cls(
+            strategy_decision=safe_decision,
+            candle_ts=candle_ts,
+            market_price=market_price,
+            base_observability_context={
+                "strategy": "multi_strategy",
+                "strategy_name": "multi_strategy",
+                "runtime_strategy_decision_bundle_hash": bundle_hash,
+                "runtime_strategy_decision_bundle_authority": "typed_bundle",
+                "execution_signal_authority": "portfolio_allocator_portfolio_target",
+            },
+            replay_fingerprint={
+                "schema_version": 1,
+                "candle_ts": candle_ts,
+                "market_price": market_price,
+                "runtime_strategy_decision_bundle_hash": bundle_hash,
+            },
+            boundary={
+                "decision_boundary_phase": "multi_strategy_allocator_planning",
+                "signal_authority": "portfolio_allocator_portfolio_target",
+            },
+            policy_hashes={},
+        )
+
     @property
     def raw_signal(self) -> str:
         return str(self.strategy_decision.raw_signal or "HOLD").upper()
@@ -513,9 +566,11 @@ class ExecutionPlanner:
         *,
         updated_ts: int,
     ) -> ExecutionPlanBundle:
-        representative = result_bundle.results[0]
-        envelope = DecisionEnvelope.from_runtime_result(representative)
-        planning_input = ExecutionPlanningInput.from_envelope(envelope)
+        if result_bundle.strategy_set.multi_strategy_enabled:
+            planning_input = ExecutionPlanningInput.from_runtime_result_bundle(result_bundle)
+        else:
+            envelope = DecisionEnvelope.from_runtime_result(result_bundle.results[0])
+            planning_input = ExecutionPlanningInput.from_envelope(envelope)
         planning = self._plan_typed_input(
             conn,
             planning_input=planning_input,
@@ -528,7 +583,7 @@ class ExecutionPlanner:
             {
                 "decision_authority_source": "PortfolioAllocator.portfolio_target",
                 "representative_strategy_decision_authority": "non_authoritative_observability_only",
-                "decision_envelope_present": True,
+                "decision_envelope_present": not result_bundle.strategy_set.multi_strategy_enabled,
                 "execution_plan_bundle_present": True,
                 "submit_plan_source": None if submit_plan is None else submit_plan.source,
                 "submit_plan_authority": None if submit_plan is None else submit_plan.authority,
@@ -748,9 +803,29 @@ class ExecutionPlanner:
             portfolio_target = allocation_decision.target_for_pair(str(settings.PAIR))
             allocation_context = _allocation_context_fields(allocation_decision)
             context.update(allocation_context)
-            authoritative_signal = str(
-                context.get("allocation_selected_signal") or planning_input.final_signal or "HOLD"
-            ).upper()
+            selected_signal = str(context.get("allocation_selected_signal") or "").upper()
+            target_authoritative = bool(portfolio_target is not None and portfolio_target.authoritative)
+            allocation_authoritative = bool(allocation_decision.authoritative and target_authoritative)
+            if (
+                runtime_result_bundle is not None
+                and allocation_authoritative
+                and selected_signal in {"BUY", "SELL", "HOLD"}
+            ):
+                authoritative_signal = selected_signal
+                authoritative_reason = str(context.get("allocator_reason") or "allocated")
+            elif runtime_result_bundle is not None:
+                authoritative_signal = "HOLD"
+                authoritative_reason = str(
+                    context.get("allocation_primary_block_reason")
+                    or context.get("allocator_reason")
+                    or "portfolio_allocation_not_authoritative"
+                )
+                context["portfolio_target_authoritative"] = False
+                context["submit_expected"] = False
+                context["allocation_selected_signal"] = ""
+            else:
+                authoritative_signal = planning_input.final_signal
+                authoritative_reason = planning_input.final_reason
             if runtime_result_bundle is not None:
                 target_resolution = self.target_state_resolver(
                     conn,
@@ -771,13 +846,13 @@ class ExecutionPlanner:
                         planning_input.strategy_decision,
                         raw_signal=authoritative_signal,
                         final_signal=authoritative_signal,
-                        final_reason=str(context.get("allocator_reason") or planning_input.final_reason),
+                        final_reason=authoritative_reason,
                     ),
                 )
                 context["signal"] = authoritative_signal
                 context["raw_signal"] = authoritative_signal
                 context["final_signal"] = authoritative_signal
-                context["final_reason"] = str(context.get("allocator_reason") or planning_input.final_reason)
+                context["final_reason"] = authoritative_reason
                 context["authoritative_execution_signal"] = authoritative_signal
             else:
                 context["authoritative_execution_signal"] = planning_input.final_signal
