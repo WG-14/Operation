@@ -1,13 +1,154 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from tests.factories.research_reports import assert_fast_research_workload, minimal_research_report
-from tests.policy.research_runner_policy import discover_policy_violations
+from tests.policy.research_runner_policy import discover_policy_violations, load_inventory
 
 
 def test_direct_production_research_entrypoints_have_expensive_markers() -> None:
     assert discover_policy_violations() == []
+
+
+def _write_inventory(path: Path, entries: list[dict[str, object]]) -> Path:
+    path.write_text(
+        json.dumps({"schema_version": 2, "tests": entries}, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _inventory_entry(nodeid: str, markers: list[str] | None = None) -> dict[str, object]:
+    return {
+        "nodeid": nodeid,
+        "markers": markers or ["research_e2e"],
+        "reason": "temporary policy fixture",
+        "expected_workload": {"strategy_runs": "fixture"},
+        "duration_budget_seconds": 30,
+        "domain": "policy_test",
+        "last_measured_seconds": 1,
+    }
+
+
+def test_policy_recursively_scans_nested_production_research_tests(tmp_path: Path) -> None:
+    nested = tmp_path / "tests" / "nested"
+    nested.mkdir(parents=True)
+    test_file = nested / "test_nested_research.py"
+    test_file.write_text(
+        """
+import pytest
+from bithumb_bot.research.validation_protocol import run_research_backtest
+
+@pytest.mark.research_e2e
+def test_nested_real_runner():
+    run_research_backtest(manifest=None, db_path=None, manager=None)
+""",
+        encoding="utf-8",
+    )
+    inventory = _write_inventory(
+        tmp_path / "inventory.json",
+        [_inventory_entry(f"{test_file.as_posix()}::test_nested_real_runner")],
+    )
+
+    assert discover_policy_violations(tmp_path / "tests", inventory_path=inventory) == []
+
+    inventory = _write_inventory(tmp_path / "empty_inventory.json", [])
+    assert any(
+        "missing E2E inventory entry" in violation
+        for violation in discover_policy_violations(tmp_path / "tests", inventory_path=inventory)
+    )
+
+
+def test_policy_rejects_unmarked_production_research_entrypoint(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    test_file = test_root / "test_unmarked_runner.py"
+    test_file.write_text(
+        """
+from bithumb_bot.research.validation_protocol import run_research_walk_forward
+
+def test_unmarked_real_runner():
+    run_research_walk_forward(manifest=None, db_path=None, manager=None)
+""",
+        encoding="utf-8",
+    )
+    inventory = _write_inventory(
+        tmp_path / "inventory.json",
+        [_inventory_entry(f"{test_file.as_posix()}::test_unmarked_real_runner", markers=["walk_forward_e2e"])],
+    )
+
+    violations = discover_policy_violations(test_root, inventory_path=inventory)
+
+    assert any("without an expensive marker" in violation for violation in violations)
+
+
+def test_policy_classifies_real_kernel_entrypoints(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    test_file = test_root / "test_kernel_boundary.py"
+    test_file.write_text(
+        """
+from bithumb_bot.research.backtest_engine import run_sma_backtest
+
+def test_unbounded_kernel():
+    run_sma_backtest(parameter_values={}, fee_rate=0.0, slippage_bps=0.0)
+
+def test_bounded_micro_kernel():
+    dataset = _dataset_from_closes([1.0, 2.0, 3.0])
+    run_sma_backtest(dataset=dataset, parameter_values={}, fee_rate=0.0, slippage_bps=0.0)
+""",
+        encoding="utf-8",
+    )
+    inventory = _write_inventory(tmp_path / "inventory.json", [])
+
+    violations = discover_policy_violations(test_root, inventory_path=inventory)
+
+    assert any("test_unbounded_kernel calls run_sma_backtest" in violation for violation in violations)
+    assert not any("test_bounded_micro_kernel" in violation for violation in violations)
+
+
+def test_policy_requires_excluded_marker_for_disabled_fast_budget(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    test_file = test_root / "test_fast_budget_bypass.py"
+    test_file.write_text(
+        """
+import pytest
+
+def test_unmarked_budget_bypass():
+    _run_contract_research_backtest(enforce_fast_budget=False)
+
+@pytest.mark.slow_research
+def test_marked_budget_bypass():
+    _run_contract_research_backtest(enforce_fast_budget=False)
+""",
+        encoding="utf-8",
+    )
+    inventory = _write_inventory(tmp_path / "inventory.json", [])
+
+    violations = discover_policy_violations(test_root, inventory_path=inventory)
+
+    assert any("test_unmarked_budget_bypass disables the fast research workload budget" in violation for violation in violations)
+    assert not any("test_marked_budget_bypass" in violation for violation in violations)
+
+
+def test_inventory_validation_rejects_missing_cost_metadata(tmp_path: Path) -> None:
+    inventory = _write_inventory(
+        tmp_path / "inventory.json",
+        [
+            {
+                "nodeid": "tests/test_example.py::test_real_runner",
+                "markers": ["research_e2e"],
+                "reason": "missing cost metadata",
+            }
+        ],
+    )
+
+    with pytest.raises(AssertionError, match="missing expected_workload"):
+        load_inventory(inventory)
 
 
 def test_fast_research_workload_budget_rejects_large_strategy_run_count() -> None:

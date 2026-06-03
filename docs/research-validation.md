@@ -282,11 +282,12 @@ memory-sensitive tests:
 
 The script first runs `scripts/check_research_test_policy.py`, then runs pytest
 with the same excluded marker expression plus duration reporting
-(`--durations=50 --durations-min=0.25`). Contract tests in this suite must use
-pure payloads, report finalizers/writers, tiny audit fixtures, fake stores,
-minimal snapshots, or deterministic evaluators with a validated workload
-estimate. They must not enter the production research evaluator or full strategy
-tick loops.
+(`--durations=50 --durations-min=0.25`). It then parses the reported durations
+and fails default-fast tests over the configured fast threshold. Contract tests
+in this suite must use pure payloads, report finalizers/writers, tiny audit
+fixtures, fake stores, minimal snapshots, or deterministic evaluators with a
+validated workload estimate. They must not enter the production research
+evaluator or unbounded full strategy tick loops.
 
 Dedicated research/nightly validation collects the intentionally expensive
 research pipeline tests and emits CI-friendly duration data:
@@ -319,11 +320,13 @@ Marker meaning follows the execution boundary:
 Every test that directly calls `run_research_backtest` or
 `run_research_walk_forward` without an approved deterministic contract helper
 must have one of those expensive markers and must be listed in
-`tests/policy/research_e2e_inventory.json` with a reason explaining why a
-lower-level contract test is insufficient. The static policy checker enforces
-the marker and inventory contract. Broad or duplicate production E2E tests
-should be replaced by lower-tier report/hash/audit/artifact contract coverage,
-leaving only the smallest representative smoke or acceptance test.
+`tests/policy/research_e2e_inventory.json` with markers, reason, expected
+workload, duration budget, owner or domain, and last measured duration. The
+reason must explain why a lower-level contract test is insufficient. The static
+policy checker enforces the recursive marker and inventory contract. Broad or
+duplicate production E2E tests should be replaced by lower-tier
+report/hash/audit/artifact contract coverage, leaving only the smallest
+representative smoke or acceptance test.
 
 Tests that use `DeterministicResearchEvaluator`, `_run_contract_research_*`,
 report factories, payload factories, `AuditTraceScope`, or other fake/lower
@@ -338,8 +341,18 @@ E2E marker.
 Research tests that run real strategy/kernel or full research pipeline work use
 specific markers such as `research_kernel`, `research_e2e`, `audit_e2e`,
 `walk_forward_e2e`, `parallel_e2e`, `nightly`, `memory_sensitive`, and
-`resource_guard`. The focused reproduction for the historical order-dependent
-high-water RSS regression is:
+`resource_guard`. Direct public kernel entrypoints such as `run_sma_backtest`,
+`run_sma_with_filter_backtest`, `run_plugin_backtest`,
+`run_decision_event_backtest`, and
+`run_stage_owned_decision_event_backtest` are allowed in the fast suite only for
+bounded in-memory micro-kernel contracts with explicit `DatasetSnapshot` or
+small fixture helpers. Unbounded or full-kernel expansion must carry
+`research_kernel` or a default-fast-excluded marker, and any
+`_run_contract_research_backtest(enforce_fast_budget=False)` use must carry a
+default-fast-excluded marker such as `slow_research` or `nightly`.
+
+The focused reproduction for the historical order-dependent high-water RSS
+regression is:
 
 ```bash
 uv run pytest -q --tb=short --maxfail=1 \

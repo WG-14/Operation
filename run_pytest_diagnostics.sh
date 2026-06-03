@@ -4,6 +4,9 @@
 set -u
 set -o pipefail
 
+FAST_MARKER_EXPR="not research_e2e and not audit_e2e and not walk_forward_e2e and not parallel_e2e and not nightly and not slow_research and not memory_sensitive"
+RESEARCH_NIGHTLY_MARKER_EXPR="research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly or slow_research or memory_sensitive"
+
 run() {
   local title="$1"
   shift
@@ -30,10 +33,10 @@ run() {
 }
 
 run "default PR fast suite" \
-  uv run pytest -q -m "not research_e2e and not nightly and not audit_e2e and not walk_forward_e2e and not parallel_e2e and not memory_sensitive"
+  uv run pytest -q -m "$FAST_MARKER_EXPR" --durations=50 --durations-min=0.25
 
-run "research E2E or memory-sensitive durations" \
-  uv run pytest -q -m "research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly or memory_sensitive" --durations=50 --durations-min=0
+run "research nightly suite durations" \
+  uv run pytest -q -m "$RESEARCH_NIGHTLY_MARKER_EXPR" --durations=50 --durations-min=0
 
 run "research backtest reproducibility durations" \
   uv run pytest -q tests/test_research_backtest_reproducibility.py --durations=50 --durations-min=0
@@ -42,13 +45,13 @@ run "research walk forward durations" \
   uv run pytest -q tests/test_research_walk_forward.py --durations=20 --durations-min=0
 
 run "collect count: research E2E classes" \
-  bash -lc 'uv run pytest --collect-only -q -m "research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly" | awk "/::/ {n++} END {print n+0}"'
+  bash -lc "uv run pytest --collect-only -q -m '$RESEARCH_NIGHTLY_MARKER_EXPR' | awk '/::/ {n++} END {print n+0}'"
 
 run "collect count: memory_sensitive" \
   bash -lc 'uv run pytest --collect-only -q -m "memory_sensitive" | awk "/::/ {n++} END {print n+0}"'
 
 run "collect count: default PR fast suite" \
-  bash -lc 'uv run pytest --collect-only -q -m "not research_e2e and not nightly and not audit_e2e and not walk_forward_e2e and not parallel_e2e and not memory_sensitive" | awk "/::/ {n++} END {print n+0}"'
+  bash -lc "uv run pytest --collect-only -q -m '$FAST_MARKER_EXPR' | awk '/::/ {n++} END {print n+0}'"
 
 run "cProfile: stress order independence test" \
   uv run python -m cProfile -o /tmp/stress_order.prof -m pytest -q \
@@ -74,11 +77,12 @@ echo "- JSON artifact write"
 echo "- audit trace write"
 echo "- parallel executor overhead"
 
-run "collect all tests" \
+run "collect all tests only" \
   uv run pytest --collect-only -q
 
-run "full suite durations" \
-  uv run pytest -q --durations=50 --durations-min=0
+echo
+echo "Full selector-less pytest duration runs are intentionally omitted here."
+echo "Use the dedicated full pytest repair pipeline when a full-suite run is required."
 
 echo
 echo "DONE: $(date '+%Y-%m-%d %H:%M:%S')"

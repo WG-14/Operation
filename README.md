@@ -37,9 +37,13 @@ The notes in this section describe the current implementation and its compatibil
 
 ```bash
 uv sync
-uv run pytest -q
+./scripts/run_fast_pr_tests.sh
 uv run bithumb-bot health
 ```
+
+`./scripts/run_fast_pr_tests.sh` is the default PR validation command. A
+selector-less `uv run pytest -q` is long-running/full validation and is not the
+default local PR check.
 
 ## Canonical CLI
 
@@ -268,7 +272,8 @@ The rendered units use `BITHUMB_ENV_FILE=@BITHUMB_ENV_FILE_LIVE@` so the env fil
 - Slow integration/live-like set:
   - `uv run pytest -q -m slow_integration`
 - Dedicated research E2E/resource checks:
-  - `uv run pytest -q -m "research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly or slow_research"`
+  - `./scripts/run_research_nightly_tests.sh`
+  - `uv run pytest -q -m "research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly or slow_research or memory_sensitive"`
 - Known research resource high-water RSS regression reproduction:
   - `uv run pytest -q --tb=short --maxfail=1 tests/test_research_backtest_reproducibility.py::test_tiny_three_day_sma_backtest_completes_structurally tests/test_research_backtest_reproducibility.py::test_stress_report_is_candidate_order_independent tests/test_research_strategy_canary.py::test_buy_and_hold_full_research_backtest_report_contains_common_kernel_fields`
 

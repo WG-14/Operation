@@ -24,7 +24,8 @@ The default PR fast-suite gate is:
 It runs the static research runner marker/inventory policy check and then runs
 pytest excluding `research_e2e`, `audit_e2e`, `walk_forward_e2e`,
 `parallel_e2e`, `nightly`, `slow_research`, and `memory_sensitive`, with
-duration reporting enabled.
+duration reporting enabled. The fast script also parses the reported durations
+and fails default-fast tests over the configured fast threshold.
 
 The dedicated research/nightly pytest suite is:
 
@@ -34,8 +35,16 @@ The dedicated research/nightly pytest suite is:
 
 This fast suite must not include full research matrices, complete-external audit
 research runs, walk-forward E2E, serial/parallel real research comparisons, or
-memory-sensitive checks. Run research E2E/nightly validation through
-`scripts/run_research_nightly_tests.sh`.
+memory-sensitive checks. It must also avoid production research evaluators and
+unbounded strategy/kernel tick loops; direct kernel tests in the fast suite must
+stay bounded in-memory micro-kernel contracts. Run research E2E/nightly
+validation through `scripts/run_research_nightly_tests.sh`, which includes
+`research_e2e`, `audit_e2e`, `walk_forward_e2e`, `parallel_e2e`, `nightly`,
+`slow_research`, and `memory_sensitive`.
+
+Selector-less full pytest is long-running/full validation and is not the
+default PR check. Use the dedicated pytest pipeline for full-suite repair or
+final full validation when required.
 
 `scripts/run_codex_pytest_pipeline.sh` is Codex full-pytest repair automation
 that may commit, push, and perform EC2 smoke verification. It is not the
