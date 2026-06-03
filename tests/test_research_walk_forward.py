@@ -258,6 +258,7 @@ def test_walk_forward_required_refuses_missing_evidence(tmp_path, monkeypatch) -
         promote_candidate(experiment_id="walk_unit", candidate_id="candidate_001", manager=manager)
 
 
+@pytest.mark.walk_forward_e2e
 def test_insufficient_windows_fails_clearly(tmp_path, monkeypatch) -> None:
     with pytest.raises(ResearchValidationError, match="walk_forward_insufficient_windows"):
         run_research_walk_forward(
@@ -267,6 +268,7 @@ def test_insufficient_windows_fails_clearly(tmp_path, monkeypatch) -> None:
         )
 
 
+@pytest.mark.walk_forward_e2e
 def test_walk_forward_report_persists_artifact_discovery_metadata(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)

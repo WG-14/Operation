@@ -313,6 +313,7 @@ def test_validation_protocol_has_no_buy_and_hold_specific_branch() -> None:
     assert "buy_and_hold_baseline" not in source
 
 
+@pytest.mark.research_e2e
 @pytest.mark.slow_research
 @pytest.mark.memory_sensitive
 def test_buy_and_hold_full_research_backtest_report_contains_common_kernel_fields(tmp_path, monkeypatch) -> None:

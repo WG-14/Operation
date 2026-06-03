@@ -434,6 +434,7 @@ def test_quote_coverage_fields_are_deterministic_when_top_of_book_requested(tmp_
     assert first.content_hash == second.content_hash
 
 
+@pytest.mark.research_e2e
 def test_required_top_of_book_missing_fails_dataset_quality_and_candidate_gate(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -461,6 +462,7 @@ def test_required_top_of_book_missing_fails_dataset_quality_and_candidate_gate(t
     assert report["top_of_book_quality_summary"]["fail_closed"] is True
 
 
+@pytest.mark.research_e2e
 def test_optional_top_of_book_missing_is_visible_warning_not_candidate_failure(
     tmp_path: Path,
     monkeypatch,
@@ -500,6 +502,7 @@ def test_optional_top_of_book_missing_is_visible_warning_not_candidate_failure(
     )
 
 
+@pytest.mark.research_e2e
 def test_research_backtest_metadata_includes_joined_top_of_book(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -548,6 +551,7 @@ def test_research_backtest_metadata_includes_joined_top_of_book(tmp_path: Path, 
     assert scenario["evidence_tier"] == scenario["execution_capability_contract"]["evidence_tier"]
 
 
+@pytest.mark.research_e2e
 def test_stored_l2_depth_rows_are_reported_without_claiming_depth_execution(
     tmp_path: Path,
     monkeypatch,
@@ -606,6 +610,7 @@ def test_stored_l2_depth_rows_are_reported_without_claiming_depth_execution(
     assert capability["intra_candle_path_reconstruction"] is False
 
 
+@pytest.mark.research_e2e
 def test_depth_walk_research_backtest_uses_signal_level_l2_depth(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "depth_walk.sqlite"
     _create_candle_db(db_path)
@@ -656,6 +661,7 @@ def test_depth_walk_research_backtest_uses_signal_level_l2_depth(tmp_path: Path,
     assert "l2_depth_walk_queue_unaware" in contract["limitations"]
 
 
+@pytest.mark.research_e2e
 def test_depth_walk_research_backtest_fails_closed_when_l2_depth_missing(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "depth_walk_missing.sqlite"
     _create_candle_db(db_path)
@@ -843,6 +849,7 @@ def test_research_readiness_aggregates_depth_when_top_of_book_not_requested(
     assert report["execution_capability_contract"]["available_capabilities"]["full_orderbook_depth"] is False
 
 
+@pytest.mark.research_e2e
 def test_strategy_requiring_top_of_book_fails_closed_when_manifest_lacks_it(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -1365,6 +1372,7 @@ def test_empty_execution_event_summary_schema_matches_non_empty_summary() -> Non
     assert set(empty_execution_event_summary()) == set(result.execution_event_summary or {})
 
 
+@pytest.mark.research_e2e
 def test_stress_latency_non_latency_policy_is_flagged_or_failed(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -1433,6 +1441,7 @@ def test_latency_submit_and_reference_application_are_reported_separately() -> N
     assert execution["latency_applied_to_reference"] is True
 
 
+@pytest.mark.research_e2e
 def test_missing_quote_policy_fail_fails_candidate(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -1540,6 +1549,7 @@ def test_failed_execution_has_not_applicable_portfolio_application_status() -> N
     assert trade["portfolio_application_status"] == "not_applicable"
 
 
+@pytest.mark.research_e2e
 def test_missing_quote_policy_warn_records_warning_without_promotion_grade_pass(
     tmp_path: Path,
     monkeypatch,
@@ -1580,6 +1590,7 @@ def test_missing_quote_policy_warn_records_warning_without_promotion_grade_pass(
     assert "quote_after_decision_signal_coverage_below_threshold" in candidate["gate_fail_reasons"]
 
 
+@pytest.mark.research_e2e
 def test_report_separates_execution_attempt_count_from_closed_trade_count(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)
@@ -1632,6 +1643,7 @@ def test_regime_coverage_does_not_treat_skipped_execution_as_filled_trade() -> N
     assert all(row.trade_count == 0 for row in composite)
 
 
+@pytest.mark.research_e2e
 def test_signal_event_quote_coverage_reported(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "quotes.sqlite"
     _create_candle_db(db_path)

@@ -114,6 +114,18 @@ def build_research_execution_plan(
         "run_environment": run_environment,
         "run_environment_hash": sha256_prefixed(run_environment),
     }
+    plan["workload_estimate"] = {
+        "schema_version": 1,
+        "candidate_count": plan["candidate_count"],
+        "scenario_count": plan["scenario_count"],
+        "split_count": plan["split_count"],
+        "walk_forward_window_count": walk_forward_split_count // 2,
+        "estimated_strategy_runs": plan["estimated_strategy_runs"],
+        "estimated_tick_events": plan["estimated_candle_evaluations"],
+        "approx_snapshot_candle_count": plan["dataset_candles"],
+        "audit_mode": manifest.research_run.audit_trail.mode,
+        "report_detail": manifest.research_run.report_detail,
+    }
     plan["execution_plan_hash"] = sha256_prefixed(_logical_plan_payload(plan))
     plan["plan_hash"] = plan["execution_plan_hash"]
     return ResearchExecutionPlan(plan)

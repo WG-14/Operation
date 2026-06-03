@@ -14,6 +14,10 @@ from bithumb_bot.canonical_decision import export_research_decisions, export_run
 from bithumb_bot.decision_equivalence import compare_decision_equivalence
 from bithumb_bot.research import backtest_engine, backtest_kernel, strategy_registry
 from bithumb_bot.strategy_plugins import sma_with_filter_events
+from tests.factories.research_reports import (
+    DeterministicResearchEvaluator,
+    assert_fast_research_workload,
+)
 from bithumb_bot.research.backtest_engine import (
     BacktestHeartbeatPolicy,
     BacktestResourceLimitExceeded,
@@ -111,6 +115,18 @@ def _create_db(path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _contract_evaluator() -> DeterministicResearchEvaluator:
+    return DeterministicResearchEvaluator()
+
+
+def _run_contract_research_backtest(**kwargs: object) -> dict[str, object]:
+    report = run_research_backtest(
+        candidate_evaluator=_contract_evaluator(),
+        **kwargs,  # type: ignore[arg-type]
+    )
+    return report
 
 
 def _manifest() -> dict[str, object]:
@@ -886,13 +902,13 @@ def test_same_manifest_and_dataset_produce_same_content_hash(tmp_path, monkeypat
     manager = PathManager.from_env(Path.cwd())
     manifest = parse_manifest(_manifest())
 
-    first = run_research_backtest(
+    first = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    second = run_research_backtest(
+    second = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -1034,13 +1050,14 @@ def test_research_backtest_report_includes_execution_plan_and_observability(tmp_
     manager = PathManager.from_env(Path.cwd())
     manifest = parse_manifest(_manifest())
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
+    assert_fast_research_workload(report)
     assert report["execution_policy"]["mode"] == "serial"
     assert report["execution_plan"]["candidate_count"] == 1
     assert report["execution_plan"]["scenario_count"] == 1
@@ -1175,13 +1192,13 @@ def test_serial_work_unit_order_is_deterministic(tmp_path, monkeypatch) -> None:
     payload["cost_model"] = {"fee_rate": 0.0, "slippage_bps": [0, 1]}
     manifest = parse_manifest(payload)
 
-    first = run_research_backtest(
+    first = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    second = run_research_backtest(
+    second = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -1293,13 +1310,13 @@ def test_explicit_default_execution_policy_preserves_serial_metrics(tmp_path, mo
     }
     explicit_manifest = parse_manifest(explicit_payload)
 
-    default_report = run_research_backtest(
+    default_report = _run_contract_research_backtest(
         manifest=default_manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    explicit_report = run_research_backtest(
+    explicit_report = _run_contract_research_backtest(
         manifest=explicit_manifest,
         db_path=db_path,
         manager=manager,
@@ -1339,13 +1356,13 @@ def test_parallel_candidate_scenario_matches_serial_logical_results(tmp_path, mo
         }
     }
 
-    serial = run_research_backtest(
+    serial = _run_contract_research_backtest(
         manifest=parse_manifest(base_payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    parallel = run_research_backtest(
+    parallel = _run_contract_research_backtest(
         manifest=parse_manifest(parallel_payload),
         db_path=db_path,
         manager=manager,
@@ -1539,13 +1556,13 @@ def test_parallel_stress_candidate_scenario_matches_serial_logical_results(tmp_p
         }
     }
 
-    serial = run_research_backtest(
+    serial = _run_contract_research_backtest(
         manifest=parse_manifest(base_payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    parallel = run_research_backtest(
+    parallel = _run_contract_research_backtest(
         manifest=parse_manifest(parallel_payload),
         db_path=db_path,
         manager=manager,
@@ -1560,6 +1577,7 @@ def test_parallel_stress_candidate_scenario_matches_serial_logical_results(tmp_p
     assert serial["candidates"][0]["candidate_profile_hash"] != parallel["candidates"][0]["candidate_profile_hash"]
 
 
+@pytest.mark.parallel_e2e
 def test_parallel_executor_uses_lightweight_tasks_with_worker_initializer(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -1675,13 +1693,13 @@ def test_candidate_profile_hash_remains_promotion_bound_while_behavior_hash_is_l
         }
     }
 
-    serial = run_research_backtest(
+    serial = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    parallel = run_research_backtest(
+    parallel = _run_contract_research_backtest(
         manifest=parse_manifest(parallel_payload),
         db_path=db_path,
         manager=manager,
@@ -1689,7 +1707,7 @@ def test_candidate_profile_hash_remains_promotion_bound_while_behavior_hash_is_l
     )
     changed_payload = json.loads(json.dumps(payload))
     changed_payload["parameter_space"]["SMA_SHORT"] = [3]
-    changed = run_research_backtest(
+    changed = _run_contract_research_backtest(
         manifest=parse_manifest(changed_payload),
         db_path=db_path,
         manager=manager,
@@ -1735,7 +1753,7 @@ def test_candidate_behavior_profile_hash_excludes_nested_resource_usage_experime
     manager = PathManager.from_env(Path.cwd())
     payload = _manifest()
     payload["experiment_id"] = "behavior_profile_resource_usage_base"
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
@@ -1767,7 +1785,7 @@ def test_candidate_behavior_profile_hash_excludes_nested_runtime_provenance_arti
     manager = PathManager.from_env(Path.cwd())
     payload = _manifest()
     payload["experiment_id"] = "behavior_profile_runtime_provenance_base"
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
@@ -1811,7 +1829,7 @@ def test_candidate_behavior_profile_hash_excludes_top_level_runtime_provenance_a
     manager = PathManager.from_env(Path.cwd())
     payload = _manifest()
     payload["experiment_id"] = "behavior_profile_top_level_runtime_base"
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
@@ -1851,7 +1869,7 @@ def test_candidate_behavior_profile_hash_excludes_evaluation_policy_fields(tmp_p
         monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
     monkeypatch.setenv("MODE", "paper")
     manager = PathManager.from_env(Path.cwd())
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(_production_bound_statistical_manifest()),
         db_path=db_path,
         manager=manager,
@@ -1916,7 +1934,7 @@ def test_candidate_behavior_profile_hash_has_explicit_behavior_only_boundary(tmp
         monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
     monkeypatch.setenv("MODE", "paper")
     manager = PathManager.from_env(Path.cwd())
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(_production_bound_statistical_manifest()),
         db_path=db_path,
         manager=manager,
@@ -2011,7 +2029,7 @@ def test_research_report_candidate_and_lineage_bind_portfolio_policy(tmp_path, m
     payload["portfolio_policy"] = _portfolio_policy(starting_cash=2_000_000.0, buy_fraction=0.5)
     manifest = parse_manifest(payload)
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -2099,7 +2117,7 @@ def test_production_declared_mismatch_rejects_before_final_holdout_split_load(tm
     monkeypatch.setattr(validation_protocol, "load_dataset_split", tracking_load_dataset_split)
 
     with pytest.raises(Exception, match="experiment_registry_preflight_failed"):
-        run_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
+        _run_contract_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
 
     assert "final_holdout" not in loaded_splits
     rows = load_experiment_registry_rows(experiment_registry_path(manager=manager))
@@ -2127,7 +2145,7 @@ def test_production_budget_exceeded_rejects_before_final_holdout_split_load(tmp_
     monkeypatch.setattr(validation_protocol, "load_dataset_split", tracking_load_dataset_split)
 
     with pytest.raises(Exception, match="experiment_registry_preflight_failed"):
-        run_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
+        _run_contract_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
 
     assert "final_holdout" not in loaded_splits
     rows = load_experiment_registry_rows(experiment_registry_path(manager=manager))
@@ -2152,7 +2170,7 @@ def test_production_accepted_reservation_then_loads_final_holdout_split(tmp_path
 
     monkeypatch.setattr(validation_protocol, "load_dataset_split", tracking_load_dataset_split)
 
-    run_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
+    _run_contract_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
 
     assert loaded_splits.index("final_holdout") > loaded_splits.index("validation")
     rows = load_experiment_registry_rows(experiment_registry_path(manager=manager))
@@ -2169,7 +2187,7 @@ def test_pre_content_reservation_completion_binds_final_holdout_content_hash(tmp
     manager = PathManager.from_env(Path.cwd())
     manifest = parse_manifest(_production_bound_statistical_manifest())
 
-    report = run_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
+    report = _run_contract_research_backtest(manifest=manifest, db_path=db_path, manager=manager)
 
     rows = load_experiment_registry_rows(experiment_registry_path(manager=manager))
     reservation = rows[0]
@@ -2190,7 +2208,7 @@ def test_required_stress_suite_is_attached_to_report_and_candidate(tmp_path, mon
     payload["stress_suite"] = _stress_suite_contract()
     manifest = parse_manifest(payload)
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -2218,7 +2236,7 @@ def test_required_stress_suite_failure_blocks_candidate_acceptance(tmp_path, mon
     payload["stress_suite"]["trade_order_monte_carlo"]["ruin_max_drawdown_pct"] = 0.01
     manifest = parse_manifest(payload)
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -2248,7 +2266,7 @@ def test_report_content_hash_is_independent_of_data_root(tmp_path, monkeypatch) 
             monkeypatch.setenv(key, str(runtime_root / f"{key.lower()}_root"))
         monkeypatch.setenv("MODE", "paper")
         reports.append(
-            run_research_backtest(
+            _run_contract_research_backtest(
                 manifest=manifest,
                 db_path=db_path,
                 manager=PathManager.from_env(Path.cwd()),
@@ -2273,13 +2291,13 @@ def test_report_content_hash_is_independent_of_db_path_and_runtime_environment(t
     manager = PathManager.from_env(Path.cwd())
     manifest = parse_manifest(_manifest())
 
-    first = run_research_backtest(
+    first = _run_contract_research_backtest(
         manifest=manifest,
         db_path=first_db,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    second = run_research_backtest(
+    second = _run_contract_research_backtest(
         manifest=manifest,
         db_path=second_db,
         manager=manager,
@@ -2309,7 +2327,7 @@ def test_report_content_hash_ignores_host_dependent_memory_observability(tmp_pat
         monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
     monkeypatch.setenv("MODE", "paper")
     manager = PathManager.from_env(Path.cwd())
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(_manifest()),
         db_path=db_path,
         manager=manager,
@@ -2329,6 +2347,7 @@ def test_report_content_hash_ignores_host_dependent_memory_observability(tmp_pat
     assert sha256_prefixed(report_content_hash_payload(changed)) == report["content_hash"]
 
 
+@pytest.mark.walk_forward_e2e
 def test_walk_forward_report_includes_execution_plan_and_observability(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -2903,6 +2922,7 @@ def test_sma_backtest_caches_dataset_content_hash(monkeypatch) -> None:
     ]
 
 
+@pytest.mark.research_e2e
 @pytest.mark.memory_sensitive
 def test_tiny_three_day_sma_backtest_completes_structurally() -> None:
     base_ts = 1_700_000_000_000
@@ -3079,13 +3099,13 @@ def test_summary_and_full_metrics_v2_gates_match_for_cagr_and_exposure(tmp_path,
         },
     }
 
-    full = run_research_backtest(
+    full = _run_contract_research_backtest(
         manifest=parse_manifest(full_payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    summary = run_research_backtest(
+    summary = _run_contract_research_backtest(
         manifest=parse_manifest(summary_payload),
         db_path=db_path,
         manager=manager,
@@ -3243,6 +3263,7 @@ def test_resource_guard_trips_on_candidate_local_rss_delta() -> None:
     assert raised.value.evidence["resource_limit_semantics"]["memory_sample_reused_for_failure_evidence"] is True
 
 
+@pytest.mark.research_e2e
 def test_research_sweep_continues_after_guard_failure_and_writes_candidate_artifacts(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3307,6 +3328,7 @@ def test_research_sweep_continues_after_guard_failure_and_writes_candidate_artif
     assert failed[0]["validation_metrics_v2"]["metrics_v2_source"] == "failure_fallback"
 
 
+@pytest.mark.parallel_e2e
 def test_parallel_research_failure_is_committed_by_main_process(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3511,7 +3533,7 @@ def test_parallel_complete_external_audit_trail_rejected_before_split_load(tmp_p
     )
 
     with pytest.raises(ResearchValidationError, match="parallel_execution_complete_external_audit_trail_not_supported"):
-        run_research_backtest(
+        _run_contract_research_backtest(
             manifest=manifest,
             db_path=db_path,
             manager=manager,
@@ -3547,7 +3569,7 @@ def test_parallel_full_decisions_external_jsonl_rejected_before_registry_reserva
     monkeypatch.setattr(validation_protocol, "_reserve_experiment_attempt", fail_reserve)
 
     with pytest.raises(ResearchValidationError, match="parallel_execution_full_decisions_external_jsonl_not_supported"):
-        run_research_backtest(
+        _run_contract_research_backtest(
             manifest=manifest,
             db_path=db_path,
             manager=manager,
@@ -3557,6 +3579,7 @@ def test_parallel_full_decisions_external_jsonl_rejected_before_registry_reserva
     assert reserved is False
 
 
+@pytest.mark.audit_e2e
 def test_summary_zero_retention_writes_complete_external_audit_traces(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3617,7 +3640,7 @@ def test_research_report_exposes_candidate_isolation_status(tmp_path, monkeypatc
     monkeypatch.setenv("MODE", "paper")
     manager = PathManager.from_env(Path.cwd())
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(_manifest()),
         db_path=db_path,
         manager=manager,
@@ -3630,6 +3653,7 @@ def test_research_report_exposes_candidate_isolation_status(tmp_path, monkeypatc
     }
 
 
+@pytest.mark.audit_e2e
 def test_audit_trace_verification_detects_tamper_and_missing_stream(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3698,6 +3722,7 @@ def test_audit_trace_verification_accepts_aborted_terminal_status(tmp_path, monk
     assert result["reasons"] == []
 
 
+@pytest.mark.audit_e2e
 def test_resource_limit_failure_trace_is_report_and_manifest_bound(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3737,6 +3762,7 @@ def test_resource_limit_failure_trace_is_report_and_manifest_bound(tmp_path, mon
     assert verify_audit_trail(manager=manager, experiment_id="audit_resource_failure")["ok"] is True
 
 
+@pytest.mark.audit_e2e
 def test_generic_candidate_exception_trace_is_report_and_manifest_bound(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3774,6 +3800,7 @@ def test_generic_candidate_exception_trace_is_report_and_manifest_bound(tmp_path
     assert verify_audit_trail(manager=manager, experiment_id="audit_generic_failure")["ok"] is True
 
 
+@pytest.mark.audit_e2e
 def test_complete_external_audit_rerun_replaces_streams_without_append_contamination(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3808,6 +3835,7 @@ def test_complete_external_audit_rerun_replaces_streams_without_append_contamina
     assert second_index["decision_row_count"] == first_index["decision_row_count"]
 
 
+@pytest.mark.audit_e2e
 def test_return_panel_uses_external_equity_trace_when_embedded_curve_is_zero_retained(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3874,7 +3902,7 @@ def test_production_bound_statistical_validation_requires_audit_trace_when_missi
         },
     }
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
@@ -3886,6 +3914,7 @@ def test_production_bound_statistical_validation_requires_audit_trace_when_missi
     assert report["statistical_gate_result"] == "FAIL"
 
 
+@pytest.mark.audit_e2e
 def test_promotion_revalidates_audit_trace_and_refuses_tampered_stream(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3919,6 +3948,7 @@ def test_promotion_revalidates_audit_trace_and_refuses_tampered_stream(tmp_path,
         )
 
 
+@pytest.mark.audit_e2e
 def test_registry_validate_revalidates_audit_trace_and_refuses_missing_stream(tmp_path, monkeypatch, capsys) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3946,6 +3976,8 @@ def test_registry_validate_revalidates_audit_trace_and_refuses_missing_stream(tm
     assert "audit_trail_equity_stream_missing" in output
 
 
+@pytest.mark.audit_e2e
+@pytest.mark.walk_forward_e2e
 def test_walk_forward_complete_external_audit_traces_all_windows(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -4386,13 +4418,13 @@ def test_reproducibility_hash_changes_when_execution_timing_policy_changes(tmp_p
     }
     next_open_manifest = parse_manifest(next_open_payload)
 
-    legacy = run_research_backtest(
+    legacy = _run_contract_research_backtest(
         manifest=legacy_manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    next_open = run_research_backtest(
+    next_open = _run_contract_research_backtest(
         manifest=next_open_manifest,
         db_path=db_path,
         manager=manager,
@@ -4419,13 +4451,13 @@ def test_metrics_gate_threshold_change_changes_manifest_and_candidate_evidence_h
     base_manifest = parse_manifest(base_payload)
     changed_manifest = parse_manifest(changed_payload)
 
-    base_report = run_research_backtest(
+    base_report = _run_contract_research_backtest(
         manifest=base_manifest,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    changed_report = run_research_backtest(
+    changed_report = _run_contract_research_backtest(
         manifest=changed_manifest,
         db_path=db_path,
         manager=manager,
@@ -4472,7 +4504,7 @@ def test_research_backtest_fails_candidate_when_calibration_breaches_assumptions
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4500,7 +4532,7 @@ def test_research_backtest_fails_candidate_when_required_calibration_missing(tmp
     }
     manifest = parse_manifest(payload)
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4537,7 +4569,7 @@ def test_production_bound_screening_report_exposes_promotion_grade_unavailable(t
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4727,7 +4759,7 @@ def test_research_backtest_fails_candidate_when_calibration_market_mismatches(tm
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4774,7 +4806,7 @@ def test_research_backtest_candidate_gate_receives_execution_fill_quality_failur
         generated_at="2026-05-03T00:00:00+00:00",
     )
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4790,6 +4822,7 @@ def test_research_backtest_candidate_gate_receives_execution_fill_quality_failur
     assert "execution_calibration_quality_gate_not_passed" in reasons
 
 
+@pytest.mark.research_e2e
 def test_research_backtest_aggregates_scenarios_and_promotion_refuses_failed_stress(
     tmp_path, monkeypatch
 ) -> None:
@@ -4869,7 +4902,7 @@ def test_research_backtest_promotes_candidate_when_base_and_stress_pass(
     }
     manifest = parse_manifest(payload)
 
-    report = run_research_backtest(
+    report = _run_contract_research_backtest(
         manifest=manifest,
         db_path=db_path,
         manager=manager,
@@ -4939,13 +4972,13 @@ def test_stress_report_is_candidate_order_independent(tmp_path, monkeypatch) -> 
     }
     target_id = candidate_id(target_params, 0)
 
-    first = run_research_backtest(
+    first = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    second = run_research_backtest(
+    second = _run_contract_research_backtest(
         manifest=parse_manifest(reordered),
         db_path=db_path,
         manager=manager,
@@ -4998,13 +5031,13 @@ def test_different_stress_seed_changes_auditable_seed_hash(tmp_path, monkeypatch
     changed_seed["execution_model"] = dict(payload["execution_model"])
     changed_seed["execution_model"]["seed"] = 43
 
-    first = run_research_backtest(
+    first = _run_contract_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
     )
-    second = run_research_backtest(
+    second = _run_contract_research_backtest(
         manifest=parse_manifest(changed_seed),
         db_path=db_path,
         manager=manager,

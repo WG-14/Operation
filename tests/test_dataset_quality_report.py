@@ -275,6 +275,7 @@ def test_dataset_quality_long_range_missing_diagnostics_are_bounded_and_determin
     assert first.content_hash == second.content_hash
 
 
+@pytest.mark.research_e2e
 def test_research_report_surfaces_quality_and_promotion_refuses_failed_quality(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

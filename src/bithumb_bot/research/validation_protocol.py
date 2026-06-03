@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from bithumb_bot.execution_reality_contract import (
     build_execution_reality_contract,
@@ -116,6 +117,57 @@ TOP_OF_BOOK_OPERATOR_NEXT_ACTION = (
 )
 ProgressCallback = Callable[[dict[str, Any]], None]
 _CANDIDATE_SCENARIO_WORKER_CONTEXT: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationContext:
+    manifest: ExperimentManifest
+    manager: PathManager | None
+    snapshots: dict[str, DatasetSnapshot]
+    manifest_hash: str
+    simulation_seed_scope_hash: str
+    include_walk_forward: bool
+    raw_candidate_count: int
+    params: dict[str, Any]
+    candidate_index: int
+    scenario: ExecutionScenario
+    scenario_index: int
+    scenario_id: str
+    progress_callback: ProgressCallback | None = None
+    worker_pid: int | None = None
+
+
+class CandidateScenarioEvaluator(Protocol):
+    def evaluate(self, work_unit: ResearchWorkUnit, context: EvaluationContext) -> ResearchWorkResult:
+        ...
+
+
+class ProductionCandidateScenarioEvaluator:
+    def evaluate(self, work_unit: ResearchWorkUnit, context: EvaluationContext) -> ResearchWorkResult:
+        task = _task_from_evaluation_context(work_unit=work_unit, context=context)
+        return _evaluate_candidate_scenario_task(
+            task=task,
+            manager=context.manager,
+            progress_callback=context.progress_callback,
+            worker_pid=context.worker_pid,
+        )
+
+
+def _task_from_evaluation_context(*, work_unit: ResearchWorkUnit, context: EvaluationContext) -> dict[str, Any]:
+    return {
+        "manifest": context.manifest,
+        "snapshots": context.snapshots,
+        "manifest_hash": context.manifest_hash,
+        "simulation_seed_scope_hash": context.simulation_seed_scope_hash,
+        "include_walk_forward": context.include_walk_forward,
+        "raw_candidate_count": context.raw_candidate_count,
+        "params": context.params,
+        "candidate_index": context.candidate_index,
+        "scenario": context.scenario,
+        "scenario_index": context.scenario_index,
+        "scenario_id": context.scenario_id,
+        "work_unit": work_unit,
+    }
 
 
 def _candidate_scenario_worker(task: dict[str, Any]) -> ResearchWorkResult:
@@ -571,6 +623,7 @@ def run_research_backtest(
     manifest_path: str | None = None,
     command_args: dict[str, Any] | None = None,
     progress_callback: ProgressCallback | None = None,
+    candidate_evaluator: CandidateScenarioEvaluator | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     stage_timings: list[dict[str, Any]] = []
@@ -686,6 +739,7 @@ def run_research_backtest(
         execution_plan=execution_plan,
         work_unit_observability=work_unit_observability,
         progress_callback=progress_callback,
+        candidate_evaluator=candidate_evaluator,
     )
     stage_timings.append(_stage_timing("candidate_evaluation", stage_started, candidate_count=len(candidates)))
     execution_observability = {
@@ -758,6 +812,7 @@ def run_research_walk_forward(
     manifest_path: str | None = None,
     command_args: dict[str, Any] | None = None,
     progress_callback: ProgressCallback | None = None,
+    candidate_evaluator: CandidateScenarioEvaluator | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     stage_timings: list[dict[str, Any]] = []
@@ -881,6 +936,7 @@ def run_research_walk_forward(
         execution_plan=execution_plan,
         work_unit_observability=work_unit_observability,
         progress_callback=progress_callback,
+        candidate_evaluator=candidate_evaluator,
     )
     stage_timings.append(_stage_timing("candidate_evaluation", stage_started, candidate_count=len(candidates)))
     execution_observability = {
@@ -954,6 +1010,7 @@ def _evaluate_candidates(
     execution_plan: ResearchExecutionPlan | None = None,
     work_unit_observability: list[dict[str, Any]] | None = None,
     progress_callback: ProgressCallback | None = None,
+    candidate_evaluator: CandidateScenarioEvaluator | None = None,
 ) -> list[dict[str, Any]]:
     raw_candidates = iter_parameter_candidates(manifest.parameter_space)
     aggregates: dict[str, dict[str, Any]] = {}
@@ -1022,7 +1079,8 @@ def _evaluate_candidates(
                 }
             )
 
-    if manifest.research_run.execution.mode == "parallel":
+    evaluator = candidate_evaluator or ProductionCandidateScenarioEvaluator()
+    if manifest.research_run.execution.mode == "parallel" and candidate_evaluator is None:
         for task in work_tasks:
             _append_candidate_event(
                 manager=manager,
@@ -1054,36 +1112,62 @@ def _evaluate_candidates(
     else:
         raw_results = []
         for task in work_tasks:
-            full_task = {
-                "manifest": manifest,
-                "snapshots": snapshots,
-                "manifest_hash": manifest_hash,
-                "simulation_seed_scope_hash": simulation_seed_scope_hash,
-                "include_walk_forward": include_walk_forward,
-                "raw_candidate_count": len(raw_candidates),
-                **task,
-            }
+            work_unit = task["work_unit"]
+            if not isinstance(work_unit, ResearchWorkUnit):
+                raise ResearchValidationError("research_work_unit_missing")
+            params = dict(task["params"])
+            full_task = _task_from_evaluation_context(
+                work_unit=work_unit,
+                context=EvaluationContext(
+                    manifest=manifest,
+                    manager=manager,
+                    snapshots=snapshots,
+                    manifest_hash=manifest_hash,
+                    simulation_seed_scope_hash=simulation_seed_scope_hash,
+                    include_walk_forward=include_walk_forward,
+                    raw_candidate_count=len(raw_candidates),
+                    params=params,
+                    candidate_index=int(task["candidate_index"]),
+                    scenario=task["scenario"],
+                    scenario_index=int(task["scenario_index"]),
+                    scenario_id=str(task["scenario_id"]),
+                    progress_callback=progress_callback,
+                    worker_pid=None,
+                ),
+            )
             _append_candidate_event(
                 manager=manager,
                 manifest=manifest,
                 event={
                     "stage": "candidate_start",
-                    "candidate_id": candidate_id(dict(full_task["params"]), int(full_task["candidate_index"])),
+                    "candidate_id": candidate_id(params, int(full_task["candidate_index"])),
                     "scenario_id": full_task["scenario_id"],
                     "scenario_index": full_task["scenario_index"],
-                    "parameter_values": full_task["params"],
-                    "work_unit_hash": full_task["work_unit"].work_unit_hash,
+                    "parameter_values": params,
+                    "work_unit_hash": work_unit.work_unit_hash,
                 },
             )
             raw_results.extend(
                 execute_research_work_units_serial(
-                    tasks=(full_task,),
-                    worker=lambda item: _evaluate_candidate_scenario_task(
-                        task=item,
-                        manager=manager,
-                        progress_callback=progress_callback,
-                        worker_pid=None,
+                    tasks=(
+                        EvaluationContext(
+                            manifest=manifest,
+                            manager=manager,
+                            snapshots=snapshots,
+                            manifest_hash=manifest_hash,
+                            simulation_seed_scope_hash=simulation_seed_scope_hash,
+                            include_walk_forward=include_walk_forward,
+                            raw_candidate_count=len(raw_candidates),
+                            params=params,
+                            candidate_index=int(task["candidate_index"]),
+                            scenario=task["scenario"],
+                            scenario_index=int(task["scenario_index"]),
+                            scenario_id=str(task["scenario_id"]),
+                            progress_callback=progress_callback,
+                            worker_pid=None,
+                        ),
                     ),
+                    worker=lambda context: evaluator.evaluate(work_unit, context),
                 )
             )
     work_results = sort_work_results_deterministically(raw_results)
@@ -3513,6 +3597,27 @@ def _report_payload(
         "research_run": manifest.research_run.as_dict(),
         "execution_policy": manifest.research_run.execution.as_dict(),
         "execution_plan": execution_plan.as_dict() if execution_plan is not None else None,
+        "workload_estimate": (
+            execution_plan.payload.get("workload_estimate")
+            if execution_plan is not None
+            else {
+                "candidate_count": len(candidates),
+                "scenario_count": len(manifest.execution_model.scenarios),
+                "split_count": len(snapshots),
+                "walk_forward_window_count": 0,
+                "estimated_strategy_runs": _estimated_strategy_runs(
+                    candidate_count=len(candidates),
+                    scenario_count=len(manifest.execution_model.scenarios),
+                    split_count=len(snapshots),
+                    include_walk_forward=report_kind == "walk_forward",
+                    walk_forward_split_count=sum(1 for snapshot in snapshots if snapshot.split_name.startswith("window_")),
+                ),
+                "estimated_tick_events": sum(len(snapshot.candles) for snapshot in snapshots),
+                "approx_snapshot_candle_count": sum(len(snapshot.candles) for snapshot in snapshots),
+                "audit_mode": manifest.research_run.audit_trail.mode,
+                "report_detail": manifest.research_run.report_detail,
+            }
+        ),
         "run_environment": (
             execution_plan.payload.get("run_environment")
             if execution_plan is not None
