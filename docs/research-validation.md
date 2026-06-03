@@ -277,31 +277,69 @@ walk-forward E2E, serial/parallel E2E, nightly, slow research, and
 memory-sensitive tests:
 
 ```bash
-uv run pytest -q -m "not research_e2e and not audit_e2e and not walk_forward_e2e and not parallel_e2e and not nightly and not slow_research and not memory_sensitive"
+./scripts/run_fast_pr_tests.sh
 ```
+
+The script first runs `scripts/check_research_test_policy.py`, then runs pytest
+with the same excluded marker expression plus duration reporting
+(`--durations=50 --durations-min=0.25`). Contract tests in this suite must use
+pure payloads, report finalizers/writers, tiny audit fixtures, fake stores,
+minimal snapshots, or deterministic evaluators with a validated workload
+estimate. They must not enter the production research evaluator or full strategy
+tick loops.
 
 Dedicated research/nightly validation collects the intentionally expensive
-research pipeline tests:
+research pipeline tests and emits CI-friendly duration data:
 
 ```bash
-uv run pytest -q -m "research_e2e or audit_e2e or walk_forward_e2e or parallel_e2e or nightly or slow_research"
+./scripts/run_research_nightly_tests.sh
 ```
+
+This is the dedicated research/nightly pytest suite. Do not confuse it with
+`scripts/run_codex_pytest_pipeline.sh`, which is Codex repair automation that
+may commit, push, and run EC2 smoke verification. The Codex pipeline is not the
+research/nightly pytest tier.
+
+Marker meaning follows the execution boundary:
+
+- `research_e2e`: real production backtest evaluator or full research
+  orchestration.
+- `audit_e2e`: complete external audit persistence or binding exercised through
+  a real production research run.
+- `walk_forward_e2e`: real production walk-forward entrypoint behavior.
+- `parallel_e2e`: real serial/parallel worker initializer or process-boundary
+  evidence.
+- `slow_research`: larger deterministic/fake-evaluator research contracts that
+  are valuable but excluded from default PR feedback.
+- `nightly`: expensive research validation intended for the dedicated nightly
+  suite.
+- `memory_sensitive`: order-dependent memory/resource semantics that should not
+  run in the default fast suite unless explicitly scoped.
+
+Every test that directly calls `run_research_backtest` or
+`run_research_walk_forward` without an approved deterministic contract helper
+must have one of those expensive markers and must be listed in
+`tests/policy/research_e2e_inventory.json` with a reason explaining why a
+lower-level contract test is insufficient. The static policy checker enforces
+the marker and inventory contract. Broad or duplicate production E2E tests
+should be replaced by lower-tier report/hash/audit/artifact contract coverage,
+leaving only the smallest representative smoke or acceptance test.
+
+Tests that use `DeterministicResearchEvaluator`, `_run_contract_research_*`,
+report factories, payload factories, `AuditTraceScope`, or other fake/lower
+level inputs are contract or integration tests. Fast contract research tests
+must assert the exposed workload budget: strategy runs, tick events,
+candidate-scenario-split matrix size, zero walk-forward windows, summary report
+detail, and no complete-external audit or full decision JSONL. Larger
+fake-evaluator contract checks must also carry a marker excluded by the default
+fast command, such as `slow_research` or `nightly`, rather than borrowing a real
+E2E marker.
 
 Research tests that run real strategy/kernel or full research pipeline work use
 specific markers such as `research_kernel`, `research_e2e`, `audit_e2e`,
 `walk_forward_e2e`, `parallel_e2e`, `nightly`, `memory_sensitive`, and
 `resource_guard`. The focused reproduction for the historical order-dependent
 high-water RSS regression is:
-
-Marker meaning follows the execution boundary. `research_e2e`,
-`audit_e2e`, `walk_forward_e2e`, and `parallel_e2e` are reserved for tests
-that exercise the real production evaluator or real research kernel boundary.
-Tests that use `DeterministicResearchEvaluator`, `_run_contract_research_*`,
-report factories, payload factories, `AuditTraceScope`, or other fake/lower
-level inputs are contract or integration tests. Fast contract research tests
-must assert the exposed workload budget; larger fake-evaluator contract checks
-must also carry a marker excluded by the default fast command, such as
-`nightly`, rather than borrowing a real E2E marker.
 
 ```bash
 uv run pytest -q --tb=short --maxfail=1 \

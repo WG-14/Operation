@@ -18,23 +18,28 @@ python3 -m pytest tests/test_operator_commands.py::test_cmd_signal_no_data_outpu
 The default PR fast-suite gate is:
 
 ```bash
-uv run pytest -q -m "not research_e2e and not audit_e2e and not walk_forward_e2e and not parallel_e2e and not nightly and not slow_research and not memory_sensitive"
+./scripts/run_fast_pr_tests.sh
 ```
 
-The script form is:
+It runs the static research runner marker/inventory policy check and then runs
+pytest excluding `research_e2e`, `audit_e2e`, `walk_forward_e2e`,
+`parallel_e2e`, `nightly`, `slow_research`, and `memory_sensitive`, with
+duration reporting enabled.
+
+The dedicated research/nightly pytest suite is:
 
 ```bash
-./scripts/run_fast_pr_tests.sh
+./scripts/run_research_nightly_tests.sh
 ```
 
 This fast suite must not include full research matrices, complete-external audit
 research runs, walk-forward E2E, serial/parallel real research comparisons, or
-memory-sensitive checks. Run full/nightly research validation through the
-dedicated full-pytest pipeline instead:
+memory-sensitive checks. Run research E2E/nightly validation through
+`scripts/run_research_nightly_tests.sh`.
 
-```bash
-./scripts/run_codex_pytest_pipeline.sh
-```
+`scripts/run_codex_pytest_pipeline.sh` is Codex full-pytest repair automation
+that may commit, push, and perform EC2 smoke verification. It is not the
+dedicated research/nightly pytest suite.
 
 Required gate coverage:
 

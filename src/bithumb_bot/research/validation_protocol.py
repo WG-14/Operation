@@ -3675,6 +3675,7 @@ def _report_payload(
                 "approx_snapshot_candle_count": sum(len(snapshot.candles) for snapshot in snapshots),
                 "audit_mode": manifest.research_run.audit_trail.mode,
                 "report_detail": manifest.research_run.report_detail,
+                "full_decisions_external_jsonl": manifest.research_run.artifact_policy.full_decisions_external_jsonl,
             }
         ),
         "run_environment": (

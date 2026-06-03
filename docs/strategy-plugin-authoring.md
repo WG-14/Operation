@@ -192,6 +192,34 @@ Architecture guard tests should continue to prevent new strategy-specific branch
 
 ## Tests
 
+### Research Test Tiering And Workload Budget
+
+New strategy tests must not multiply default PR runtime by strategy count,
+candidate count, scenario count, split/window count, and tick count. The default
+PR suite is for contract and integration feedback, not full production research
+matrices.
+
+For every new strategy PR, include the expected default-PR
+`estimated_strategy_runs` delta in the review notes or checklist. Fast strategy
+tests should use a fake or minimal `DatasetSnapshot`, direct policy contracts,
+pure replay material, or a deterministic evaluator with
+`assert_fast_research_workload`. Strategy canaries in the default suite should
+focus on common kernel contracts and minimal datasets.
+
+Do not add unmarked direct calls to `run_research_backtest` or
+`run_research_walk_forward`. The static policy check rejects direct production
+runner use unless the test has an expensive research marker and an entry in
+`tests/policy/research_e2e_inventory.json` explaining why lower-level contract
+coverage is insufficient.
+
+Production backtest or report canaries belong in `research_e2e`, `nightly`, or
+the dedicated research suite. Real walk-forward canaries belong in
+`walk_forward_e2e`; real complete-external audit coverage belongs in
+`audit_e2e`; real parallel worker evidence belongs in `parallel_e2e`. Keep those
+E2E tests as the smallest representative smoke or acceptance checks and cover
+hash, report, audit, artifact, and promotion payload semantics with lower-level
+contract tests.
+
 Level 1 research-only strategy tests should prove:
 
 - registration and discovery

@@ -375,6 +375,7 @@ def minimal_research_report(**overrides: Any) -> dict[str, Any]:
             "approx_snapshot_candle_count": 2,
             "audit_mode": "summary_only",
             "report_detail": "summary",
+            "full_decisions_external_jsonl": False,
         },
         "audit_trail_policy": {"mode": "summary_only"},
         "audit_trail_status": "DISABLED",
@@ -390,6 +391,10 @@ def assert_fast_research_workload(
     max_strategy_runs: int = 3,
     max_tick_events: int = 10_000,
     max_matrix_size: int = 3,
+    max_walk_forward_windows: int = 0,
+    allow_complete_external_audit: bool = False,
+    allow_full_report_detail: bool = False,
+    allow_full_decisions_external_jsonl: bool = False,
 ) -> None:
     estimate = report.get("workload_estimate")
     if not isinstance(estimate, dict):
@@ -410,8 +415,13 @@ def assert_fast_research_workload(
         assert key in estimate, f"research workload_estimate missing {key}"
     assert int(estimate["estimated_strategy_runs"]) <= max_strategy_runs
     assert int(estimate["estimated_tick_events"]) <= max_tick_events
-    assert estimate.get("audit_mode") != "complete_external"
-    assert int(estimate.get("walk_forward_window_count") or 0) == 0
+    if not allow_complete_external_audit:
+        assert estimate.get("audit_mode") != "complete_external"
+    assert int(estimate.get("walk_forward_window_count") or 0) <= max_walk_forward_windows
+    if not allow_full_report_detail:
+        assert estimate.get("report_detail") == "summary"
+    if not allow_full_decisions_external_jsonl:
+        assert estimate.get("full_decisions_external_jsonl") is not True
     matrix_size = (
         int(estimate["candidate_count"])
         * int(estimate["scenario_count"])

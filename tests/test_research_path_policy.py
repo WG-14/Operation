@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from bithumb_bot.paths import PathManager, PathPolicyError
-from bithumb_bot.research.report_writer import write_research_report
+from bithumb_bot.research.hashing import report_content_hash_payload, sha256_prefixed
+from bithumb_bot.research.report_writer import finalize_research_report_payload, write_research_report
+from tests.factories.research_reports import minimal_research_report
 
 
 def test_research_entrypoints_do_not_implicitly_load_repo_dotenv() -> None:
@@ -32,3 +34,24 @@ def test_research_outputs_reject_repo_internal_data_root(monkeypatch) -> None:
                 "generated_at": "2026-05-03T00:00:00+00:00",
             },
         )
+
+
+def test_research_report_finalizer_adds_stable_artifact_refs_paths_and_content_hash(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MODE", "paper")
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    manager = PathManager.from_env(Path.cwd())
+
+    paths, finalized, content_hash = finalize_research_report_payload(
+        manager=manager,
+        experiment_id="finalizer_contract",
+        report_name="walk_forward",
+        payload=minimal_research_report(report_kind="walk_forward", experiment_id="finalizer_contract"),
+    )
+
+    assert finalized["content_hash"] == content_hash
+    assert finalized["artifact_refs"]["report"] == "reports/research/finalizer_contract/walk_forward_report.json"
+    assert finalized["artifact_refs"]["candidate_events"] == "derived/research/finalizer_contract/candidate_events.jsonl"
+    assert finalized["artifact_paths"]["report_path"] == str(paths.report_path.resolve())
+    assert finalized["artifact_paths"]["derived_path"] == str(paths.derived_path.resolve())
+    assert sha256_prefixed(report_content_hash_payload(finalized)) == content_hash

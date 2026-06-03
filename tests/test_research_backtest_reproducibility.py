@@ -129,21 +129,34 @@ def _contract_evaluator() -> DeterministicResearchEvaluator:
     return DeterministicResearchEvaluator()
 
 
-def _run_contract_research_backtest(*, enforce_fast_budget: bool = True, **kwargs: object) -> dict[str, object]:
+def _run_contract_research_backtest(
+    *,
+    enforce_fast_budget: bool = True,
+    workload_budget_kwargs: dict[str, object] | None = None,
+    **kwargs: object,
+) -> dict[str, object]:
     report = run_research_backtest(
         candidate_evaluator=_contract_evaluator(),
         **kwargs,  # type: ignore[arg-type]
     )
     if enforce_fast_budget:
-        assert_fast_research_workload(report)
+        assert_fast_research_workload(report, **(workload_budget_kwargs or {}))
     return report
 
 
 def _run_contract_research_walk_forward(**kwargs: object) -> dict[str, object]:
-    return run_research_walk_forward(
+    report = run_research_walk_forward(
         candidate_evaluator=_contract_evaluator(),
         **kwargs,  # type: ignore[arg-type]
     )
+    assert_fast_research_workload(
+        report,
+        max_strategy_runs=10,
+        max_tick_events=20_000,
+        max_matrix_size=10,
+        max_walk_forward_windows=2,
+    )
+    return report
 
 
 def _factory_candidate(**overrides: object) -> dict[str, object]:
@@ -3116,6 +3129,8 @@ def test_summary_metrics_v2_match_full_when_equity_retention_is_zero() -> None:
     assert summary.regime_performance == full.regime_performance
 
 
+@pytest.mark.slow_research
+@pytest.mark.nightly
 def test_summary_and_full_metrics_v2_gates_match_for_cagr_and_exposure(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path)
@@ -3156,6 +3171,7 @@ def test_summary_and_full_metrics_v2_gates_match_for_cagr_and_exposure(tmp_path,
         db_path=db_path,
         manager=manager,
         generated_at="2026-05-03T00:00:00+00:00",
+        workload_budget_kwargs={"allow_full_report_detail": True},
     )
     summary = _run_contract_research_backtest(
         manifest=parse_manifest(summary_payload),

@@ -125,6 +125,7 @@ def build_research_execution_plan(
         "approx_snapshot_candle_count": plan["dataset_candles"],
         "audit_mode": manifest.research_run.audit_trail.mode,
         "report_detail": manifest.research_run.report_detail,
+        "full_decisions_external_jsonl": manifest.research_run.artifact_policy.full_decisions_external_jsonl,
     }
     plan["execution_plan_hash"] = sha256_prefixed(_logical_plan_payload(plan))
     plan["plan_hash"] = plan["execution_plan_hash"]
