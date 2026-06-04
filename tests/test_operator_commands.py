@@ -120,6 +120,16 @@ def _set_tmp_db(tmp_path, monkeypatch: pytest.MonkeyPatch | None = None):
     object.__setattr__(app_module.settings, "DB_PATH", db_path)
 
 
+def _config_dump_subprocess_env(env_file: Path) -> dict[str, str]:
+    repo_root = Path(__file__).resolve().parents[1]
+    return {
+        "BITHUMB_ENV_FILE": str(env_file),
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": str(repo_root / "src"),
+    }
+
+
 def _stub_stale_halt_readiness(
     *,
     fee_gap_incident_kind: str,
@@ -9243,12 +9253,7 @@ def test_config_dump_uses_cli_bootstrap_env_file_and_masks_secrets(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    env = {
-        **os.environ,
-        "BITHUMB_ENV_FILE": str(env_file),
-        "UV_CACHE_DIR": "/tmp/uv-cache",
-    }
-    env.pop("BITHUMB_TEST_TIER", None)
+    env = _config_dump_subprocess_env(env_file)
 
     completed = subprocess.run(
         [sys.executable, "-m", "bithumb_bot", "config-dump", "--masked"],
