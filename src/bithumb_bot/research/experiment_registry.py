@@ -17,6 +17,7 @@ EXPERIMENT_REGISTRY_SCHEMA_VERSION = 1
 EMPTY_EXPERIMENT_REGISTRY_HASH = sha256_prefixed([])
 PROMOTION_PERMITTED_STATUSES = {"COMPLETED"}
 EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE = "pre_completion_evidence_hash"
+EXPERIMENT_REGISTRY_BUDGET_POLICY = "registry_append_only_budget_exempt"
 PRE_CONTENT_COMPLETION_BOUND_FIELDS = {
     "dataset_content_hash",
     "dataset_quality_hash",
@@ -26,6 +27,13 @@ PRE_CONTENT_COMPLETION_BOUND_FIELDS = {
 
 
 def experiment_registry_path(*, manager: PathManager) -> Path:
+    """Return the managed append-only experiment registry path.
+
+    The experiment registry is a cross-run final-holdout attempt ledger. It is
+    not an experiment-scoped artifact budget target, but it is managed reports
+    evidence with append-only rows, prior-registry hashes, row hashes, and
+    repo-local artifact checks.
+    """
     path = manager.data_dir() / "reports" / "research" / "_registry" / "experiment_registry.jsonl"
     project_root = manager.project_root.resolve()
     if PathManager._is_within(path.resolve(), project_root):
@@ -227,6 +235,7 @@ def append_research_attempt_rejected(
         prior_hash = sha256_prefixed(rows) if rows else EMPTY_EXPERIMENT_REGISTRY_HASH
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_rejected",
             **base_payload,
             "computed_attempt_index": computed_attempt_index,
@@ -257,6 +266,7 @@ def reserve_research_attempt(
         computed_holdout_reuse_count = counters["computed_holdout_reuse_count"]
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_reserved",
             **base_payload,
             "computed_attempt_index": computed_attempt_index,
@@ -309,6 +319,7 @@ def reserve_research_attempt_checked(
         if reasons:
             row = {
                 "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+                "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
                 "event_type": "research_attempt_rejected",
                 **base_payload,
                 "computed_attempt_index": computed_attempt_index,
@@ -333,6 +344,7 @@ def reserve_research_attempt_checked(
             }
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_reserved",
             **base_payload,
             "computed_attempt_index": computed_attempt_index,
@@ -379,6 +391,7 @@ def append_attempt_aborted(
         prior_hash = sha256_prefixed(rows) if rows else EMPTY_EXPERIMENT_REGISTRY_HASH
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_aborted",
             **{
                 key: value
@@ -411,6 +424,7 @@ def append_attempt_completion(
         prior_hash = sha256_prefixed(rows) if rows else EMPTY_EXPERIMENT_REGISTRY_HASH
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_completed",
             **{key: value for key, value in reservation_row.items() if key not in {"event_type", "result_status", "prior_registry_hash", "row_hash", "created_at"}},
             **updates,
@@ -441,6 +455,7 @@ def append_promotion_registry_event(
         prior_hash = sha256_prefixed(rows) if rows else EMPTY_EXPERIMENT_REGISTRY_HASH
         row = {
             "schema_version": EXPERIMENT_REGISTRY_SCHEMA_VERSION,
+            "budget_policy": EXPERIMENT_REGISTRY_BUDGET_POLICY,
             "event_type": "research_attempt_promoted",
             "reservation_row_hash": reservation_row_hash,
             "experiment_id": reservation.get("experiment_id"),

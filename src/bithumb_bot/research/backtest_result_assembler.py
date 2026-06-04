@@ -179,6 +179,8 @@ def _trace_equity_mark_observability(
             cash=cash,
             asset_qty=asset_qty,
         )
+    except ArtifactBudgetExceeded:
+        raise
     except Exception:
         warnings.append("audit_equity_observability_failed")
 

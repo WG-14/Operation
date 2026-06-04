@@ -43,7 +43,7 @@ from .audit_trail import (
     write_trace_manifest,
     trace_manifest_path,
 )
-from .artifact_store import ArtifactBudget, ResearchArtifactContext
+from .artifact_store import ArtifactBudget, ArtifactBudgetExceeded, ResearchArtifactContext
 from .deployment_policy import is_production_bound_target, validate_production_calibration_policy
 from .execution_calibration import compare_calibration_to_scenario
 from .execution_model import DepthWalkExecutionModel, FixedBpsExecutionModel, StressExecutionModel, model_params_hash
@@ -292,6 +292,8 @@ def _evaluate_candidate_scenario_task(
             failure_evidence=exc.evidence,
             observability=observability,
         )
+    except ArtifactBudgetExceeded:
+        raise
     except Exception as exc:
         evidence = {
             "status": "ERROR",
@@ -3439,6 +3441,7 @@ def _report_payload(
                 manager=manager,
                 experiment_id=manifest.experiment_id,
                 panel=return_panel,
+                artifact_context=artifact_context,
             )
             if statistical_contract.get("multiple_testing_scope") == "experiment_family":
                 family_registry_path = family_trial_registry_path(
@@ -3501,6 +3504,7 @@ def _report_payload(
                 manager=manager,
                 experiment_id=manifest.experiment_id,
                 evidence=statistical_evidence,
+                artifact_context=artifact_context,
             )
             if statistical_contract.get("multiple_testing_scope") == "experiment_family":
                 statistical_evidence["family_trial_registry_bound_evidence_hash"] = statistical_evidence.get("content_hash")
@@ -3528,6 +3532,7 @@ def _report_payload(
                     manager=manager,
                     experiment_id=manifest.experiment_id,
                     evidence=statistical_evidence,
+                    artifact_context=artifact_context,
                 )
         if (
             statistical_evidence is not None
@@ -3589,6 +3594,7 @@ def _report_payload(
                 manager=manager,
                 experiment_id=manifest.experiment_id,
                 evidence=statistical_evidence,
+                artifact_context=artifact_context,
             )
         _attach_statistical_selection_to_candidates(
             candidates=candidates,

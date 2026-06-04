@@ -5,8 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from bithumb_bot.paths import PathManager, PathPolicyError
-from bithumb_bot.storage_io import write_json_atomic
-
+from .artifact_store import ResearchArtifactContext
 from .deployment_policy import is_production_bound_target
 from .experiment_manifest import ExperimentManifest, StatisticalSelectionContract
 from .experiment_registry import validate_experiment_registry_binding
@@ -376,10 +375,12 @@ def write_statistical_selection_evidence(
     manager: PathManager,
     experiment_id: str,
     evidence: dict[str, Any],
+    artifact_context: ResearchArtifactContext | None = None,
 ) -> Path:
     path = manager.data_dir() / "reports" / "research" / experiment_id / "statistical_selection_evidence.json"
     _ensure_research_output_path_allowed(manager, path)
-    write_json_atomic(path, evidence)
+    store = artifact_context or ResearchArtifactContext(manager=manager, experiment_id=experiment_id)
+    store.write_json_atomic(path, evidence)
     return path
 
 

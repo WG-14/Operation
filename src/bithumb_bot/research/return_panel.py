@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from bithumb_bot.paths import PathManager
-from bithumb_bot.storage_io import write_json_atomic
 
+from .artifact_store import ResearchArtifactContext
 from .hashing import content_hash_payload, sha256_prefixed
 
 
@@ -245,12 +245,14 @@ def write_candidate_return_panel(
     manager: PathManager,
     experiment_id: str,
     panel: dict[str, Any],
+    artifact_context: ResearchArtifactContext | None = None,
 ) -> Path:
     path = manager.data_dir() / "reports" / "research" / experiment_id / "candidate_return_panel.json"
     project_root = manager.project_root.resolve()
     if PathManager._is_within(path.resolve(), project_root):
         raise ValueError(f"candidate return panel path must be outside repository: {path.resolve()}")
-    write_json_atomic(path, panel)
+    store = artifact_context or ResearchArtifactContext(manager=manager, experiment_id=experiment_id)
+    store.write_json_atomic(path, panel)
     return path
 
 

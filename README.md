@@ -285,3 +285,13 @@ the root with `BITHUMB_PYTEST_WORKSPACE_ROOT`, set `BITHUMB_PYTEST_RUN_ID` for
 stable run IDs, and set `KEEP_BITHUMB_TEST_ARTIFACTS=1` to preserve failed or
 diagnostic artifacts. Successful official runner executions clean the run
 workspace by default.
+
+Research-run artifacts are budgeted through one run-wide artifact context for
+each experiment, covering `derived/research/<experiment_id>` and
+`reports/research/<experiment_id>` outputs such as reports, return panels,
+statistical evidence, candidate journals, candidate results/failures, audit
+streams, trace indexes, and trace manifests. Audit stream row/byte overages and
+overall artifact byte/file overages raise `ArtifactBudgetExceeded` as hard
+failures. Family and experiment registries are the narrow append-only
+cross-run exemptions; their rows are hash-bound registry evidence and carry a
+`budget_policy=registry_append_only_budget_exempt` marker.

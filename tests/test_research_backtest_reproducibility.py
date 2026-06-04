@@ -13,6 +13,7 @@ from bithumb_bot.paths import PathManager
 from bithumb_bot.canonical_decision import export_research_decisions, export_runtime_replay_decisions
 from bithumb_bot.decision_equivalence import compare_decision_equivalence
 from bithumb_bot.research import backtest_engine, backtest_kernel, strategy_registry
+from bithumb_bot.research import backtest_result_assembler
 from bithumb_bot.strategy_plugins import sma_with_filter_events
 from tests.factories.research_reports import (
     DeterministicResearchEvaluator,
@@ -59,6 +60,11 @@ from bithumb_bot.research.audit_trail import (
     write_trace_manifest,
 )
 from bithumb_bot.research.artifact_store import ArtifactBudget, ArtifactBudgetExceeded
+from bithumb_bot.research.backtest_stage_runner import (
+    _record_audit_decision,
+    _record_audit_equity_mark,
+    _record_audit_execution,
+)
 from bithumb_bot.research.return_panel import build_candidate_return_panel
 from bithumb_bot.research import cli as research_cli
 from bithumb_bot.research.cli import _print_report_summary
@@ -174,6 +180,78 @@ def _call_production_research_walk_forward(**kwargs: object) -> dict[str, object
     # It must be used only where BITHUMB_TEST_TIER=fast is set and the
     # production-evaluator guard is asserted before DB or tick execution starts.
     return run_research_walk_forward(**kwargs)  # type: ignore[arg-type]
+
+
+class _BudgetFailingAuditRecorder:
+    def record_execution(self, run_context: object, trade: dict[str, object]) -> None:
+        raise ArtifactBudgetExceeded(
+            reason="artifact_budget_max_audit_stream_rows_exceeded",
+            observed=2,
+            limit=1,
+        )
+
+    def record_decision(self, run_context: object, decision_payload: dict[str, object]) -> None:
+        raise ArtifactBudgetExceeded(
+            reason="artifact_budget_max_audit_stream_rows_exceeded",
+            observed=2,
+            limit=1,
+        )
+
+    def record_equity_mark(
+        self,
+        run_context: object,
+        *,
+        ts: int,
+        equity: float,
+        cash: float,
+        asset_qty: float,
+    ) -> None:
+        raise ArtifactBudgetExceeded(
+            reason="artifact_budget_max_audit_stream_bytes_exceeded",
+            observed=4097,
+            limit=4096,
+        )
+
+
+class _GenericFailingAuditRecorder:
+    def record_execution(self, run_context: object, trade: dict[str, object]) -> None:
+        raise RuntimeError("boom")
+
+    def record_decision(self, run_context: object, decision_payload: dict[str, object]) -> None:
+        raise RuntimeError("boom")
+
+    def record_equity_mark(
+        self,
+        run_context: object,
+        *,
+        ts: int,
+        equity: float,
+        cash: float,
+        asset_qty: float,
+    ) -> None:
+        raise RuntimeError("boom")
+
+
+class _TraceRecorderStub:
+    def __init__(self) -> None:
+        self.errors: list[dict[str, object]] = []
+
+    def record_observability_error(
+        self,
+        *,
+        stage_id: str,
+        input_hash: str,
+        reason_code: str,
+        payload: dict[str, object],
+    ) -> None:
+        self.errors.append(
+            {
+                "stage_id": stage_id,
+                "input_hash": input_hash,
+                "reason_code": reason_code,
+                "payload": payload,
+            }
+        )
 
 
 def _factory_candidate(**overrides: object) -> dict[str, object]:
@@ -3422,6 +3500,10 @@ def test_summary_and_full_metrics_v2_gates_match_for_cagr_and_exposure(tmp_path,
             "max_trades": None,
             "max_equity_points_retained": 0,
             "max_rss_mb": None,
+            "max_audit_stream_rows": 1_000_000,
+            "max_audit_stream_bytes": 1_500_000_000,
+            "max_artifact_bytes": 1_500_000_000,
+            "max_artifact_file_count": 100,
         },
     }
 
@@ -3939,6 +4021,10 @@ def test_summary_zero_retention_writes_complete_external_audit_traces(tmp_path, 
             "max_trades": None,
             "max_equity_points_retained": 0,
             "max_rss_mb": None,
+            "max_audit_stream_rows": 1_000_000,
+            "max_audit_stream_bytes": 1_500_000_000,
+            "max_artifact_bytes": 1_500_000_000,
+            "max_artifact_file_count": 100,
         },
     }
 
@@ -4007,6 +4093,82 @@ def test_research_backtest_audit_budget_overage_fails_fast_in_pipeline(tmp_path,
     assert failure["observed"] > 100
     assert failure["limit"] == 100
     assert failure["path"]
+
+
+@pytest.mark.contract
+def test_research_backtest_audit_stream_row_budget_overage_fails_fast_in_pipeline(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    monkeypatch.setenv("MODE", "paper")
+    manager = PathManager.from_env(Path.cwd())
+    payload = _manifest()
+    payload["experiment_id"] = "audit_stream_row_budget_pipeline"
+    payload["research_run"] = {
+        "audit_trail": {"mode": "complete_external"},
+        "artifact_policy": {"full_decisions_external_jsonl": True},
+        "resource_limits": {
+            "max_audit_stream_rows": 1,
+            "max_audit_stream_bytes": 10_000_000,
+            "max_artifact_bytes": 10_000_000,
+            "max_artifact_file_count": 100,
+        },
+    }
+
+    with pytest.raises(ArtifactBudgetExceeded) as excinfo:
+        run_research_backtest(
+            manifest=parse_manifest(payload),
+            db_path=db_path,
+            manager=manager,
+            generated_at="2026-05-03T00:00:00+00:00",
+        )
+
+    failure = excinfo.value.as_dict()
+    assert failure["reason"] == "artifact_budget_max_audit_stream_rows_exceeded"
+    assert failure["observed"] == 2
+    assert failure["limit"] == 1
+    assert failure["path"]
+    assert "audit_decision_observability_failed" not in str(failure)
+    assert "audit_equity_observability_failed" not in str(failure)
+
+
+@pytest.mark.contract
+def test_research_backtest_audit_stream_byte_budget_overage_fails_fast_in_pipeline(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    monkeypatch.setenv("MODE", "paper")
+    manager = PathManager.from_env(Path.cwd())
+    payload = _manifest()
+    payload["experiment_id"] = "audit_stream_byte_budget_pipeline"
+    payload["research_run"] = {
+        "audit_trail": {"mode": "complete_external"},
+        "artifact_policy": {"full_decisions_external_jsonl": True},
+        "resource_limits": {
+            "max_audit_stream_rows": 1_000_000,
+            "max_audit_stream_bytes": 128,
+            "max_artifact_bytes": 10_000_000,
+            "max_artifact_file_count": 100,
+        },
+    }
+
+    with pytest.raises(ArtifactBudgetExceeded) as excinfo:
+        run_research_backtest(
+            manifest=parse_manifest(payload),
+            db_path=db_path,
+            manager=manager,
+            generated_at="2026-05-03T00:00:00+00:00",
+        )
+
+    failure = excinfo.value.as_dict()
+    assert failure["reason"] == "artifact_budget_max_audit_stream_bytes_exceeded"
+    assert failure["observed"] > 128
+    assert failure["limit"] == 128
+    assert failure["path"]
+    assert "audit_decision_observability_failed" not in str(failure)
+    assert "audit_equity_observability_failed" not in str(failure)
 
 
 def test_research_report_exposes_candidate_isolation_status(tmp_path, monkeypatch) -> None:
@@ -4082,6 +4244,127 @@ def test_audit_trace_budget_exceeded_fails_with_structured_reason(tmp_path, monk
     assert excinfo.value.as_dict()["reason"] == "artifact_budget_max_audit_stream_rows_exceeded"
     assert excinfo.value.as_dict()["observed"] == 2
     assert excinfo.value.as_dict()["limit"] == 1
+
+
+def test_audit_stage_helpers_reraise_artifact_budget_exceeded() -> None:
+    warnings: list[str] = []
+    trace_recorder = _TraceRecorderStub()
+    recorder = _BudgetFailingAuditRecorder()
+
+    with pytest.raises(ArtifactBudgetExceeded):
+        _record_audit_execution(
+            recorder,  # type: ignore[arg-type]
+            object(),
+            warnings,
+            trace_recorder,  # type: ignore[arg-type]
+            input_hash="sha256:input",
+            trade={"trade_id": "trade-001"},
+        )
+    with pytest.raises(ArtifactBudgetExceeded):
+        _record_audit_decision(
+            recorder,  # type: ignore[arg-type]
+            object(),
+            warnings,
+            trace_recorder,  # type: ignore[arg-type]
+            input_hash="sha256:input",
+            decision_payload={"decision_ts": 1},
+        )
+    with pytest.raises(ArtifactBudgetExceeded):
+        _record_audit_equity_mark(
+            recorder,  # type: ignore[arg-type]
+            object(),
+            warnings,
+            trace_recorder,  # type: ignore[arg-type]
+            input_hash="sha256:input",
+            ts=1,
+            equity=1.0,
+            cash=1.0,
+            asset_qty=0.0,
+        )
+
+    assert warnings == []
+    assert trace_recorder.errors == []
+
+
+def test_audit_stage_helpers_keep_generic_observability_failures_as_warnings() -> None:
+    warnings: list[str] = []
+    trace_recorder = _TraceRecorderStub()
+    recorder = _GenericFailingAuditRecorder()
+
+    _record_audit_execution(
+        recorder,  # type: ignore[arg-type]
+        object(),
+        warnings,
+        trace_recorder,  # type: ignore[arg-type]
+        input_hash="sha256:execution",
+        trade={"trade_id": "trade-001"},
+    )
+    _record_audit_decision(
+        recorder,  # type: ignore[arg-type]
+        object(),
+        warnings,
+        trace_recorder,  # type: ignore[arg-type]
+        input_hash="sha256:decision",
+        decision_payload={"decision_ts": 1},
+    )
+    _record_audit_equity_mark(
+        recorder,  # type: ignore[arg-type]
+        object(),
+        warnings,
+        trace_recorder,  # type: ignore[arg-type]
+        input_hash="sha256:equity",
+        ts=1,
+        equity=1.0,
+        cash=1.0,
+        asset_qty=0.0,
+    )
+
+    assert warnings == [
+        "audit_execution_observability_failed",
+        "audit_decision_observability_failed",
+        "audit_equity_observability_failed",
+    ]
+    assert [error["reason_code"] for error in trace_recorder.errors] == warnings
+
+
+def test_result_assembler_equity_observability_reraises_artifact_budget_exceeded(monkeypatch) -> None:
+    def fail_budget(*args: object, **kwargs: object) -> None:
+        raise ArtifactBudgetExceeded(
+            reason="artifact_budget_max_audit_stream_bytes_exceeded",
+            observed=4097,
+            limit=4096,
+        )
+
+    monkeypatch.setattr(backtest_result_assembler.support, "trace_equity_mark", fail_budget)
+
+    with pytest.raises(ArtifactBudgetExceeded):
+        backtest_result_assembler._trace_equity_mark_observability(
+            object(),
+            warnings=[],
+            ts=1,
+            equity=1.0,
+            cash=1.0,
+            asset_qty=0.0,
+        )
+
+
+def test_result_assembler_equity_observability_keeps_generic_failures_as_warnings(monkeypatch) -> None:
+    def fail_generic(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(backtest_result_assembler.support, "trace_equity_mark", fail_generic)
+    warnings: list[str] = []
+
+    backtest_result_assembler._trace_equity_mark_observability(
+        object(),
+        warnings=warnings,
+        ts=1,
+        equity=1.0,
+        cash=1.0,
+        asset_qty=0.0,
+    )
+
+    assert warnings == ["audit_equity_observability_failed"]
 
 
 def test_audit_trace_verification_accepts_aborted_terminal_status(tmp_path, monkeypatch) -> None:

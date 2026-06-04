@@ -6,6 +6,7 @@ from typing import Any
 from . import backtest_support as support
 from bithumb_bot.canonical_decision import canonical_payload_hash
 
+from .artifact_store import ArtifactBudgetExceeded
 from .audit_trace_recorder import AuditTraceRecorder
 from .backtest_result_assembler import BacktestResultAssembler
 from .backtest_stages import (
@@ -891,6 +892,8 @@ def _record_audit_execution(
 ) -> None:
     try:
         audit_recorder.record_execution(run_context, trade)
+    except ArtifactBudgetExceeded:
+        raise
     except Exception as exc:
         _record_observability_error(
             trace_recorder=trace_recorder,
@@ -913,6 +916,8 @@ def _record_audit_decision(
 ) -> None:
     try:
         audit_recorder.record_decision(run_context, decision_payload)
+    except ArtifactBudgetExceeded:
+        raise
     except Exception as exc:
         _record_observability_error(
             trace_recorder=trace_recorder,
@@ -944,6 +949,8 @@ def _record_audit_equity_mark(
             cash=cash,
             asset_qty=asset_qty,
         )
+    except ArtifactBudgetExceeded:
+        raise
     except Exception as exc:
         _record_observability_error(
             trace_recorder=trace_recorder,

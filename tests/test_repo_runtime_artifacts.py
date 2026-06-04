@@ -63,3 +63,36 @@ def test_repo_runtime_artifact_check_allows_explicit_fixture_jsonl() -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
     finally:
         fixture.unlink(missing_ok=True)
+
+
+def test_repo_runtime_artifact_check_rejects_generated_jsonl_under_fixtures_and_examples() -> None:
+    script = Path("scripts/check_repo_runtime_artifacts.sh")
+    generated = [
+        Path("tests/fixtures/decisions.jsonl"),
+        Path("examples/executions.jsonl"),
+        Path("examples/research/candidate_events.jsonl"),
+    ]
+    try:
+        for path in generated:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"generated":true}\n', encoding="utf-8")
+        proc = subprocess.run(["bash", script.as_posix()], capture_output=True, text=True, check=False)
+        output = proc.stdout + proc.stderr
+        assert proc.returncode != 0
+        for path in generated:
+            assert path.as_posix() in output
+    finally:
+        for path in generated:
+            path.unlink(missing_ok=True)
+
+
+def test_repo_runtime_artifact_check_allows_narrow_static_example_jsonl() -> None:
+    script = Path("scripts/check_repo_runtime_artifacts.sh")
+    fixture = Path("examples/research/static_fixture_allowed.jsonl")
+    try:
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        fixture.write_text('{"fixture":true}\n', encoding="utf-8")
+        proc = subprocess.run(["bash", script.as_posix()], capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+    finally:
+        fixture.unlink(missing_ok=True)

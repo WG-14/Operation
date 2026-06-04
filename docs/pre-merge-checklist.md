@@ -79,6 +79,23 @@ Research workload budgets are defined in
 `scripts/check_research_workload_budget.py` before research/nightly and full
 pytest. The preflight uses estimated tick events, audit stream rows, artifact
 write count, hash payload bytes, artifact bytes, and artifact file count.
+At runtime, experiment-scoped research artifacts share one
+`ResearchArtifactContext` across `derived/research/<experiment_id>` and
+`reports/research/<experiment_id>`, including reports, candidate journals,
+candidate results/failures, return panels, statistical evidence, audit streams,
+trace indexes, and trace manifests. `ArtifactBudgetExceeded` is a hard failure
+and must not be swallowed as an audit observability warning. Family and
+experiment JSONL registries are narrow append-only registry exemptions marked
+with `budget_policy=registry_append_only_budget_exempt`.
+
+The repo-local artifact checker rejects generated research/runtime outputs in
+the repository, including `reports/research`, `derived/research`, `traces`,
+`candidate_results`, `candidate_failures`, generated audit JSONL streams,
+database files, `.tmp/pytest`, and `pytest-debug`. JSONL under `tests/fixtures`
+or `examples` is allowed only as narrow static fixture/source material; generated
+stream filenames such as `decisions.jsonl`, `equity.jsonl`,
+`executions.jsonl`, and `candidate_events.jsonl` are forbidden there too unless
+the checker is deliberately updated with a named fixture policy.
 
 Selector-less full pytest is long-running/full validation and is not the
 default PR check. Use `./scripts/run_full_pytest_tests.sh` or the dedicated

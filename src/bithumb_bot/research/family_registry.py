@@ -13,9 +13,17 @@ from .hashing import content_hash_payload, sha256_prefixed
 
 FAMILY_TRIAL_REGISTRY_SCHEMA_VERSION = 1
 EMPTY_REGISTRY_HASH = sha256_prefixed([])
+FAMILY_TRIAL_REGISTRY_BUDGET_POLICY = "registry_append_only_budget_exempt"
 
 
 def family_trial_registry_path(*, manager: PathManager, experiment_family_id: str) -> Path:
+    """Return the managed append-only family registry path.
+
+    Family registries are cross-experiment research audit ledgers under
+    reports/research/families. They are intentionally outside one experiment's
+    ResearchArtifactContext budget, but remain managed, append-only, hashed
+    registry evidence and are covered by repo-local artifact checks.
+    """
     safe_family_id = _safe_path_segment(experiment_family_id)
     path = manager.data_dir() / "reports" / "research" / "families" / safe_family_id / "trial_registry.jsonl"
     project_root = manager.project_root.resolve()
@@ -61,6 +69,7 @@ def append_family_trial_registry_row(
     prior_hash = registry_content_hash(path)
     row: dict[str, Any] = {
         "schema_version": FAMILY_TRIAL_REGISTRY_SCHEMA_VERSION,
+        "budget_policy": FAMILY_TRIAL_REGISTRY_BUDGET_POLICY,
         "experiment_family_id": experiment_family_id,
         "experiment_id": experiment_id,
         "manifest_hash": manifest_hash,

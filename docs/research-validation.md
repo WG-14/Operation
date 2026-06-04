@@ -331,12 +331,25 @@ Workspace controls are `BITHUMB_PYTEST_WORKSPACE_ROOT`,
 Research-run artifacts use run-wide accounting. A single research artifact
 context covers `data/<mode>/derived/research/<experiment_id>` and
 `data/<mode>/reports/research/<experiment_id>` for one experiment. Candidate
-journals, candidate result/failure evidence, report JSON, audit trace JSONL,
-trace indexes, and trace manifests share the same byte/file budget. Audit
-stream row and byte limits are audit-stream sub-limits inside that same run
-budget. Budget overages fail fast with structured reason, observed value,
-configured limit, and path when available; they are not converted to
-observability warnings in real pipeline paths.
+journals, candidate result/failure evidence, report JSON, candidate return
+panels, statistical selection evidence, audit trace JSONL, trace indexes, and
+trace manifests share the same byte/file budget. Audit stream row and byte
+limits are audit-stream sub-limits inside that same run budget. Budget overages
+raise `ArtifactBudgetExceeded` and fail fast with structured reason, observed
+value, configured limit, and path when available; they are not converted to
+observability warnings in real pipeline paths. Generic non-budget audit
+observability failures may still be reported as warnings such as
+`audit_decision_observability_failed`, `audit_equity_observability_failed`, or
+`audit_trace_completion_observability_failed`.
+
+Two append-only registries are narrow budget exemptions because they are
+cross-run ledgers rather than one experiment's generated output payload:
+`reports/research/families/<experiment_family_id>/trial_registry.jsonl` and
+`reports/research/_registry/experiment_registry.jsonl`. Their rows carry a
+`budget_policy=registry_append_only_budget_exempt` marker plus prior-registry
+and row hashes. They remain managed `reports` artifacts, repository-external in
+normal execution, append-only, tamper-checked, and rejected by the repo-local
+runtime artifact checker if accidentally generated inside the repository.
 
 Safe read-only diagnostics:
 
@@ -522,21 +535,26 @@ family trial registry at
 The registry records experiment id, manifest hash, hypothesis metadata, attempt
 index, holdout reuse count, dataset hash, parameter-space hash, candidate count,
 return panel hash, statistical evidence hash, result status, and row hash. The
-current registry binding uses an explicit two-phase design: the row records the
-pre-registry evidence hash and the finalized evidence records the row hash, which
-avoids a recursive hash cycle while keeping both artifacts reproducible. Missing,
-stale, tampered, or partially mismatched registry evidence fails closed; the
-system must not silently fall back to current-experiment-only selection. Family-wide
-statistical aggregation is still not implemented, so production-bound promotion
-claims under `experiment_family` fail closed until the registry contributes to the
-actual statistical universe.
+family registry is an explicit append-only registry exemption from the
+experiment run-wide byte/file budget because it spans multiple experiments in a
+family. The current registry binding uses an explicit two-phase design: the row
+records the pre-registry evidence hash and the finalized evidence records the
+row hash, which avoids a recursive hash cycle while keeping both artifacts
+reproducible. Missing, stale, tampered, or partially mismatched registry
+evidence fails closed; the system must not silently fall back to
+current-experiment-only selection. Family-wide statistical aggregation is still
+not implemented, so production-bound promotion claims under `experiment_family`
+fail closed until the registry contributes to the actual statistical universe.
 
 Production-bound final-holdout exposure is also bound to the experiment attempt
 registry at `DATA_ROOT/<mode>/reports/research/_registry/experiment_registry.jsonl`.
 This registry is promotion-grade audit evidence, not a metadata ledger. It
 records reserved, completed, rejected, promoted, and aborted attempt events as
-append-only JSONL rows with row hashes and prior-registry hashes. Manual JSONL or
-hash editing is not valid recovery.
+append-only JSONL rows with row hashes and prior-registry hashes. It is an
+explicit append-only registry exemption from one experiment's byte/file budget
+for the same reason as the family registry: it is a cross-run attempt ledger
+used for reuse counting and audit binding. Manual JSONL or hash editing is not
+valid recovery.
 
 For production-bound manifests, checked reservation happens before the
 `final_holdout` split is loaded. The reservation row uses only the semantic

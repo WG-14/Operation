@@ -4,8 +4,11 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Runtime/test artifacts must stay outside repository.
-allowlist_regex='^(tests/fixtures/|examples/)'
+# Runtime/test artifacts must stay outside repository. JSONL under fixtures or
+# examples is allowed only as source-controlled static fixture material; known
+# generated stream names stay forbidden everywhere.
+static_fixture_jsonl_regex='^(tests/fixtures/[^/]+\.jsonl|examples/[^/]+\.jsonl|examples/research/[^/]+\.jsonl)$'
+generated_jsonl_regex='(^|/)(decisions|equity|executions|candidate_events)\.jsonl$'
 large_jsonl_bytes="${BITHUMB_REPO_ARTIFACT_JSONL_BYTES:-1048576}"
 
 candidates="$({
@@ -37,7 +40,11 @@ if [[ -n "$candidates" ]]; then
   while IFS= read -r path; do
     [[ -z "$path" ]] && continue
     normalized="${path#./}"
-    if [[ "$normalized" =~ $allowlist_regex ]]; then
+    if [[ "$normalized" =~ $generated_jsonl_regex ]]; then
+      violations+="$normalized"$'\n'
+      continue
+    fi
+    if [[ "$normalized" =~ $static_fixture_jsonl_regex ]]; then
       continue
     fi
     if [[ "$normalized" == *.jsonl && -f "$normalized" ]]; then
