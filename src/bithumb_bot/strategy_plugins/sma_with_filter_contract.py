@@ -30,6 +30,10 @@ SMA_DECISION_EVIDENCE_CONTRACT = DecisionEvidenceContract(
         "snapshot_projector_version",
         "snapshot_projector_hash",
     ),
+    required_live_real_order_one_of_field_groups=(
+        ("fee_authority_hash", "fee_authority_payload_hash"),
+        ("order_rules_hash", "order_rules_payload_hash"),
+    ),
     snapshot_projector_contract="sma_with_filter_snapshot_projector_v1",
     decision_input_contract_kind="generic",
 )

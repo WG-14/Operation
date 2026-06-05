@@ -219,6 +219,13 @@ class StrategyDecisionService:
             value = replay_payload.get(key)
             if str(value or "").strip():
                 provenance[key] = value
+        for group in request.decision_evidence_contract.required_live_real_order_one_of_field_groups:
+            for key in group:
+                if key in provenance:
+                    continue
+                value = replay_payload.get(key)
+                if str(value or "").strip():
+                    provenance[key] = value
         if request.mode in self._PROMOTION_COMPARABLE_MODES and bool(
             provenance.get("compatibility_fallback")
         ):
@@ -299,16 +306,10 @@ class StrategyDecisionService:
         for field_name in request.decision_evidence_contract.required_live_real_order_fields:
             if not str(provenance.get(field_name) or "").strip():
                 missing.append(field_name)
-        if not (
-            str(provenance.get("fee_authority_hash") or "").strip()
-            or str(provenance.get("fee_authority_payload_hash") or "").strip()
-        ):
-            missing.append("fee_authority_hash")
-        if not (
-            str(provenance.get("order_rules_hash") or "").strip()
-            or str(provenance.get("order_rules_payload_hash") or "").strip()
-        ):
-            missing.append("order_rules_hash")
+        for group in request.decision_evidence_contract.required_live_real_order_one_of_field_groups:
+            if any(str(provenance.get(field_name) or "").strip() for field_name in group):
+                continue
+            missing.append("one_of(" + "|".join(group) + ")")
         unavailable = sorted(
             key
             for key, value in provenance.items()

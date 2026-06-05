@@ -27,6 +27,7 @@ from bithumb_bot.strategy_plugins.sma_with_filter_assembly import (
     SmaWithFilterPolicyAssembly,
 )
 from bithumb_bot.strategy_plugins.sma_with_filter_projector import SmaWithFilterSnapshotProjector
+from bithumb_bot.strategy_plugins.sma_with_filter_contract import SMA_DECISION_EVIDENCE_CONTRACT
 from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
 from bithumb_bot.strategy.exit_rules import ExitPolicyConfig
 
@@ -257,6 +258,25 @@ def test_decision_input_bundle_hash_semantics_are_explicit() -> None:
     assert projected.replay_fingerprint["policy_input_payload_hash"] == bundle.decision_input_bundle_payload_hash
     assert projected.replay_fingerprint["decision_input_contract_hash"] == bundle.decision_input_contract_hash
     assert projected.replay_fingerprint["market_feature_hash"] == bundle.market_feature_hash
+
+
+def test_sma_contract_declares_live_real_order_evidence_requirements() -> None:
+    fields = set(SMA_DECISION_EVIDENCE_CONTRACT.required_live_real_order_fields)
+    for field in (
+        "decision_input_bundle_hash",
+        "decision_input_contract_hash",
+        "decision_input_bundle_payload_hash",
+        "market_feature_hash",
+        "final_exit_decision_input_hash",
+        "snapshot_projector_version",
+        "snapshot_projector_hash",
+    ):
+        assert field in fields
+        assert field in SMA_DECISION_EVIDENCE_CONTRACT.required_promotion_provenance_fields
+
+    groups = {frozenset(group) for group in SMA_DECISION_EVIDENCE_CONTRACT.required_live_real_order_one_of_field_groups}
+    assert frozenset({"fee_authority_hash", "fee_authority_payload_hash"}) in groups
+    assert frozenset({"order_rules_hash", "order_rules_payload_hash"}) in groups
 
 
 def test_final_exit_decision_input_hash_drives_policy_input_hash() -> None:

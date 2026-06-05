@@ -11,6 +11,7 @@ class DecisionEvidenceContract:
     requires_decision_input_bundle: bool = False
     required_promotion_provenance_fields: tuple[str, ...] = ()
     required_live_real_order_fields: tuple[str, ...] = ()
+    required_live_real_order_one_of_field_groups: tuple[tuple[str, ...], ...] = ()
     snapshot_projector_contract: str | None = None
     decision_input_contract_kind: str = "generic"
 
@@ -33,6 +34,11 @@ class DecisionEvidenceContract:
             "required_live_real_order_fields",
             _normalize_fields(self.required_live_real_order_fields),
         )
+        object.__setattr__(
+            self,
+            "required_live_real_order_one_of_field_groups",
+            _normalize_one_of_groups(self.required_live_real_order_one_of_field_groups),
+        )
         if self.snapshot_projector_contract is not None:
             projector = str(self.snapshot_projector_contract or "").strip()
             if not projector:
@@ -45,6 +51,9 @@ class DecisionEvidenceContract:
             "requires_decision_input_bundle": bool(self.requires_decision_input_bundle),
             "required_promotion_provenance_fields": list(self.required_promotion_provenance_fields),
             "required_live_real_order_fields": list(self.required_live_real_order_fields),
+            "required_live_real_order_one_of_field_groups": [
+                list(group) for group in self.required_live_real_order_one_of_field_groups
+            ],
             "snapshot_projector_contract": self.snapshot_projector_contract,
             "decision_input_contract_kind": self.decision_input_contract_kind,
             "contract_hash": self.contract_hash(),
@@ -56,6 +65,9 @@ class DecisionEvidenceContract:
             "requires_decision_input_bundle": bool(self.requires_decision_input_bundle),
             "required_promotion_provenance_fields": list(self.required_promotion_provenance_fields),
             "required_live_real_order_fields": list(self.required_live_real_order_fields),
+            "required_live_real_order_one_of_field_groups": [
+                list(group) for group in self.required_live_real_order_one_of_field_groups
+            ],
             "snapshot_projector_contract": self.snapshot_projector_contract,
             "decision_input_contract_kind": self.decision_input_contract_kind,
         }
@@ -69,6 +81,16 @@ def _normalize_fields(fields: tuple[str, ...]) -> tuple[str, ...]:
     if any(not field for field in normalized):
         raise ValueError("decision_evidence_required_field_empty")
     return tuple(normalized)
+
+
+def _normalize_one_of_groups(groups: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
+    normalized_groups: list[tuple[str, ...]] = []
+    for raw_group in tuple(groups or ()):
+        group = _normalize_fields(tuple(raw_group or ()))
+        if len(group) < 2:
+            raise ValueError("decision_evidence_required_one_of_group_too_small")
+        normalized_groups.append(group)
+    return tuple(sorted(set(normalized_groups)))
 
 
 GENERIC_DECISION_EVIDENCE_CONTRACT = DecisionEvidenceContract()

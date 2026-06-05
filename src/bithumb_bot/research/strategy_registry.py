@@ -362,7 +362,13 @@ class ResearchStrategyPlugin:
             raise ValueError(f"strategy live real-order capability missing adapter: {self.name}")
         if not isinstance(self.decision_evidence_contract, DecisionEvidenceContract):
             raise TypeError(f"strategy decision evidence contract invalid: {self.name}")
-        if self.runtime_capabilities.live_dry_run_allowed:
+        if self.runtime_capabilities.live_real_order_allowed:
+            _validate_live_real_order_evidence_contract(
+                strategy_name=self.name,
+                capabilities=self.runtime_capabilities,
+                contract=self.decision_evidence_contract,
+            )
+        elif self.runtime_capabilities.live_dry_run_allowed:
             evidence_payload = self.decision_evidence_contract.payload_without_hash()
             if (
                 not bool(evidence_payload["requires_decision_input_bundle"])
@@ -615,6 +621,60 @@ def _legacy_inferred_runtime_capabilities(plugin: ResearchStrategyPlugin) -> Str
             else "legacy_plugin_capability_inferred_live_real_order_not_allowed"
         ),
     )
+
+
+_LIVE_REAL_ORDER_REQUIRED_CONTRACT_FIELDS = frozenset(
+    {
+        "decision_input_bundle_hash",
+        "decision_input_contract_hash",
+        "decision_input_bundle_payload_hash",
+        "market_feature_hash",
+        "final_exit_decision_input_hash",
+        "snapshot_projector_version",
+        "snapshot_projector_hash",
+    }
+)
+
+_LIVE_REAL_ORDER_REQUIRED_ONE_OF_GROUPS = frozenset(
+    {
+        frozenset({"fee_authority_hash", "fee_authority_payload_hash"}),
+        frozenset({"order_rules_hash", "order_rules_payload_hash"}),
+    }
+)
+
+
+def _validate_live_real_order_evidence_contract(
+    *,
+    strategy_name: str,
+    capabilities: StrategyRuntimeCapabilities,
+    contract: DecisionEvidenceContract,
+) -> None:
+    missing: list[str] = []
+    if not bool(capabilities.approved_profile_required):
+        missing.append("approved_profile_required")
+    if not str(contract.snapshot_projector_contract or "").strip():
+        missing.append("snapshot_projector_contract")
+    live_fields = set(contract.required_live_real_order_fields)
+    missing_fields = sorted(_LIVE_REAL_ORDER_REQUIRED_CONTRACT_FIELDS - live_fields)
+    missing.extend(missing_fields)
+    declared_groups = frozenset(
+        frozenset(group) for group in contract.required_live_real_order_one_of_field_groups
+    )
+    missing_groups = sorted(
+        "|".join(sorted(group))
+        for group in _LIVE_REAL_ORDER_REQUIRED_ONE_OF_GROUPS
+        if group not in declared_groups
+    )
+    missing.extend(f"one_of({group})" for group in missing_groups)
+    if not live_fields and not declared_groups:
+        missing.append("generic_or_empty_contract")
+    if missing:
+        raise ValueError(
+            "strategy_live_real_order_decision_evidence_contract_incomplete:"
+            + strategy_name
+            + ":"
+            + ",".join(sorted(set(missing)))
+        )
 
 
 def _authoring_level_for_contract_kind(kind: str) -> str:

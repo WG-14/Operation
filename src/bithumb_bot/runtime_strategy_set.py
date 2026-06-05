@@ -55,6 +55,30 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
+def _resolve_plugin_or_none(strategy_name: str) -> object | None:
+    try:
+        return resolve_research_strategy_plugin(strategy_name)
+    except ResearchStrategyRegistryError:
+        return None
+
+
+def _plugin_accepts_empty_runtime_parameters(plugin: object | None) -> bool:
+    if plugin is None:
+        return False
+    capabilities = getattr(plugin, "runtime_capabilities", None)
+    spec = getattr(plugin, "spec", None)
+    return (
+        capabilities is not None
+        and spec is not None
+        and bool(getattr(capabilities, "runtime_decision_supported", False))
+        and not bool(getattr(capabilities, "approved_profile_required", True))
+        and not bool(getattr(capabilities, "live_dry_run_allowed", False))
+        and not bool(getattr(capabilities, "live_real_order_allowed", False))
+        and getattr(plugin, "runtime_parameter_adapter", None) is not None
+        and not tuple(getattr(spec, "accepted_parameter_names", ()) or ())
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeStrategySpec:
     strategy_name: str
@@ -610,7 +634,8 @@ class ParameterAuthorityResolver:
                     "legacy_compatibility_used": False,
                 },
             )
-        if spec.strategy_name == "safe_hold":
+        plugin = _resolve_plugin_or_none(spec.strategy_name)
+        if _plugin_accepts_empty_runtime_parameters(plugin):
             source = "runtime_strategy_spec"
             return (
                 {},
@@ -651,10 +676,6 @@ class ParameterAuthorityResolver:
                     "legacy_compatibility_used": True,
                 },
             )
-        try:
-            plugin = resolve_research_strategy_plugin(spec.strategy_name)
-        except ResearchStrategyRegistryError:
-            plugin = None
         if plugin is not None and plugin.runtime_parameter_adapter is not None:
             if strict:
                 raise RuntimeError(
@@ -681,9 +702,10 @@ class ParameterAuthorityResolver:
         spec: RuntimeStrategySpec,
         raw_parameters: Mapping[str, object],
     ) -> dict[str, object]:
-        if spec.strategy_name == "safe_hold":
+        plugin = _resolve_plugin_or_none(spec.strategy_name)
+        if _plugin_accepts_empty_runtime_parameters(plugin):
             if raw_parameters:
-                raise RuntimeError("runtime_strategy_parameters_unsupported:safe_hold")
+                raise RuntimeError(f"runtime_strategy_parameters_unsupported:{spec.strategy_name}")
             return {}
         raw = {str(key): value for key, value in dict(raw_parameters or {}).items()}
         required_runtime_bound = set(runtime_bound_behavior_parameter_names(spec.strategy_name))
@@ -724,12 +746,7 @@ class RuntimeDecisionRequestBuilder:
         self,
         spec: RuntimeStrategySpec,
     ) -> RuntimeStrategyInstance:
-        try:
-            plugin = resolve_research_strategy_plugin(spec.strategy_name)
-        except (ResearchStrategyRegistryError, ApprovedProfileError):
-            if spec.strategy_name != "safe_hold":
-                raise
-            plugin = None
+        plugin = resolve_research_strategy_plugin(spec.strategy_name)
         cfg = replace(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
         approved_profile_path = (
             spec.approved_profile_path
@@ -761,7 +778,7 @@ class RuntimeDecisionRequestBuilder:
         try:
             settings_runtime_contract = runtime_contract_from_settings(cfg)
         except (ResearchStrategyRegistryError, ApprovedProfileError):
-            if spec.strategy_name != "safe_hold":
+            if not _plugin_accepts_empty_runtime_parameters(plugin):
                 raise
             settings_runtime_contract = {
                 "schema_version": 1,
@@ -778,8 +795,8 @@ class RuntimeDecisionRequestBuilder:
         runtime_contract["strategy_parameters"] = dict(parameters)
         if approved_profile_path and not str(runtime_contract.get("profile_selector") or "").strip():
             runtime_contract["profile_selector"] = approved_profile_path
-        if spec.strategy_name == "safe_hold":
-            runtime_contract["exit_policy"] = {"schema_version": 1, "rules": (), "strategy_name": "safe_hold"}
+        if _plugin_accepts_empty_runtime_parameters(plugin):
+            runtime_contract["exit_policy"] = dict(plugin.spec.exit_policy_schema)
         else:
             runtime_contract["exit_policy"] = exit_policy_from_parameters(spec.strategy_name, dict(parameters))
         runtime_contract["exit_policy_hash"] = sha256_prefixed(runtime_contract["exit_policy"])
