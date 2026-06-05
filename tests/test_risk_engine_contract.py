@@ -7,7 +7,7 @@ import pytest
 
 from bithumb_bot.reason_codes import POSITION_LOSS_LIMIT
 from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, set_portfolio_breakdown
+from bithumb_bot.db_core import ensure_db, record_strategy_decision, set_portfolio_breakdown
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
 from bithumb_bot.risk import DAILY_LOSS_LIMIT_REASON_CODE, RISK_STATE_MISMATCH, fetch_recent_risk_evaluations
 from bithumb_bot.risk_contract import RiskPolicy, RiskSnapshot, SubmitPlan
@@ -180,12 +180,29 @@ def test_strategy_risk_state_provider_derives_reproducible_snapshot_and_blocks_c
         asset_available=0.0,
         asset_locked=0.0,
     )
+    decision_id = record_strategy_decision(
+        conn,
+        decision_ts=1_800_000_000_000,
+        strategy_name="sma_with_filter",
+        signal="BUY",
+        reason="unit",
+        candle_ts=1_800_000_000_000,
+        market_price=100.0,
+        context={
+            "strategy_instance_id": "sma:unit",
+            "pair": "KRW-BTC",
+            "interval": "1m",
+        },
+    )
     conn.execute(
         """
-        INSERT INTO orders(client_order_id, side, qty_req, qty_filled, status, created_ts, updated_ts)
-        VALUES ('order-1', 'BUY', 0.1, 0.0, 'FILLED', ?, ?)
+        INSERT INTO orders(
+            client_order_id, side, qty_req, qty_filled, status,
+            entry_decision_id, created_ts, updated_ts
+        )
+        VALUES ('order-1', 'BUY', 0.1, 0.0, 'FILLED', ?, ?, ?)
         """,
-        (1_800_000_000_000, 1_800_000_000_000),
+        (decision_id, 1_800_000_000_000, 1_800_000_000_000),
     )
     conn.commit()
     policy = RiskPolicy(max_daily_order_count=1, source="unit")
@@ -214,10 +231,117 @@ def test_strategy_risk_state_provider_derives_reproducible_snapshot_and_blocks_c
     decision = RiskPolicyEngine(policy).evaluate_pre_decision(first)
 
     assert first.input_hash() == second.input_hash()
-    assert first.state_source == "runtime_db_ledger"
+    assert first.state_source == "runtime_db_strategy_instance_ledger"
     assert str(first.evidence["risk_state_evidence_hash"]).startswith("sha256:")
+    assert first.evidence["scope"] == "strategy_instance"
     assert decision.reason_code == "MAX_DAILY_ORDER_COUNT"
     assert decision.status == "BLOCK"
+
+
+def test_strategy_risk_state_provider_does_not_share_same_pair_instance_state(tmp_path) -> None:
+    db_path = tmp_path / "strategy-risk-scope.sqlite"
+    conn = ensure_db(str(db_path))
+    alpha_decision_id = record_strategy_decision(
+        conn,
+        decision_ts=1_800_000_000_000,
+        strategy_name="sma_with_filter",
+        signal="BUY",
+        reason="unit",
+        candle_ts=1_800_000_000_000,
+        market_price=100.0,
+        context={"strategy_instance_id": "alpha", "pair": "KRW-BTC", "interval": "1m"},
+    )
+    beta_decision_id = record_strategy_decision(
+        conn,
+        decision_ts=1_800_000_000_000,
+        strategy_name="sma_with_filter",
+        signal="BUY",
+        reason="unit",
+        candle_ts=1_800_000_000_000,
+        market_price=100.0,
+        context={"strategy_instance_id": "beta", "pair": "KRW-BTC", "interval": "1m"},
+    )
+    conn.execute(
+        """
+        INSERT INTO orders(
+            client_order_id, side, qty_req, qty_filled, status,
+            entry_decision_id, created_ts, updated_ts
+        )
+        VALUES ('alpha-order', 'BUY', 0.1, 0.0, 'FILLED', ?, ?, ?)
+        """,
+        (alpha_decision_id, 1_800_000_000_000, 1_800_000_000_000),
+    )
+    conn.execute(
+        """
+        INSERT INTO open_position_lots(
+            pair, entry_trade_id, entry_client_order_id, entry_ts, entry_price,
+            qty_open, executable_lot_count, position_state, entry_decision_id
+        )
+        VALUES ('KRW-BTC', 1, 'alpha-order', ?, 100.0, 0.25, 1, 'open_exposure', ?)
+        """,
+        (1_800_000_000_000, alpha_decision_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO trades(
+            ts, pair, interval, side, price, qty, fee, cash_after, asset_after,
+            entry_decision_id, strategy_name
+        )
+        VALUES (?, 'KRW-BTC', '1m', 'BUY', 100.0, 0.25, 0.0, 0.0, 0.25, ?, 'sma_with_filter')
+        """,
+        (1_800_000_000_000, alpha_decision_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO trade_lifecycles(
+            entry_trade_id, exit_trade_id, pair, entry_client_order_id, exit_client_order_id,
+            entry_ts, exit_ts, matched_qty, entry_price, exit_price, gross_pnl, fee_total,
+            net_pnl, holding_time_sec, strategy_name, strategy_instance_id
+        )
+        VALUES (1, 2, 'KRW-BTC', 'alpha-order', 'alpha-sell', ?, ?, 0.25, 100.0, 90.0,
+                -10.0, 0.0, -10.0, 60.0, 'sma_with_filter', 'alpha')
+        """,
+        (1_800_000_000_000, 1_800_000_060_000),
+    )
+    conn.commit()
+    provider = StrategyRiskStateProvider(conn)
+    policy = RiskPolicy(
+        max_daily_order_count=1,
+        max_trade_count_per_day=1,
+        max_daily_loss_krw=1.0,
+        source="unit",
+    )
+
+    alpha = provider.snapshot(
+        strategy_instance_id="alpha",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        as_of_ts_ms=1_800_000_120_000,
+        mark_price=100.0,
+        policy=policy,
+        enforced=True,
+    )
+    beta = provider.snapshot(
+        strategy_instance_id="beta",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        as_of_ts_ms=1_800_000_120_000,
+        mark_price=100.0,
+        policy=policy,
+        enforced=True,
+    )
+
+    assert beta_decision_id != alpha_decision_id
+    assert alpha.daily_order_count == 1
+    assert beta.daily_order_count == 0
+    assert alpha.daily_trade_count == 1
+    assert beta.daily_trade_count == 0
+    assert alpha.current_asset_qty == pytest.approx(0.25)
+    assert beta.current_asset_qty == pytest.approx(0.0)
+    assert alpha.loss_today == pytest.approx(10.0)
+    assert beta.loss_today == pytest.approx(0.0)
 
 
 def test_enforced_strategy_risk_state_reports_missing_required_fields() -> None:

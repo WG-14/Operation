@@ -20,7 +20,8 @@ Runtime strategy set
   -> SignalAggregator
   -> PortfolioAllocator
   -> authoritative PortfolioTarget linked through the allocation decision
-  -> risk / readiness / target-delta planning
+  -> portfolio/allocation risk decision
+  -> readiness / target-delta planning
   -> ExecutionSubmitPlan linked to the same manifest
   -> execution service
 ```
@@ -33,7 +34,14 @@ Runtime strategy set
 - `SignalAggregator` validates typed strategy preferences and creates a deterministic preference set.
 - `PortfolioAllocator` converts one or more preferences into one authoritative `PortfolioTarget` for the runtime pair. The allocator remains portfolio-shaped for future extension, but production execution is single-pair and single-interval only.
 - `PortfolioTarget` carries allocator policy, allocator config hash, strategy contribution hash, allocation input hash, final target hash, conflict metadata, authoritativeness, and fail-closed reason.
-- `ExecutionSubmitPlan` remains the final execution authority.
+- `PortfolioRiskDecision` is created after an authoritative `PortfolioTarget`
+  and before submittable execution planning. It is distinct from exposure-cap
+  metadata and carries `portfolio_risk_decision_hash`,
+  `portfolio_risk_policy_hash`, `portfolio_risk_input_hash`,
+  `portfolio_risk_state_source`, effective limits, and replayable evidence.
+- `ExecutionSubmitPlan` remains the final execution authority, but live
+  real-order submission also requires a valid pre-submit operational risk
+  approval bound to the stable submit-plan hash.
 
 Strategy modules and runtime adapters must not create live orders or authoritative submit plans. Their `final_signal` and `execution_intent` fields are strategy preferences only. `StrategyDecisionV2.execution_intent` is preserved as a non-authoritative hint for diagnostics and reproducibility.
 
@@ -95,8 +103,15 @@ For the initial deterministic allocator policy:
 - Equal-priority `BUY` plus `SELL`, including `BUY` plus `SELL` plus `HOLD`, fails closed.
 - Higher-priority strategies win over lower-priority conflicting strategies; lower numeric priority is higher authority.
 - BUY target exposure is the weighted average of selected BUY strategy desired exposures. If any selected BUY contribution carries `max_target_exposure_krw`, the result is capped by the sum of selected BUY exposure caps.
-- `max_target_exposure_krw` is the allocator exposure cap. Historical `risk_budget_krw` is deprecated, preserved only as non-authoritative metadata, and no longer falls back into `max_target_exposure_krw`.
+- `max_target_exposure_krw` is the allocator exposure cap. Historical `risk_budget_krw` is deprecated compatibility metadata only. It must not drive sizing, exposure caps, loss limits, target exposure, submit eligibility, or operational risk decisions, and it no longer falls back into `max_target_exposure_krw`.
 - Strategy-level loss/order/drawdown/cooldown policy is separate from exposure caps. Runtime strategy specs and preferences may carry typed `risk_policy` and `risk_snapshot` evidence with `max_daily_loss_krw`, `max_daily_order_count`, `max_trade_count_per_day`, `max_drawdown_pct`, and `cooldown_after_loss_min`. If a selected BUY contribution violates policy, the allocator fails closed before authoritative `PortfolioTarget` adoption and records the blocking `strategy_risk_decision_hash`.
+
+Exposure-cap metadata is recorded as `exposure_boundary_artifact` and
+`exposure_boundary_artifact_hash`. Legacy `risk_decision` and
+`risk_decision_hash` aliases on exposure-boundary payloads are
+non-authoritative compatibility fields. Operational risk authority is recorded
+with typed layer-specific hashes: `strategy_risk_decision_hash`,
+`portfolio_risk_decision_hash`, and `pre_submit_risk_decision_hash`.
 
 ## Runtime Manifest
 
@@ -153,3 +168,7 @@ Target-delta execution planning blocks when allocator authority is missing or ma
 - legacy dict/context-only live real-order path
 
 Observability dictionaries remain non-authoritative. Live real-order submission still requires typed execution summary and typed `ExecutionSubmitPlan`, and target-delta live submission additionally requires authoritative portfolio target metadata on the typed plan.
+Direct lower-boundary broker calls cannot use compatibility-only exposure
+metadata or dict-only submit plans to bypass the pre-submit risk proof. The
+live broker path validates the pre-submit risk status, decision/policy/input
+hashes, reason code, state source, and plan hash before placing a real order.

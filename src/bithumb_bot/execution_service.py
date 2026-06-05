@@ -1292,6 +1292,20 @@ def _portfolio_target_authority_error(
         return "portfolio_target_hash_missing"
     if str(portfolio_target_hash) != expected_hash:
         return "portfolio_target_hash_mismatch"
+    portfolio_target_payload = portfolio_target.as_dict()
+    if str(portfolio_target_payload.get("portfolio_risk_status") or "") != "ALLOW":
+        return str(
+            portfolio_target_payload.get("portfolio_risk_reason_code")
+            or "portfolio_risk_not_allow"
+        )
+    for field in (
+        "portfolio_risk_decision_hash",
+        "portfolio_risk_policy_hash",
+        "portfolio_risk_input_hash",
+        "portfolio_risk_state_source",
+    ):
+        if not str(portfolio_target_payload.get(field) or "").strip():
+            return f"{field}_missing"
     if not str(portfolio_target.allocation_input_hash or "").strip():
         return "allocator_input_hash_missing"
     if not str(portfolio_target.strategy_contribution_hash or "").strip():
@@ -1593,6 +1607,30 @@ def _build_execution_decision_summary_from_authority_payload(
                     False if portfolio_target is None else bool(portfolio_target.authoritative)
                 ),
                 "portfolio_target_hash": portfolio_target_hash,
+                "portfolio_risk_decision": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_decision")
+                ),
+                "portfolio_risk_decision_hash": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_decision_hash")
+                ),
+                "portfolio_risk_policy_hash": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_policy_hash")
+                ),
+                "portfolio_risk_input_hash": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_input_hash")
+                ),
+                "portfolio_risk_evidence_hash": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_evidence_hash")
+                ),
+                "portfolio_risk_status": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_status")
+                ),
+                "portfolio_risk_reason_code": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_reason_code")
+                ),
+                "portfolio_risk_state_source": (
+                    None if portfolio_target is None else portfolio_target.as_dict().get("portfolio_risk_state_source")
+                ),
                 "allocation_decision_hash": str(payload.get("allocation_decision_hash") or ""),
                 "allocator_config_hash": str(payload.get("allocator_config_hash") or ""),
                 "strategy_contribution_hash": str(payload.get("strategy_contribution_hash") or ""),

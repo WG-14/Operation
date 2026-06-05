@@ -785,6 +785,9 @@ def test_exposure_cap_limits_buy_target_with_declared_semantics() -> None:
     assert target.target_exposure_krw == pytest.approx(30_000.0)
     assert target.as_dict()["exposure_cap_applied"] is True
     assert target.as_dict()["risk_budget_semantics"] == "deprecated_non_authoritative_not_exposure_cap"
+    assert target.as_dict()["portfolio_risk_status"] == "ALLOW"
+    assert str(target.as_dict()["portfolio_risk_decision_hash"]).startswith("sha256:")
+    assert target.content_hash() == target.as_dict()["final_portfolio_target_hash"]
 
 
 def test_target_delta_typed_planning_uses_allocator_portfolio_target(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -822,6 +825,11 @@ def test_target_delta_typed_planning_uses_allocator_portfolio_target(monkeypatch
     assert plan.extra_payload["portfolio_target_authoritative"] is True
     assert plan.extra_payload["portfolio_target_hash"] == target.content_hash()
     assert plan.extra_payload["allocation_decision_hash"] == allocation.content_hash()
+    assert plan.extra_payload["portfolio_risk_status"] == "ALLOW"
+    assert plan.extra_payload["portfolio_risk_state_source"] == "portfolio_allocator_target"
+    assert str(plan.extra_payload["portfolio_risk_decision_hash"]).startswith("sha256:")
+    assert str(plan.extra_payload["portfolio_risk_policy_hash"]).startswith("sha256:")
+    assert str(plan.extra_payload["portfolio_risk_input_hash"]).startswith("sha256:")
 
 
 def test_run_loop_single_strategy_path_passes_through_allocator() -> None:

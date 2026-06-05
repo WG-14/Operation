@@ -299,6 +299,8 @@ def test_operational_pre_submit_risk_approval_requires_allow_and_matching_plan_h
         "pre_submit_risk_policy_hash": "sha256:policy",
         "pre_submit_risk_input_hash": "sha256:input",
         "pre_submit_risk_plan_hash": "sha256:plan",
+        "pre_submit_risk_reason_code": "OK",
+        "pre_submit_risk_state_source": "runtime_db_broker",
     }
 
     assert operational_pre_submit_risk_approval_error(
@@ -317,6 +319,14 @@ def test_operational_pre_submit_risk_approval_requires_allow_and_matching_plan_h
         {**payload, "pre_submit_risk_decision_hash": ""},
         expected_submit_plan_hash="sha256:plan",
     ) == "live_real_order_pre_submit_risk_decision_hash_missing"
+    assert operational_pre_submit_risk_approval_error(
+        {**payload, "pre_submit_risk_reason_code": ""},
+        expected_submit_plan_hash="sha256:plan",
+    ) == "live_real_order_pre_submit_risk_reason_code_missing"
+    assert operational_pre_submit_risk_approval_error(
+        {**payload, "pre_submit_risk_state_source": ""},
+        expected_submit_plan_hash="sha256:plan",
+    ) == "live_real_order_pre_submit_risk_state_source_missing"
 
 
 def _typed_target_execution_summary() -> ExecutionDecisionSummary:

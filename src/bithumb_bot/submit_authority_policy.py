@@ -277,6 +277,12 @@ def operational_pre_submit_risk_approval_error(
     ):
         if not str(payload.get(field) or "").strip().startswith("sha256:"):
             return f"live_real_order_{field}_missing"
+    for field in (
+        "pre_submit_risk_reason_code",
+        "pre_submit_risk_state_source",
+    ):
+        if not str(payload.get(field) or "").strip():
+            return f"live_real_order_{field}_missing"
     actual_plan_hash = str(payload.get("pre_submit_risk_plan_hash") or "").strip()
     if not str(expected_submit_plan_hash or "").strip():
         return "live_real_order_pre_submit_expected_plan_hash_missing"

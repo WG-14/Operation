@@ -8,7 +8,7 @@ from .canonical_decision import sha256_prefixed
 RISK_BUDGET_SEMANTICS = "deprecated_non_authoritative_not_exposure_cap"
 RISK_BUDGET_LEGACY_MARKER = "deprecated:risk_budget_krw_not_enforced_as_loss_budget"
 EXPOSURE_BOUNDARY_ARTIFACT_AUTHORITY_LABEL = "ExposureBoundaryArtifact.v1"
-RISK_DECISION_AUTHORITY_LABEL = EXPOSURE_BOUNDARY_ARTIFACT_AUTHORITY_LABEL
+RISK_DECISION_AUTHORITY_LABEL = "legacy_non_authoritative_exposure_boundary_alias"
 
 
 def build_exposure_boundary_artifact(
@@ -39,6 +39,7 @@ def build_exposure_boundary_artifact(
         "risk_budget_legacy_marker": RISK_BUDGET_LEGACY_MARKER,
     }
     payload["exposure_boundary_artifact_hash"] = exposure_boundary_artifact_hash(payload)
+    payload["risk_decision_alias_authority"] = "non_authoritative_compatibility_alias"
     payload["risk_decision_hash"] = payload["exposure_boundary_artifact_hash"]
     return payload
 
@@ -68,4 +69,5 @@ def exposure_boundary_artifact_hash(payload: Mapping[str, object]) -> str:
 
 
 def risk_decision_hash(payload: Mapping[str, object]) -> str:
+    """Compatibility alias for legacy exposure-boundary artifacts only."""
     return exposure_boundary_artifact_hash(payload)

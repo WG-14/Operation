@@ -686,6 +686,7 @@ def execute_live_submission_and_application(
                 )
             )
             return None
+        decision_observability.update(pre_submit_risk_fields)
 
     existing = conn.execute(
         "SELECT status FROM orders WHERE client_order_id=?",

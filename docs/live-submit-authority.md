@@ -122,21 +122,83 @@ target-delta allocator path even when there is only one strategy instance.
 
 ## Risk And Exposure Semantics
 
-`risk_budget_krw` is not an exposure cap. The exposure-cap concept is
-`max_target_exposure_krw`. Runtime strategy manifests, strategy preferences,
-allocation decisions, portfolio targets, and submit plans emit a
-`risk_decision` artifact and `risk_decision_hash` recording:
+`risk_budget_krw` is deprecated compatibility metadata only. It is not an
+exposure cap, loss budget, sizing input, submit eligibility input, or
+operational risk-policy input. The exposure-cap concept is
+`max_target_exposure_krw`.
+
+Exposure-cap metadata is recorded as an `exposure_boundary_artifact` with
+`exposure_boundary_artifact_hash`. Any retained `risk_decision` or
+`risk_decision_hash` fields on those exposure-boundary payloads are
+non-authoritative compatibility aliases only. They must not be used for
+live-real-order admission. Typed operational risk decisions use layer-specific
+fields such as `strategy_risk_decision_hash`,
+`portfolio_risk_decision_hash`, and `pre_submit_risk_decision_hash`.
+
+Exposure-boundary artifacts record:
 
 - `risk_budget_interpreted_as_exposure_cap=false`
 - `exposure_cap_source=max_target_exposure_krw` when an exposure cap applies
 
+The runtime risk authority chain is three-layered:
+
+```text
+StrategyRiskProfile
+-> StrategyRiskStateProvider(strategy_instance_id, pair, interval, as_of_ts_ms)
+-> StrategyRiskDecision
+-> PortfolioAllocator / PortfolioTarget
+-> PortfolioRiskDecision
+-> ExecutionSubmitPlan
+-> PreSubmitRiskDecision
+-> SubmitAuthorityPolicy / live broker submission
+```
+
 Strategy-level loss/order/drawdown/cooldown policy is represented separately
 from exposure caps by the typed risk policy fields `max_daily_loss_krw`,
 `max_daily_order_count`, `max_trade_count_per_day`, `max_drawdown_pct`, and
-`cooldown_after_loss_min`. A selected strategy risk-policy violation blocks
+`cooldown_after_loss_min`. Runtime strategy risk state is strategy-instance
+scoped where enforced policy uses it; if the live path cannot derive a required
+strategy-instance state field reliably, it fails closed with explicit
+missing-state evidence. A selected strategy risk-policy violation blocks
 authoritative `PortfolioTarget` adoption before a submittable target-delta plan
-can be created, and the blocking risk decision hash is carried in allocation
-and execution context.
+can be created, and the blocking strategy risk decision hash is carried in
+allocation and execution context.
+
+After the authoritative `PortfolioTarget` is created, a separate
+`PortfolioRiskDecision` records `portfolio_risk_decision_hash`,
+`portfolio_risk_policy_hash`, `portfolio_risk_input_hash`,
+`portfolio_risk_state_source`, effective limits, and replayable evidence. A
+non-ALLOW portfolio risk decision prevents submittable target-delta planning.
+
+Immediately before live broker submission,
+`RuntimeRiskEngineAdapter.evaluate_pre_submit()` evaluates the stable
+`ExecutionSubmitPlan` hash. Live-real-order submission requires:
+
+- `pre_submit_risk_status=ALLOW`
+- `pre_submit_risk_decision_hash`
+- `pre_submit_risk_policy_hash`
+- `pre_submit_risk_input_hash`
+- `pre_submit_risk_plan_hash`
+- `pre_submit_risk_reason_code`
+- `pre_submit_risk_state_source`
+
+`pre_submit_risk_plan_hash` must equal the stable
+`ExecutionSubmitPlan.submit_plan_hash` evaluated by the risk engine. The final
+broker submission path validates this proof after runtime DB/broker state is
+available and before placing the order.
+
+Hash order is deterministic:
+
+1. `ExecutionSubmitPlan.content_hash()` hashes the typed submit plan fields and
+   extra payload, excluding `content_hash` and `submit_plan_hash`.
+2. `ExecutionSubmitPlan.as_final_payload()` sets `submit_plan_hash` to that
+   stable content hash, then adds schema/version authority fields and computes
+   the final payload `content_hash` over the final serialization while still
+   excluding `content_hash` and `submit_plan_hash`.
+3. `RuntimeRiskEngineAdapter.evaluate_pre_submit()` receives the stable
+   `submit_plan_hash` in `SubmitPlan.evidence`.
+4. The live lower boundary requires `pre_submit_risk_plan_hash` to match the
+   stable `submit_plan_hash` before any real order is placed.
 
 The deprecated marker
 `deprecated:risk_budget_krw_not_enforced_as_loss_budget` may still appear as
@@ -177,7 +239,7 @@ strategy decisions
 -> previous/current exposure
 -> target delta
 -> exchange order rules
--> risk decision marker
+-> exposure-boundary artifact and typed risk-layer decisions
 -> final ExecutionSubmitPlan
 -> submitted qty/notional
 ```
@@ -187,8 +249,9 @@ Relevant fields include `portfolio_target_hash`, `allocation_decision_hash`,
 `execution_submit_plan_hash`, `submit_authority_mode`,
 `submit_authority_policy_hash`, `allowed_submit_plan_sources`,
 `allowed_submit_plan_authorities`,
-`legacy_lot_native_compat_enabled`, `risk_decision`, and
-`risk_decision_hash`. The runtime strategy-set manifest records the same submit
-policy mode, allowed sources/authorities, legacy compatibility flag, and policy
-hash so a run-start artifact binds the submit policy used by later execution
-plans.
+`legacy_lot_native_compat_enabled`, `exposure_boundary_artifact_hash`,
+`strategy_risk_decision_hash`, `portfolio_risk_decision_hash`, and
+`pre_submit_risk_decision_hash`. The runtime strategy-set manifest records the
+same submit policy mode, allowed sources/authorities, legacy compatibility
+flag, and policy hash so a run-start artifact binds the submit policy used by
+later execution plans.

@@ -230,7 +230,7 @@ Expected BUY sizing behavior:
 - Live real-order startup requires `EXECUTION_ENGINE=target_delta`.
 - `lot_native` is compatibility-only for paper, research, diagnostics, and non-submitting migration compatibility; it is not a live promotion real-order path.
 - `TARGET_EXECUTION_SHADOW=true` remains diagnostic telemetry only and does not authorize live real-order submission.
-- Target state and submit plans are persisted with `portfolio_target_hash`, `allocation_decision_hash`, `strategy_contribution_hash`, `submit_plan_hash`, `submit_authority_mode`, `submit_authority_policy_hash`, and the risk decision marker.
+- Target state and submit plans are persisted with `portfolio_target_hash`, `allocation_decision_hash`, `strategy_contribution_hash`, `submit_plan_hash`, `submit_authority_mode`, `submit_authority_policy_hash`, `exposure_boundary_artifact_hash`, and typed risk-layer hashes such as `strategy_risk_decision_hash`, `portfolio_risk_decision_hash`, and `pre_submit_risk_decision_hash`.
 - Compare `raw_signal`, `final_signal`, `final_action`, `submit_expected`, `execution_block_reason`, `residual_live_sell_mode`, and `residual_buy_sizing_mode` against `target_delta_side`, `target_would_submit`, `target_submit_qty`, `target_delta_notional_krw`, `target_block_reason`, and `target_position_truth_state` in `decision-telemetry` or `ops-report`.
 8. Run `uv run bithumb-bot reconcile` if state needs to be refreshed.
 9. Re-run `health` and confirm `trading_enabled` is healthy, `can_resume=true`, and the current dust indicators do not contradict resume.
