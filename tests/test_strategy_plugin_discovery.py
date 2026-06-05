@@ -153,7 +153,7 @@ def _dynamic_plugin(
             research_only=not runtime_supported,
             baseline_only=False,
             live_dry_run_allowed=runtime_supported,
-            live_real_order_allowed=runtime_supported,
+            live_real_order_allowed=False,
             approved_profile_required=runtime_supported,
             fail_closed_reason=(
                 "dynamic_plugin_runtime_unsupported"
@@ -163,7 +163,55 @@ def _dynamic_plugin(
         ),
         decision_evidence_contract=DecisionEvidenceContract(
             required_promotion_provenance_fields=("policy_input_hash",),
-            required_live_real_order_fields=("policy_input_hash",),
+        ),
+    )
+
+
+def _dynamic_real_order_plugin_with_incomplete_contract() -> ResearchStrategyPlugin:
+    spec = StrategySpec(
+        strategy_name="dynamic_real_order_unit",
+        strategy_version="dynamic_real_order_unit.contract.v1",
+        accepted_parameter_names=(),
+        required_parameter_names=(),
+        behavior_affecting_parameter_names=(),
+        metadata_only_parameter_names=(),
+        research_only_parameter_names=(),
+        default_parameters={},
+        decision_contract_version="dynamic_real_order_unit.decision.v1",
+        required_data=("candles",),
+        optional_data=(),
+        exit_policy_schema={"schema_version": 1, "rules": ()},
+    )
+    return ResearchStrategyPlugin(
+        name=spec.strategy_name,
+        version=spec.strategy_version,
+        spec=spec,
+        required_data=spec.required_data,
+        optional_data=spec.optional_data,
+        runner=_dynamic_runner,
+        research_event_builder=lambda **_: (),
+        runtime_replay_builder=_dynamic_runtime_replay_builder,
+        runtime_parameter_adapter=RuntimeParameterAdapter(
+            from_env=_dynamic_parameters_from_env,
+            from_settings=_dynamic_parameters_from_settings,
+            env_keys=(),
+        ),
+        decision_contract_version=spec.decision_contract_version,
+        diagnostics_namespace=spec.strategy_name,
+        runtime_decision_adapter_factory=_dynamic_runtime_adapter_factory,
+        policy_assembly_factory=_dynamic_policy_assembly_factory,
+        runtime_capabilities=StrategyRuntimeCapabilities(
+            promotion_runtime_decisions_supported=True,
+            runtime_replay_supported=True,
+            research_only=False,
+            baseline_only=False,
+            live_dry_run_allowed=True,
+            live_real_order_allowed=True,
+            approved_profile_required=True,
+            fail_closed_reason="dynamic_plugin_capability_missing",
+        ),
+        decision_evidence_contract=DecisionEvidenceContract(
+            required_promotion_provenance_fields=("policy_input_hash",),
         ),
     )
 
@@ -192,7 +240,8 @@ def test_entry_point_strategy_plugin_is_discovered(monkeypatch: pytest.MonkeyPat
 
     assert DYNAMIC_PLUGIN_NAME in {item.name for item in list_research_strategy_plugins()}
     assert resolve_research_strategy_plugin(DYNAMIC_PLUGIN_NAME) is plugin
-    assert plugin.contract_payload()["runtime_capabilities"] == {
+    payload = plugin.contract_payload()
+    assert payload["runtime_capabilities"] == {
         "schema_version": 1,
         "research_supported": True,
         "replay_decisions_supported": True,
@@ -203,10 +252,41 @@ def test_entry_point_strategy_plugin_is_discovered(monkeypatch: pytest.MonkeyPat
         "research_only": False,
         "baseline_only": False,
         "live_dry_run_allowed": True,
-        "live_real_order_allowed": True,
+        "live_real_order_allowed": False,
         "approved_profile_required": True,
         "fail_closed_reason": "dynamic_plugin_capability_missing",
     }
+    assert payload["live_eligibility"] == {
+        "dry_run_allowed": True,
+        "real_order_allowed": False,
+        "approved_profile_required": True,
+        "fail_closed_reason": "dynamic_plugin_capability_missing",
+    }
+    assert payload["decision_evidence_contract"]["required_promotion_provenance_fields"] == [
+        "policy_input_hash"
+    ]
+    assert payload["decision_evidence_contract"]["required_live_real_order_fields"] == []
+    assert payload["decision_evidence_contract"]["required_live_real_order_one_of_field_groups"] == []
+
+
+def test_dynamic_plugin_incomplete_contract_is_valid_only_when_real_orders_not_claimed() -> None:
+    plugin = _dynamic_plugin()
+
+    assert plugin.runtime_capabilities.promotion_runtime_decisions_supported is True
+    assert plugin.runtime_capabilities.runtime_replay_supported is True
+    assert plugin.runtime_decision_adapter_factory is not None
+    assert plugin.policy_assembly_factory is not None
+    assert plugin.runtime_capabilities.live_dry_run_allowed is True
+    assert plugin.runtime_capabilities.live_real_order_allowed is False
+    assert plugin.decision_evidence_contract.required_promotion_provenance_fields == (
+        "policy_input_hash",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="strategy_live_real_order_decision_evidence_contract_incomplete:dynamic_real_order_unit",
+    ):
+        _dynamic_real_order_plugin_with_incomplete_contract()
 
 
 def test_discovered_plugin_runtime_adapter_is_bootstrapped(
