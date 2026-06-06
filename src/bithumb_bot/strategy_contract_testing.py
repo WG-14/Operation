@@ -142,8 +142,11 @@ def assert_live_eligible_contract(
     interval: str,
 ) -> None:
     payload = plugin.contract_payload()
-    assert payload["authoring_level"] == "level_3_live_eligible"
+    assert payload["authoring_level"] == "level_3_promotion_grade"
+    assert payload["legacy_authoring_level_alias"] == "level_3_live_eligible"
     assert payload["capability_level"] in {"live_eligible", "runtime_decision"}
+    assert payload["operational_capability"]["live_dry_run_allowed"] is True
+    assert payload["operator_verdict"]["targets"]["live_dry_run"]["allowed"] is True
     assert plugin.is_promotion_grade is True
     assert plugin.runtime_capabilities.promotion_runtime_decisions_supported is True
     assert plugin.runtime_decision_adapter_factory is not None

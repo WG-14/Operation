@@ -256,11 +256,6 @@ class SmaWithFilterRuntimeDecisionAdapter:
             return True
         return True
 
-    def decide_database_snapshot(self, conn, request) -> RuntimeStrategyDecisionResult | None:
-        if str(settings.MODE or "").strip().lower() == "live":
-            return None
-        return decide_sma_with_filter_for_diagnostics(conn, request)
-
     def legacy_diagnostic_signal(
         self,
         conn,

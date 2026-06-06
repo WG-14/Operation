@@ -383,12 +383,22 @@ class ResearchStrategyPlugin:
             required_data=self.required_data,
             optional_data=self.optional_data,
         )
+        authoring_level = _authoring_level_for_contract_kind(self.authoring_contract_kind)
+        operational_capability = _operational_capability_for_plugin(self)
+        operator_verdict = _operator_verdict_for_plugin(self, operational_capability)
+        parameter_authority = _parameter_authority_summary_for_plugin(self)
+        runtime_scope = _supported_runtime_scope_payload()
+        legacy_authoring_alias = (
+            "level_3_live_eligible" if authoring_level == "level_3_promotion_grade" else None
+        )
         return {
             "name": self.name,
+            "strategy_name": self.name,
             "version": self.version,
             "strategy_spec_hash": self.spec.spec_hash(),
             "required_data": list(self.required_data),
             "optional_data": list(self.optional_data),
+            "runtime_data_requirements": data_requirements.capability_contract_payload(),
             "data_capability_contract": data_requirements.capability_contract_payload(),
             "runtime_data_requirement_builder_supported": self.runtime_data_requirement_builder is not None,
             "runtime_data_requirement_builder_module": (
@@ -407,11 +417,34 @@ class ResearchStrategyPlugin:
             "runner_qualname": self.runner.__qualname__,
             "research_runnable": bool(self.research_runnable),
             "authoring_contract_kind": self.authoring_contract_kind,
-            "authoring_level": _authoring_level_for_contract_kind(self.authoring_contract_kind),
+            "authoring_level": authoring_level,
+            "canonical_authoring_level": authoring_level,
+            "legacy_authoring_level_alias": legacy_authoring_alias,
             "capability_level": _capability_level_for_runtime_capabilities(self.runtime_capabilities),
+            "operational_capability": operational_capability,
+            "operator_verdict": operator_verdict,
+            "supported_runtime_scope": runtime_scope,
+            "parameter_authority": parameter_authority,
+            "legacy_fallback": {
+                "present": bool(parameter_authority["legacy_fallback_present"]),
+                "sources": list(parameter_authority["legacy_fallback_sources"]),
+                "allowed_in_live": False,
+                "promotion_live_authority_scope": "forbidden",
+            },
+            "required_evidence_summary": _required_evidence_summary_for_plugin(self),
             "promotion_grade": self.is_promotion_grade,
             "promotion_eligible": bool(self.runtime_capabilities.promotion_export_supported),
             "runtime_decision_eligible": bool(self.runtime_capabilities.runtime_decision_supported),
+            "runtime_decision_supported": bool(operational_capability["runtime_decision_supported"]),
+            "live_dry_run_allowed": bool(operational_capability["live_dry_run_allowed"]),
+            "live_real_order_allowed": bool(operational_capability["live_real_order_allowed"]),
+            "approved_profile_required": bool(self.runtime_capabilities.approved_profile_required),
+            "risk_profile_required": bool(
+                self.runtime_capabilities.live_dry_run_allowed
+                or self.runtime_capabilities.live_real_order_allowed
+            ),
+            "promotion_evidence_required": bool(self.runtime_capabilities.promotion_export_supported),
+            "fail_closed_reason": self.runtime_capabilities.fail_closed_reason,
             "live_eligibility": {
                 "dry_run_allowed": bool(self.runtime_capabilities.live_dry_run_allowed),
                 "real_order_allowed": bool(self.runtime_capabilities.live_real_order_allowed),
@@ -423,6 +456,9 @@ class ResearchStrategyPlugin:
                 None if self.is_promotion_grade else self.runtime_capabilities.fail_closed_reason
             ),
             "recommended_next_action": (
+                _recommended_next_action_for_runtime_capabilities(self.runtime_capabilities)
+            ),
+            "next_required_action": (
                 _recommended_next_action_for_runtime_capabilities(self.runtime_capabilities)
             ),
             "research_event_builder_supported": self.research_event_builder is not None,
@@ -574,6 +610,12 @@ class ResearchStrategyPlugin:
             ),
             "decision_assembly_contract": {
                 "schema_version": 1,
+                "production_decision_entry": "decide_feature_snapshot(request, feature_snapshot)",
+                "db_bound_decision_methods_allowed_in_promotion_live": False,
+                "forbidden_production_decision_methods": [
+                    "decide(conn, ...)",
+                    "decide_database_snapshot(conn, ...)",
+                ],
                 "promotion_runtime_decisions_supported": bool(
                     self.runtime_capabilities.promotion_runtime_decisions_supported
                 ),
@@ -686,7 +728,7 @@ def _authoring_level_for_contract_kind(kind: str) -> str:
     if normalized == "replay_compatible":
         return "level_2_replay_compatible"
     if normalized in {"promotion_grade", "live_eligible"}:
-        return "level_3_live_eligible"
+        return "level_3_promotion_grade"
     return "internal_legacy_normalized"
 
 
@@ -714,6 +756,215 @@ def _recommended_next_action_for_runtime_capabilities(
     if capabilities.research_supported:
         return "promote_strategy_contract"
     return "do_not_promote_runtime_special_case"
+
+
+def _supported_runtime_scope_payload() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "runtime_scope": "multi-strategy / single-pair / single-interval runtime",
+        "supported_runtime_scope": "multi_strategy_single_pair_single_interval",
+        "single_pair_runtime_supported": True,
+        "single_interval_runtime_supported": True,
+        "multi_pair_portfolio_supported": False,
+        "multi_interval_runtime_supported": False,
+        "unsupported_runtime_scope": [
+            "multi_pair_portfolio",
+            "multi_interval_runtime",
+        ],
+        "multi_pair_portfolio_fail_closed_reason": "multi_pair_runtime_unsupported",
+        "multi_interval_runtime_fail_closed_reason": "single_interval_runtime_unsupported",
+    }
+
+
+def _parameter_authority_summary_for_plugin(plugin: ResearchStrategyPlugin) -> dict[str, Any]:
+    fallback_sources = ["STRATEGY_PARAMETERS_JSON"]
+    if plugin.runtime_parameter_adapter is not None:
+        fallback_sources.append("runtime_parameter_adapter.from_settings")
+    return {
+        "schema_version": 1,
+        "production_allowed_sources": [
+            "approved_profile",
+            "runtime_strategy_spec",
+        ],
+        "promotion_live_allowed_sources": [
+            "approved_profile",
+            "runtime_strategy_spec",
+        ],
+        "legacy_fallback_present": True,
+        "legacy_fallback_sources": fallback_sources,
+        "legacy_fallback_allowed_in_live": False,
+        "strategy_parameters_json_authority_scope": "paper_legacy_compat_only",
+        "settings_derived_fallback_authority_scope": "paper_legacy_compat_only",
+        "approved_profile_required": bool(plugin.runtime_capabilities.approved_profile_required),
+    }
+
+
+def _required_evidence_summary_for_plugin(plugin: ResearchStrategyPlugin) -> dict[str, Any]:
+    evidence = plugin.decision_evidence_contract.as_dict()
+    return {
+        "schema_version": 1,
+        "approved_profile_required": bool(plugin.runtime_capabilities.approved_profile_required),
+        "runtime_replay_required_for_live": bool(
+            plugin.runtime_capabilities.live_dry_run_allowed
+            or plugin.runtime_capabilities.live_real_order_allowed
+        ),
+        "runtime_decision_adapter_required": bool(
+            plugin.runtime_capabilities.runtime_decision_supported
+            or plugin.runtime_capabilities.live_dry_run_allowed
+            or plugin.runtime_capabilities.live_real_order_allowed
+        ),
+        "policy_assembly_required": bool(plugin.runtime_capabilities.runtime_decision_supported),
+        "decision_evidence_contract_hash": evidence["contract_hash"],
+        "required_promotion_provenance_fields": list(
+            evidence["required_promotion_provenance_fields"]
+        ),
+        "required_live_real_order_fields": list(evidence["required_live_real_order_fields"]),
+        "required_live_real_order_one_of_field_groups": list(
+            evidence["required_live_real_order_one_of_field_groups"]
+        ),
+    }
+
+
+def _operational_capability_for_plugin(plugin: ResearchStrategyPlugin) -> dict[str, Any]:
+    capabilities = plugin.runtime_capabilities
+    runtime_decision_supported = (
+        bool(capabilities.runtime_decision_supported)
+        and plugin.runtime_decision_adapter_factory is not None
+        and plugin.policy_assembly_factory is not None
+    )
+    return {
+        "schema_version": 1,
+        "research_backtest_supported": bool(capabilities.research_supported)
+        and bool(plugin.research_runnable)
+        and plugin.research_event_builder is not None,
+        "runtime_replay_supported": bool(capabilities.runtime_replay_supported)
+        and plugin.runtime_replay_builder is not None,
+        "runtime_decision_supported": runtime_decision_supported,
+        "live_dry_run_allowed": bool(capabilities.live_dry_run_allowed)
+        and runtime_decision_supported,
+        "live_real_order_allowed": bool(capabilities.live_real_order_allowed)
+        and runtime_decision_supported,
+        "approved_profile_required": bool(capabilities.approved_profile_required),
+        "capability_level": _capability_level_for_runtime_capabilities(capabilities),
+        "fail_closed_reason": capabilities.fail_closed_reason,
+    }
+
+
+def _operator_verdict_for_plugin(
+    plugin: ResearchStrategyPlugin,
+    operational_capability: dict[str, Any],
+) -> dict[str, Any]:
+    capabilities = plugin.runtime_capabilities
+    targets = {
+        "research_backtest": _target_verdict(
+            allowed=bool(operational_capability["research_backtest_supported"]),
+            blocked_reasons=[f"research_backtest_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}"],
+            next_required_action="do_not_promote"
+            if not bool(capabilities.research_supported)
+            else "none",
+        ),
+        "runtime_replay": _target_verdict(
+            allowed=bool(operational_capability["runtime_replay_supported"]),
+            blocked_reasons=[f"runtime_replay_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}"],
+            next_required_action="add_replay_compatible_contract"
+            if bool(capabilities.research_supported)
+            else "do_not_promote",
+        ),
+        "runtime_decision": _target_verdict(
+            allowed=bool(operational_capability["runtime_decision_supported"]),
+            blocked_reasons=_runtime_decision_blocked_reasons(plugin),
+            next_required_action="add_live_eligible_contract_for_runtime_or_live",
+        ),
+        "live_dry_run": _target_verdict(
+            allowed=bool(operational_capability["live_dry_run_allowed"]),
+            blocked_reasons=_live_target_blocked_reasons(
+                plugin,
+                live_dry_run=True,
+                live_real_order_armed=False,
+                require_promotion_runtime=True,
+                require_runtime_replay=True,
+                require_runtime_decision_adapter=True,
+            ),
+            next_required_action=(
+                "supply_approved_profile"
+                if capabilities.live_dry_run_allowed and capabilities.approved_profile_required
+                else "add_live_dry_run_capability"
+            ),
+        ),
+        "live_real_order": _target_verdict(
+            allowed=bool(operational_capability["live_real_order_allowed"]),
+            blocked_reasons=_live_target_blocked_reasons(
+                plugin,
+                live_dry_run=True,
+                live_real_order_armed=True,
+                require_promotion_runtime=True,
+                require_runtime_replay=True,
+                require_runtime_decision_adapter=True,
+            ),
+            next_required_action=(
+                "supply_approved_profile"
+                if capabilities.live_real_order_allowed and capabilities.approved_profile_required
+                else "add_live_real_order_eligible_contract"
+            ),
+        ),
+    }
+    return {
+        "schema_version": 1,
+        "targets": targets,
+    }
+
+
+def _target_verdict(
+    *,
+    allowed: bool,
+    blocked_reasons: Iterable[str],
+    next_required_action: str,
+) -> dict[str, Any]:
+    reasons = tuple(str(reason) for reason in blocked_reasons if str(reason).strip())
+    return {
+        "status": "allowed" if allowed else "blocked",
+        "allowed": bool(allowed),
+        "blocked_reasons": [] if allowed else list(reasons),
+        "next_required_action": "none" if allowed else next_required_action,
+    }
+
+
+def _runtime_decision_blocked_reasons(plugin: ResearchStrategyPlugin) -> tuple[str, ...]:
+    reasons: list[str] = []
+    capabilities = plugin.runtime_capabilities
+    if not capabilities.promotion_runtime_decisions_supported:
+        reasons.append(f"promotion_runtime_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if plugin.runtime_decision_adapter_factory is None:
+        reasons.append(f"runtime_decision_adapter_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if plugin.policy_assembly_factory is None:
+        reasons.append(f"policy_assembly_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    return tuple(reasons)
+
+
+def _live_target_blocked_reasons(
+    plugin: ResearchStrategyPlugin,
+    *,
+    live_dry_run: bool,
+    live_real_order_armed: bool,
+    require_promotion_runtime: bool,
+    require_runtime_replay: bool,
+    require_runtime_decision_adapter: bool,
+) -> tuple[str, ...]:
+    capabilities = plugin.runtime_capabilities
+    issues: list[str] = []
+    if require_promotion_runtime and not capabilities.promotion_runtime_decisions_supported:
+        issues.append(f"promotion_runtime_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if require_runtime_replay and not capabilities.runtime_replay_supported:
+        issues.append(f"runtime_replay_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if require_runtime_decision_adapter and plugin.runtime_decision_adapter_factory is None:
+        issues.append(f"runtime_decision_adapter_unsupported_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if bool(live_dry_run) and not capabilities.live_dry_run_allowed:
+        issues.append(f"live_dry_run_not_allowed_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if bool(live_real_order_armed) and not capabilities.live_real_order_allowed:
+        issues.append(f"live_real_order_not_allowed_for_strategy:{plugin.name}:{capabilities.fail_closed_reason}")
+    if (bool(live_dry_run) or bool(live_real_order_armed)) and capabilities.approved_profile_required:
+        issues.append(f"approved_profile_required_for_strategy:{plugin.name}")
+    return tuple(issues)
 
 
 def strategy_runtime_capability_issues(

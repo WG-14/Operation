@@ -206,6 +206,34 @@ def test_level_3_live_eligible_contract_helper_covers_canary_example(tmp_path: P
     )
 
 
+def test_strategy_authoring_docs_required_fields_match_contract_payload() -> None:
+    doc = Path("docs/strategy-plugin-authoring.md").read_text(encoding="utf-8")
+    payload = resolve_research_strategy_plugin("canary_non_sma").contract_payload()
+    required_fields = {
+        "strategy_name",
+        "authoring_level",
+        "capability_level",
+        "runtime_replay_supported",
+        "runtime_decision_supported",
+        "live_dry_run_allowed",
+        "live_real_order_allowed",
+        "approved_profile_required",
+        "runtime_data_requirements",
+        "risk_profile_required",
+        "promotion_evidence_required",
+        "supported_runtime_scope",
+        "fail_closed_reason",
+        "next_required_action",
+    }
+
+    for field in required_fields:
+        assert f"`{field}`" in doc
+        assert field in payload
+    assert payload["authoring_level"] == "level_3_promotion_grade"
+    assert payload["legacy_authoring_level_alias"] == "level_3_live_eligible"
+    assert "Level 3 authoring does not mean unrestricted live dry-run or real-order eligibility" in doc
+
+
 def test_new_strategy_plugins_do_not_directly_construct_internal_research_strategy_plugin() -> None:
     allowlisted_legacy = {
         "src/bithumb_bot/strategy_plugins/baseline_plugins.py",

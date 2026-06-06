@@ -372,14 +372,6 @@ class DecisionRunner:
             spec,
             through_ts_ms=through_ts_ms,
         )
-        database_snapshot_decider = getattr(adapter, "decide_database_snapshot", None)
-        if callable(database_snapshot_decider):
-            result = database_snapshot_decider(conn, request)
-            if result is not None:
-                _attach_runtime_request_metadata(result, request)
-                return result
-            if str(settings.MODE or "").strip().lower() != "live":
-                return None
         materialized_spec = replace(
             spec,
             parameters=dict(request.parameters),
@@ -563,7 +555,9 @@ def _project_runtime_feature_snapshot(
 
 
 def _has_db_bound_decide_method(adapter: object) -> bool:
-    return callable(getattr(adapter, "decide", None))
+    return callable(getattr(adapter, "decide", None)) or callable(
+        getattr(adapter, "decide_database_snapshot", None)
+    )
 
 
 def _attach_runtime_feature_snapshot_metadata(

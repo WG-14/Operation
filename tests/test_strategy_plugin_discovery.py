@@ -64,6 +64,17 @@ class _DynamicRuntimeDecisionAdapter:
 
 
 @dataclass(frozen=True)
+class _DbBoundRuntimeDecisionAdapter(_DynamicRuntimeDecisionAdapter):
+    def decide_database_snapshot(
+        self,
+        conn: Any,
+        request: Any,
+    ) -> None:
+        del conn, request
+        return None
+
+
+@dataclass(frozen=True)
 class _DynamicRuntimeReplayStrategy:
     name: str = DYNAMIC_PLUGIN_NAME
 
@@ -111,6 +122,10 @@ def _dynamic_parameters_from_settings(_cfg: object) -> dict[str, Any]:
 
 def _dynamic_runtime_adapter_factory() -> _DynamicRuntimeDecisionAdapter:
     return _DynamicRuntimeDecisionAdapter()
+
+
+def _db_bound_runtime_adapter_factory() -> _DbBoundRuntimeDecisionAdapter:
+    return _DbBoundRuntimeDecisionAdapter(strategy_name="dynamic_db_bound_unit")
 
 
 def _dynamic_policy_assembly_factory() -> _DynamicPolicyAssembly:
@@ -332,15 +347,33 @@ def test_strategy_plugin_inventory_is_read_only_deterministic_and_complete(
 
     required_keys = {
         "name",
+        "strategy_name",
         "version",
         "source",
         "manifest_object_path",
         "authoring_contract_kind",
         "authoring_level",
+        "canonical_authoring_level",
+        "legacy_authoring_level_alias",
         "capability_level",
+        "operational_capability",
+        "operator_verdict",
+        "supported_runtime_scope",
+        "parameter_authority",
+        "legacy_fallback",
+        "required_evidence_summary",
         "contract_hash",
         "strategy_spec_hash",
         "runtime_capabilities",
+        "runtime_replay_supported",
+        "runtime_decision_supported",
+        "live_dry_run_allowed",
+        "live_real_order_allowed",
+        "approved_profile_required",
+        "runtime_data_requirements",
+        "risk_profile_required",
+        "promotion_evidence_required",
+        "next_required_action",
         "live_eligibility",
         "fail_closed_reason",
         "decision_evidence_contract",
@@ -363,11 +396,42 @@ def test_strategy_plugin_inventory_is_read_only_deterministic_and_complete(
 
     by_name = {entry["name"]: entry for entry in inventory["strategies"]}
     assert by_name["threshold_research_only"]["authoring_level"] == "level_1_research_only"
+    assert by_name["threshold_research_only"]["canonical_authoring_level"] == "level_1_research_only"
     assert by_name["threshold_research_only"]["capability_level"] == "research_only"
+    assert by_name["threshold_research_only"]["operator_verdict"]["targets"]["research_backtest"]["allowed"] is True
+    assert by_name["threshold_research_only"]["operator_verdict"]["targets"]["runtime_replay"]["allowed"] is False
+    assert by_name["threshold_research_only"]["operator_verdict"]["targets"]["live_dry_run"]["allowed"] is False
+    assert by_name["threshold_research_only"]["operator_verdict"]["targets"]["live_dry_run"][
+        "blocked_reasons"
+    ]
+    assert by_name["threshold_research_only"]["operator_verdict"]["targets"]["runtime_replay"][
+        "next_required_action"
+    ] == "add_replay_compatible_contract"
     assert by_name["replay_threshold"]["authoring_level"] == "level_2_replay_compatible"
     assert by_name["replay_threshold"]["capability_level"] == "replay_compatible"
-    assert by_name["canary_non_sma"]["authoring_level"] == "level_3_live_eligible"
+    assert by_name["replay_threshold"]["operator_verdict"]["targets"]["runtime_replay"]["allowed"] is True
+    assert by_name["replay_threshold"]["operator_verdict"]["targets"]["runtime_decision"]["allowed"] is False
+    assert by_name["replay_threshold"]["operator_verdict"]["targets"]["runtime_decision"][
+        "next_required_action"
+    ] == "add_live_eligible_contract_for_runtime_or_live"
+    assert by_name["canary_non_sma"]["authoring_level"] == "level_3_promotion_grade"
+    assert by_name["canary_non_sma"]["legacy_authoring_level_alias"] == "level_3_live_eligible"
     assert by_name["canary_non_sma"]["capability_level"] == "live_eligible"
+    assert by_name["canary_non_sma"]["operational_capability"]["live_dry_run_allowed"] is True
+    assert by_name["canary_non_sma"]["operational_capability"]["live_real_order_allowed"] is False
+    assert by_name["canary_non_sma"]["operator_verdict"]["targets"]["live_dry_run"]["allowed"] is True
+    assert by_name["canary_non_sma"]["operator_verdict"]["targets"]["live_real_order"]["allowed"] is False
+    assert by_name["canary_non_sma"]["operator_verdict"]["targets"]["live_real_order"][
+        "next_required_action"
+    ] == "add_live_real_order_eligible_contract"
+    assert by_name["canary_non_sma"]["supported_runtime_scope"]["single_pair_runtime_supported"] is True
+    assert by_name["canary_non_sma"]["supported_runtime_scope"]["multi_pair_portfolio_supported"] is False
+    assert by_name["canary_non_sma"]["supported_runtime_scope"]["multi_interval_runtime_supported"] is False
+    assert by_name["canary_non_sma"]["parameter_authority"]["production_allowed_sources"] == [
+        "approved_profile",
+        "runtime_strategy_spec",
+    ]
+    assert by_name["canary_non_sma"]["legacy_fallback"]["allowed_in_live"] is False
 
 
 def test_strategy_plugin_inventory_cli_is_read_only_json_surface() -> None:
@@ -537,6 +601,100 @@ def test_entry_point_strategy_plugin_is_discovered(monkeypatch: pytest.MonkeyPat
     ]
     assert payload["decision_evidence_contract"]["required_live_real_order_fields"] == []
     assert payload["decision_evidence_contract"]["required_live_real_order_one_of_field_groups"] == []
+    assert payload["authoring_level"] == "internal_legacy_normalized"
+    assert payload["operational_capability"]["live_dry_run_allowed"] is True
+    assert payload["operational_capability"]["live_real_order_allowed"] is False
+    assert payload["operator_verdict"]["targets"]["live_dry_run"]["allowed"] is True
+    assert payload["operator_verdict"]["targets"]["live_real_order"]["allowed"] is False
+    assert payload["parameter_authority"]["legacy_fallback_allowed_in_live"] is False
+
+
+def test_promotion_grade_authoring_without_live_flag_is_not_live_eligible() -> None:
+    base = _dynamic_plugin(name="dynamic_promotion_grade_not_live")
+    plugin = ResearchStrategyPlugin(
+        name=base.name,
+        version=base.version,
+        spec=base.spec,
+        required_data=base.required_data,
+        optional_data=base.optional_data,
+        runner=base.runner,
+        research_event_builder=base.research_event_builder,
+        runtime_replay_builder=base.runtime_replay_builder,
+        runtime_parameter_adapter=base.runtime_parameter_adapter,
+        decision_contract_version=base.decision_contract_version,
+        diagnostics_namespace=base.diagnostics_namespace,
+        runtime_decision_adapter_factory=base.runtime_decision_adapter_factory,
+        policy_assembly_factory=base.policy_assembly_factory,
+        runtime_capabilities=StrategyRuntimeCapabilities(
+            promotion_runtime_decisions_supported=True,
+            runtime_replay_supported=True,
+            research_only=False,
+            baseline_only=False,
+            live_dry_run_allowed=False,
+            live_real_order_allowed=False,
+            approved_profile_required=True,
+            fail_closed_reason="promotion_grade_not_live_approved",
+        ),
+        authoring_contract_kind="promotion_grade",
+        promotion_extension_payload={"schema_version": 1, "promotion_extension": True},
+        decision_evidence_contract=base.decision_evidence_contract,
+    )
+
+    payload = plugin.contract_payload()
+
+    assert payload["authoring_level"] == "level_3_promotion_grade"
+    assert payload["capability_level"] == "runtime_decision"
+    assert payload["operational_capability"]["runtime_decision_supported"] is True
+    assert payload["operational_capability"]["live_dry_run_allowed"] is False
+    assert payload["operator_verdict"]["targets"]["runtime_decision"]["allowed"] is True
+    assert payload["operator_verdict"]["targets"]["live_dry_run"]["allowed"] is False
+    assert payload["operator_verdict"]["targets"]["live_dry_run"]["next_required_action"] == (
+        "add_live_dry_run_capability"
+    )
+    assert any(
+        reason.startswith("live_dry_run_not_allowed_for_strategy:dynamic_promotion_grade_not_live")
+        for reason in payload["operator_verdict"]["targets"]["live_dry_run"]["blocked_reasons"]
+    )
+
+
+def test_promotion_adapter_with_db_bound_decision_method_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bithumb_bot.strategy_plugins as strategy_plugins
+
+    plugin = _dynamic_plugin(name="dynamic_db_bound_unit")
+    plugin = ResearchStrategyPlugin(
+        name=plugin.name,
+        version=plugin.version,
+        spec=plugin.spec,
+        required_data=plugin.required_data,
+        optional_data=plugin.optional_data,
+        runner=plugin.runner,
+        research_event_builder=plugin.research_event_builder,
+        runtime_replay_builder=plugin.runtime_replay_builder,
+        runtime_parameter_adapter=plugin.runtime_parameter_adapter,
+        decision_contract_version=plugin.decision_contract_version,
+        diagnostics_namespace=plugin.diagnostics_namespace,
+        runtime_decision_adapter_factory=_db_bound_runtime_adapter_factory,
+        policy_assembly_factory=plugin.policy_assembly_factory,
+        runtime_capabilities=plugin.runtime_capabilities,
+        decision_evidence_contract=plugin.decision_evidence_contract,
+    )
+    monkeypatch.setattr(
+        strategy_plugins.metadata,
+        "entry_points",
+        lambda: [_FakeEntryPoint("unit_dynamic_db_bound", "tests:plugin", plugin)],
+    )
+
+    reload_research_strategy_plugins_for_tests()
+
+    payload = resolve_research_strategy_plugin("dynamic_db_bound_unit").contract_payload()
+    assert payload["decision_assembly_contract"]["production_decision_entry"] == (
+        "decide_feature_snapshot(request, feature_snapshot)"
+    )
+    assert payload["decision_assembly_contract"]["db_bound_decision_methods_allowed_in_promotion_live"] is False
+    with pytest.raises(RuntimeError, match="promotion_runtime_adapter_db_bound_decide_forbidden"):
+        runtime_strategy_decision.get_runtime_decision_adapter("dynamic_db_bound_unit")
 
 
 def test_dynamic_plugin_incomplete_contract_is_valid_only_when_real_orders_not_claimed() -> None:

@@ -4,9 +4,10 @@ Strategy authoring has three public levels:
 
 1. Level 1: research-only strategies for experiments and backtests
 2. Level 2: replay-compatible strategies that can prove deterministic read-only replay but are not live eligible
-3. Level 3: live-eligible strategies with runtime adapters, approved-profile binding, and explicit execution capability gates
+3. Level 3: promotion-grade strategies with runtime adapters, approved-profile binding, and explicit execution capability gates
 
 Live safety is not weakened by the research-only API. A strategy without a promotion extension fails closed for promotion export, runtime replay, live dry-run, and live real-order.
+Level 3 authoring does not mean unrestricted live dry-run or real-order eligibility. Live dry-run and real-order authority are separate operational capability fields and remain blocked unless the strategy contract explicitly allows them and the runtime supplies the required approved profile, evidence, and scope.
 
 Do not register promotion-grade runtime strategies in `bithumb_bot.strategy.registry`. That module is compatibility-only for smoke strategy policies and legacy DB-bound construction.
 
@@ -16,7 +17,7 @@ Use this decision tree:
 
 - Choose Level 1 when the strategy is exploratory and only needs research/backtest events.
 - Choose Level 2 when the strategy needs deterministic replay exports or replay comparison, but must not run in live dry-run or live real-order mode.
-- Choose Level 3 only when the strategy needs runtime decisions, live dry-run eligibility, and possibly live real-order eligibility after approved-profile and decision-equivalence gates.
+- Choose Level 3 when the strategy needs promotion-grade runtime decisions. Live dry-run and live real-order eligibility are separate capability declarations and may remain blocked even for a Level 3 strategy.
 
 New strategy PRs should normally be small. Level 1 usually needs one plugin file and one focused test file. Level 2 usually adds only the replay-compatible plugin file plus one focused replay contract test. Level 3 adds the explicit runtime adapter/policy assembly surface and focused live/promotion contract tests.
 
@@ -30,7 +31,7 @@ Public contract helpers are available from `bithumb_bot.strategy_contract_testin
 | --- | --- | --- | --- | --- | --- |
 | Level 1 research-only | `StrategySpec`, `research_event_builder` or `decide_snapshot` | runtime adapter, approved profile, live dry-run, live real-order, promotion extension | `promotion_extension_missing`, `promotion_runtime_unsupported_for_strategy`, `runtime_replay_unsupported_for_strategy`, `live_dry_run_not_allowed_for_strategy` | one plugin file, built-in manifest entry or external entry point, and one focused test file | `assert_research_only_contract` |
 | Level 2 replay-compatible | Level 1 hooks plus parameter schema, deterministic policy material, replay fingerprint material, read-only replay builder | `Settings` fields, `runtime_parameter_adapter.from_settings()`, approved profile requirement, live dry-run, live real-order | `replay_compatible_not_live_eligible`, `promotion_runtime_unsupported_for_strategy`, `runtime_decision_adapter_unsupported_for_strategy`, `live_real_order_not_allowed_for_strategy` | one replay plugin file, built-in manifest entry or external entry point, and one focused replay contract test | `assert_replay_compatible_contract` |
-| Level 3 live-eligible | Level 1 hooks plus runtime decision adapter, policy assembly, approved-profile binding, execution intent contract, replay support, live capability declaration | direct `ResearchStrategyPlugin(...)` assembly in new strategy modules, strategy-specific common-engine branches, production legacy parameter fallback | strategy-specific capability reason, `approved_profile_required_for_strategy`, decision-equivalence/runtime-contract/profile validation reasons | plugin file, built-in manifest entry or external entry point, plus focused promotion/runtime contract tests | `assert_live_eligible_contract` |
+| Level 3 promotion-grade | Level 1 hooks plus runtime decision adapter, policy assembly, approved-profile binding, execution intent contract, replay support, live capability declaration | direct `ResearchStrategyPlugin(...)` assembly in new strategy modules, strategy-specific common-engine branches, production legacy parameter fallback | strategy-specific capability reason, `approved_profile_required_for_strategy`, decision-equivalence/runtime-contract/profile validation reasons | plugin file, built-in manifest entry or external entry point, plus focused promotion/runtime contract tests | `assert_live_eligible_contract` |
 
 ## Registration Paths
 
@@ -73,12 +74,40 @@ uv run bithumb-bot strategy-plugin-inventory --json
 
 The strategy plugin inventory emits deterministic JSON sorted by strategy name.
 Each entry includes source attribution, built-in manifest object path when
-available, authoring level, capability level, contract hashes, live eligibility,
-fail-closed reason, decision-evidence contract hash, and data requirements. Use
-it to verify that a strategy is discoverable through
+available, canonical authoring level, capability level, operational capability,
+operator verdict, runtime scope support, parameter authority, legacy fallback
+status, contract hashes, live eligibility, fail-closed reason,
+decision-evidence contract hash, and data requirements. Use it to verify that a
+strategy is discoverable through
 `list_research_strategy_plugins()` / `resolve_research_strategy_plugin()` while
 preserving strategy-neutral common execution, risk, data, and runtime core
 paths.
+
+The canonical generated contract and inventory payload include these
+operator-facing fields:
+
+- `strategy_name`
+- `authoring_level`
+- `capability_level`
+- `runtime_replay_supported`
+- `runtime_decision_supported`
+- `live_dry_run_allowed`
+- `live_real_order_allowed`
+- `approved_profile_required`
+- `runtime_data_requirements`
+- `risk_profile_required`
+- `promotion_evidence_required`
+- `supported_runtime_scope`
+- `fail_closed_reason`
+- `next_required_action`
+
+The generated payload also separates `operational_capability` from
+`authoring_level`, and reports `operator_verdict.targets` for
+`research_backtest`, `runtime_replay`, `runtime_decision`, `live_dry_run`, and
+`live_real_order`. Blocked target verdicts include reason codes and a
+`next_required_action` such as `promote_strategy_contract`,
+`add_live_eligible_contract_for_runtime_or_live`, `supply_approved_profile`, or
+`do_not_promote`.
 
 ## Level 1: Fast Research Path
 
@@ -158,11 +187,11 @@ The extension owns the heavy requirements:
 - export normalizer or equivalence exporter when needed
 - approved-profile requirement
 - runtime capability declaration
-- live dry-run eligibility
-- live real-order eligibility
+- live dry-run eligibility when explicitly allowed
+- live real-order eligibility when explicitly allowed
 - fail-closed reason
 
-Promotion-grade strategies are normalized into `ResearchStrategyPlugin` for the existing registry, contract hashing, runtime replay, approved profile verification, and live preflight gates. Runtime capability is explicit and must not be inferred from adapter presence.
+Promotion-grade strategies are normalized into `ResearchStrategyPlugin` for the existing registry, contract hashing, runtime replay, approved profile verification, and live preflight gates. Runtime capability is explicit and must not be inferred from adapter presence or from the Level 3 authoring label. The canonical authoring level is `level_3_promotion_grade`; historical wording such as `level_3_live_eligible` is a legacy alias only and is not live authority.
 
 Runtime fail-safe strategies such as `safe_hold` are outside the research parity target. They may declare typed runtime decision support and policy assembly for fail-closed runtime fallback behavior, but they must remain `research_runnable=false`, have no `research_event_builder`, reject research execution explicitly, and remain ineligible for live real orders unless a separate reviewed promotion contract changes that.
 
@@ -185,11 +214,21 @@ New strategies should not add strategy-specific fields to `Settings`.
 `STRATEGY_PARAMETERS_JSON` is the same paper legacy compatibility surface; it is
 not production authority for promotion, live dry-run, or live real-order runtime.
 
+Production runtime decisions must enter the adapter through
+`decide_feature_snapshot(request, feature_snapshot)`. DB-bound methods such as
+`decide(conn, ...)` and `decide_database_snapshot(conn, ...)` are compatibility
+or diagnostic surfaces only and are forbidden as promotion/live production
+decision authority.
+
 Structured runtime selection uses `RUNTIME_STRATEGY_SET_JSON` with
 `market_scope.mode="single_pair"` for the current runtime. Every active strategy
 instance must match the configured pair and interval. Multi-pair runtime remains
 unsupported until readiness, target state, allocation, execution submit, and
 persistence are pair-scoped.
+Level 3 eligibility applies only inside the currently supported
+multi-strategy / single-pair / single-interval runtime scope. Multi-pair and
+multi-interval runtime remain fail-closed and are surfaced in inventory as
+unsupported scope.
 
 Use `max_target_exposure_krw` for allocator exposure caps. Historical
 `risk_budget_krw` inputs are deprecated non-authoritative metadata and are not
@@ -299,7 +338,7 @@ Level 2 replay-compatible strategy tests should prove:
 - runtime/live preflight fail-closed reason codes
 - no full default-fast research matrices
 
-Level 3 live-eligible strategy tests should prove:
+Level 3 promotion-grade strategy tests should prove:
 
 - explicit runtime parameter adapter
 - runtime decision adapter factory
@@ -307,7 +346,7 @@ Level 3 live-eligible strategy tests should prove:
 - policy assembly and approved-profile binding
 - replay/equivalence contracts
 - no full default-fast research matrices
-- live dry-run and live real-order capability behavior
+- live dry-run and live real-order capability behavior, including blocked verdicts when capability flags are false
 - preserved decision, replay, runtime, policy, and profile hashes
 
 New strategy PRs should normally modify one plugin file and one focused test file. They should not add strategy-specific branches to common research or runtime gateway files.
