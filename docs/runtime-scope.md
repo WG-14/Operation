@@ -82,6 +82,14 @@ portfolio target, execution plan batch, pair execution plan, execution submit
 plan, and pre-submit risk decision hashes. Replay mismatch fails closed at the
 failing layer.
 
+Per-strategy virtual lifecycle transition hashes are part of the runtime cycle
+replay surface. They bind each strategy result to a non-authoritative
+before/after virtual lifecycle transition or an explicit skipped diagnostic
+artifact. The cycle artifact evidence hash includes the transition hash list.
+These transition hashes support replay and attribution only; actual
+broker-facing target and submit authority remains the single pair-level
+allocator-derived chain.
+
 Operator-facing decision context and persisted execution-plan rows expose
 `runtime_scope_mode`, `scope_key_hash` where available,
 `execution_plan_batch_hash`, `execution_plan_batch_id`,
@@ -111,6 +119,11 @@ runtime pair. It is not strategy-instance-level virtual target state, and it is
 not interval-level virtual strategy lifecycle state. Before strategy-instance
 or interval lifecycle support exists, future work must separate actual
 portfolio target state from any strategy virtual target state.
+Startup flat initialization, broker position adoption, and true-dust flat
+initialization are bootstrap target sources, not post-planning allocator
+authority sources. Post-planning target rows must carry complete allocator
+provenance through the manifest, decision bundle, allocation, portfolio target,
+execution batch, and submit plan hashes.
 
 Future multi-pair support requires pair-scoped runtime shards plus a
 portfolio-level orchestrator. Each pair shard needs pair-specific target state,

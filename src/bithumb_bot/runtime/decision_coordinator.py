@@ -21,6 +21,10 @@ from ..run_loop_execution_planner import (
     resolve_target_position_state_for_run_loop,
     run_loop_uses_target_delta,
 )
+from ..target_position import (
+    ACTUAL_PAIR_TARGET_SOURCE,
+    ACTUAL_PAIR_TARGET_SOURCE_PROVENANCE_INCOMPLETE,
+)
 from ..runtime_decision_service import RuntimeDecisionGateway, RuntimeStrategyDecisionResult
 from ..runtime_service_factories import run_loop_execution_planner
 from ..runtime_strategy_set import RuntimeStrategyDecisionResultBundle
@@ -145,6 +149,30 @@ def persist_target_position_state_for_run_loop(
     ):
         return False
     provenance = dict(provenance_context or {})
+    required_provenance = {
+        "runtime_strategy_set_manifest_hash": provenance.get("runtime_strategy_set_manifest_hash"),
+        "runtime_strategy_decision_bundle_hash": provenance.get("runtime_strategy_decision_bundle_hash"),
+        "portfolio_allocation_decision_hash": (
+            provenance.get("portfolio_allocation_decision_hash")
+            or provenance.get("allocation_decision_hash")
+        ),
+        "portfolio_target_hash": provenance.get("portfolio_target_hash"),
+        "execution_plan_batch_hash": provenance.get("execution_plan_batch_hash"),
+        "execution_submit_plan_hash": provenance.get("execution_submit_plan_hash"),
+    }
+    missing_provenance = [
+        key for key, value in required_provenance.items() if not str(value or "").strip()
+    ]
+    if missing_provenance and provenance_context:
+        raise RuntimeError(
+            "actual_pair_target_allocator_provenance_incomplete:"
+            + ",".join(sorted(missing_provenance))
+        )
+    actual_target_source = (
+        ACTUAL_PAIR_TARGET_SOURCE_PROVENANCE_INCOMPLETE
+        if missing_provenance
+        else ACTUAL_PAIR_TARGET_SOURCE
+    )
     upsert_target_position_state(
         conn,
         pair=str(runtime_pair or getattr(settings_obj, "PAIR")),
@@ -167,20 +195,13 @@ def persist_target_position_state_for_run_loop(
             else float(target_decision.get("target_adopted_exposure_krw") or 0.0)
         ),
         created_from_signal=str(target_decision.get("target_strategy_signal_source") or signal),
-        runtime_strategy_set_manifest_hash=str(
-            provenance.get("runtime_strategy_set_manifest_hash") or ""
-        ),
-        runtime_strategy_decision_bundle_hash=str(
-            provenance.get("runtime_strategy_decision_bundle_hash") or ""
-        ),
-        portfolio_allocation_decision_hash=str(
-            provenance.get("portfolio_allocation_decision_hash")
-            or provenance.get("allocation_decision_hash")
-            or ""
-        ),
-        portfolio_target_hash=str(provenance.get("portfolio_target_hash") or ""),
-        execution_plan_batch_hash=str(provenance.get("execution_plan_batch_hash") or ""),
-        execution_submit_plan_hash=str(provenance.get("execution_submit_plan_hash") or ""),
+        runtime_strategy_set_manifest_hash=str(required_provenance["runtime_strategy_set_manifest_hash"] or ""),
+        runtime_strategy_decision_bundle_hash=str(required_provenance["runtime_strategy_decision_bundle_hash"] or ""),
+        portfolio_allocation_decision_hash=str(required_provenance["portfolio_allocation_decision_hash"] or ""),
+        portfolio_target_hash=str(required_provenance["portfolio_target_hash"] or ""),
+        execution_plan_batch_hash=str(required_provenance["execution_plan_batch_hash"] or ""),
+        execution_submit_plan_hash=str(required_provenance["execution_submit_plan_hash"] or ""),
+        actual_target_source=actual_target_source,
     )
     return True
 
@@ -210,6 +231,7 @@ class DecisionCycleResult:
     execution_plan_batch_hash: str | None = None
     execution_plan_batch_id: str | None = None
     execution_submit_plan_hash: str | None = None
+    strategy_virtual_lifecycle_transition_hashes: tuple[str, ...] = ()
     strategy_risk_decision_hash: str | None = None
     strategy_risk_policy_hash: str | None = None
     strategy_risk_input_hash: str | None = None
@@ -260,6 +282,9 @@ class DecisionCycleResult:
             "execution_plan_batch_id": self.execution_plan_batch_id,
             "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
             "execution_submit_plan_hash": self.execution_submit_plan_hash,
+            "strategy_virtual_lifecycle_transition_hashes": list(
+                self.strategy_virtual_lifecycle_transition_hashes
+            ),
             "strategy_risk_decision_hash": self.strategy_risk_decision_hash,
             "strategy_risk_policy_hash": self.strategy_risk_policy_hash,
             "strategy_risk_input_hash": self.strategy_risk_input_hash,
@@ -536,6 +561,15 @@ class DecisionCoordinator:
             execution_plan_batch_hash=_context_str(context, "execution_plan_batch_hash"),
             execution_plan_batch_id=_context_str(context, "execution_plan_batch_id"),
             execution_submit_plan_hash=_context_str(context, "execution_submit_plan_hash"),
+            strategy_virtual_lifecycle_transition_hashes=tuple(
+                str(item)
+                for item in (
+                    (context or {}).get("strategy_virtual_lifecycle_transition_hashes")
+                    if isinstance((context or {}).get("strategy_virtual_lifecycle_transition_hashes"), list)
+                    else []
+                )
+                if str(item).strip()
+            ),
             strategy_risk_decision_hash=risk_layer_fields["strategy_risk_decision_hash"],
             strategy_risk_policy_hash=risk_layer_fields["strategy_risk_policy_hash"],
             strategy_risk_input_hash=risk_layer_fields["strategy_risk_input_hash"],

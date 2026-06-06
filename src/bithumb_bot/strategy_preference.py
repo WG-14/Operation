@@ -66,6 +66,7 @@ class StrategyPreference:
     position_snapshot_hash: str = ""
     scope_key_hash: str = ""
     runtime_scope_key: Mapping[str, object] | None = None
+    virtual_lifecycle_evidence: Mapping[str, object] | None = None
     execution_intent_hint: Mapping[str, object] | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = 1
@@ -119,6 +120,13 @@ class StrategyPreference:
             self,
             "runtime_scope_key",
             None if self.runtime_scope_key is None else _stable_value(dict(self.runtime_scope_key)),
+        )
+        object.__setattr__(
+            self,
+            "virtual_lifecycle_evidence",
+            None
+            if self.virtual_lifecycle_evidence is None
+            else _stable_value(dict(self.virtual_lifecycle_evidence)),
         )
         object.__setattr__(self, "metadata", _stable_value(dict(self.metadata)))
         object.__setattr__(self, "strategy_instance_id", str(self.strategy_instance_id or self.strategy_name))
@@ -196,6 +204,37 @@ class StrategyPreference:
             "position_snapshot_hash": self.position_snapshot_hash,
             "scope_key_hash": self.scope_key_hash,
             "runtime_scope_key": self.runtime_scope_key,
+            "virtual_lifecycle_evidence": self.virtual_lifecycle_evidence,
+            "virtual_lifecycle_transition_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("transition_hash")
+            ),
+            "virtual_lifecycle_before_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("before_hash")
+            ),
+            "virtual_lifecycle_after_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("after_hash")
+            ),
+            "virtual_lifecycle_evidence_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("evidence_hash")
+            ),
+            "virtual_lifecycle_authority": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("authority")
+            ),
+            "virtual_lifecycle_live_submit_authority": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("live_submit_authority")
+            ),
             "execution_intent_hint": self.execution_intent_hint,
             "execution_intent_authority": "non_authoritative_strategy_hint",
             "metadata": dict(self.metadata),
@@ -248,6 +287,7 @@ def strategy_decision_to_preference(
     risk_snapshot: Mapping[str, object] | None = None,
     strategy_risk_profile: Mapping[str, object] | None = None,
     strategy_risk_decision: Mapping[str, object] | None = None,
+    virtual_lifecycle_evidence: Mapping[str, object] | None = None,
     horizon: str = "",
     confidence: float | None = None,
     metadata: Mapping[str, object] | None = None,
@@ -277,6 +317,7 @@ def strategy_decision_to_preference(
         risk_snapshot=risk_snapshot,
         strategy_risk_profile=strategy_risk_profile,
         strategy_risk_decision=strategy_risk_decision,
+        virtual_lifecycle_evidence=virtual_lifecycle_evidence,
         horizon=horizon,
         confidence=confidence,
         policy_hash=decision.policy_hash,

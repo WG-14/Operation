@@ -4,6 +4,7 @@ import ast
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1517,6 +1518,320 @@ def test_runtime_planner_persists_virtual_lifecycle_without_submit_authority(tmp
     assert str(buy_context["virtual_target_state_after_hash"]).startswith("sha256:")
     assert loaded_buy.content_hash() == buy_context["virtual_target_state_after_hash"]
     assert loaded_hold.content_hash() == hold_context["virtual_target_state_after_hash"]
+    assert str(buy_context["virtual_target_lifecycle_transition_hash"]).startswith("sha256:")
+    assert str(hold_context["virtual_target_lifecycle_transition_hash"]).startswith("sha256:")
+    assert result.persistence_context["strategy_virtual_lifecycle_transition_hashes"] == [
+        buy_context["virtual_target_lifecycle_transition_hash"],
+        hold_context["virtual_target_lifecycle_transition_hash"],
+    ]
+
+
+def test_virtual_lifecycle_evidence_persists_in_contribution_and_allocation_json(tmp_path) -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    old_engine = settings.EXECUTION_ENGINE
+    conn = ensure_db(str(tmp_path / "virtual-lifecycle-allocation.sqlite"))
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+        buy_spec = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="buy",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+        )
+        hold_spec = RuntimeStrategySpec(
+            "safe_hold",
+            strategy_instance_id="hold",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+        )
+        bundle = RuntimeStrategyDecisionResultBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(buy_spec, hold_spec)),
+            results=(
+                _runtime_result("BUY", "canary_non_sma", spec=buy_spec),
+                _runtime_result("HOLD", "safe_hold", spec=hold_spec),
+            ),
+        )
+        plan = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+        bundle_refs = record_runtime_strategy_decision_bundle(
+            conn, result_bundle=bundle, pair="KRW-BTC", interval="1m", created_ts=456
+        )
+        allocation_refs = record_portfolio_allocation_decision(
+            conn,
+            bundle_id=int(bundle_refs["runtime_strategy_decision_bundle_id"]),
+            allocation_decision=plan.persistence_context["portfolio_allocation_decision"],  # type: ignore[arg-type]
+        )
+        conn.commit()
+        contribution_rows = conn.execute(
+            "SELECT strategy_instance_id, contribution_json FROM strategy_contribution WHERE allocation_id=? ORDER BY strategy_instance_id",
+            (allocation_refs["portfolio_allocation_decision_id"],),
+        ).fetchall()
+        allocation_row = conn.execute(
+            "SELECT allocation_decision_json FROM portfolio_allocation_decision WHERE id=?",
+            (allocation_refs["portfolio_allocation_decision_id"],),
+        ).fetchone()
+        rebuilt = rebuild_allocation_decision_from_bundle(
+            conn, int(bundle_refs["runtime_strategy_decision_bundle_id"])
+        )
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+        conn.close()
+
+    assert plan.planning_error is None
+    assert len(contribution_rows) == 2
+    contribution_payloads = [json.loads(row["contribution_json"]) for row in contribution_rows]
+    for payload in contribution_payloads:
+        assert payload["virtual_lifecycle_authority"] == "non_authoritative_strategy_virtual_lifecycle_state"
+        assert payload["virtual_lifecycle_live_submit_authority"] is False
+        assert str(payload["virtual_lifecycle_transition_hash"]).startswith("sha256:")
+        assert payload["virtual_lifecycle_evidence"]["transition_hash"] == payload["virtual_lifecycle_transition_hash"]
+        assert "side" not in payload["virtual_lifecycle_evidence"]
+        assert "qty" not in payload["virtual_lifecycle_evidence"]
+        assert "notional_krw" not in payload["virtual_lifecycle_evidence"]
+    allocation_payload = json.loads(allocation_row["allocation_decision_json"])
+    allocation_hashes = [
+        item["virtual_lifecycle_transition_hash"] for item in allocation_payload["contributions"]
+    ]
+    assert allocation_hashes == [
+        item["virtual_lifecycle_transition_hash"] for item in rebuilt["contributions"]
+    ]
+    assert allocation_payload["targets"][0]["target_exposure_krw"] == pytest.approx(60_000.0)
+
+
+def test_virtual_lifecycle_missing_scope_records_skipped_artifact_for_paper_mixed_results() -> None:
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+
+    old_engine = settings.EXECUTION_ENGINE
+    conn = ensure_db(":memory:")
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        planner = ExecutionPlanner(
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+        buy_spec = RuntimeStrategySpec(
+            "canary_non_sma",
+            strategy_instance_id="buy",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+            parameters=_complete_canary_parameters(),
+        )
+        hold_spec = RuntimeStrategySpec(
+            "safe_hold",
+            strategy_instance_id="hold",
+            priority=10,
+            desired_exposure_krw=60_000.0,
+            parameters={},
+        )
+        buy_result = _runtime_result("BUY", "canary_non_sma", spec=buy_spec)
+        hold_result = _runtime_result("HOLD", "safe_hold", spec=hold_spec)
+        hold_context = dict(hold_result.base_context)
+        hold_context["scope_key_hash"] = ""
+        hold_result = replace(hold_result, base_context=hold_context)
+        class _LooseBundle(SimpleNamespace):
+            def content_hash(self) -> str:
+                return "sha256:" + "9" * 64
+
+            def as_dict(self) -> dict[str, object]:
+                return {
+                    "bundle_hash": self.content_hash(),
+                    "candle_ts": self.candle_ts,
+                    "market_price": self.market_price,
+                }
+
+        bundle = _LooseBundle(
+            strategy_set=RuntimeStrategySet(source="unit", strategies=(buy_spec, hold_spec)),
+            results=(buy_result, hold_result),
+            candle_ts=123,
+            market_price=100_000_000.0,
+        )
+        result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+        live_planner = ExecutionPlanner(
+            settings_obj=replace(settings, MODE="paper", LIVE_REAL_ORDER_ARMED=True),
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+        live_result = live_planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+        conn.close()
+
+    assert result.planning_error is None
+    contexts = {
+        str(item["strategy_instance_id"]): item
+        for item in result.persistence_context["runtime_strategy_result_contexts"]
+    }
+    assert contexts["buy"]["virtual_target_lifecycle_status"] == "transitioned"
+    assert contexts["hold"]["virtual_target_lifecycle_status"] == "skipped"
+    assert contexts["hold"]["virtual_target_live_submit_authority"] is False
+    assert contexts["hold"]["virtual_target_lifecycle_skip_reason"] == "strategy_virtual_lifecycle_missing:scope_key_hash"
+    hold_pref = next(
+        item for item in result.persistence_context["strategy_preferences"] if item["strategy_instance_id"] == "hold"
+    )
+    assert hold_pref["virtual_lifecycle_evidence"]["virtual_target_lifecycle_status"] == "skipped"
+    assert hold_pref["virtual_lifecycle_live_submit_authority"] is False
+    assert live_result.submit_plan is None
+    assert live_result.planning_error == "ValueError: strategy_virtual_lifecycle_missing:scope_key_hash"
+    assert live_result.persistence_context["execution_block_reason"] == "execution_decision_unavailable"
+
+
+def test_decision_coordinator_persists_multi_strategy_virtual_and_actual_authority_chain(tmp_path) -> None:
+    from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
+    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from bithumb_bot.target_position import ACTUAL_PAIR_TARGET_SOURCE
+
+    db_path = str(tmp_path / "decision-coordinator-virtual-authority.sqlite")
+    buy_spec = RuntimeStrategySpec(
+        "canary_non_sma",
+        strategy_instance_id="buy",
+        priority=10,
+        desired_exposure_krw=60_000.0,
+        parameters=_complete_canary_parameters(),
+    )
+    hold_spec = RuntimeStrategySpec(
+        "safe_hold",
+        strategy_instance_id="hold",
+        priority=10,
+        desired_exposure_krw=60_000.0,
+        parameters={},
+    )
+    strategy_set = RuntimeStrategySet(
+        source="unit",
+        market_scope=RuntimeMarketScope(mode="single_pair", pair="KRW-BTC", interval="1m"),
+        strategies=(buy_spec, hold_spec),
+    )
+    typed_bundle = _unit_result_bundle(
+        strategy_set,
+        (
+            ("BUY", "canary_non_sma", buy_spec),
+            ("HOLD", "safe_hold", hold_spec),
+        ),
+    )
+
+    class _Gateway:
+        def decide_bundle(self, conn, *, strategy_set, through_ts_ms):
+            del conn, strategy_set, through_ts_ms
+            return typed_bundle
+
+    def _planner_factory(**kwargs):
+        kwargs.pop("target_state_resolver", None)
+        return ExecutionPlanner(
+            **kwargs,
+            readiness_snapshot_builder=lambda _conn: _Readiness(_readiness(broker_qty=0.0)),
+            target_state_resolver=lambda *_args, **_kwargs: {
+                "previous_target_exposure_krw": 0.0,
+                "target_policy_metadata": {},
+            },
+        )
+
+    settings_obj = replace(
+        settings,
+        EXECUTION_ENGINE="target_delta",
+        PAIR="KRW-BTC",
+        INTERVAL="1m",
+        MODE="paper",
+        LIVE_REAL_ORDER_ARMED=False,
+        LIVE_DRY_RUN=True,
+        TARGET_EXPOSURE_KRW=60_000.0,
+        MAX_ORDER_KRW=60_000.0,
+    )
+    coordinator = DecisionCoordinator(
+        settings_obj=settings_obj,
+        db_factory=lambda: ensure_db(db_path),
+        decision_gateway_factory=lambda: _Gateway(),
+        planner_factory=_planner_factory,
+    )
+
+    old_engine = settings.EXECUTION_ENGINE
+    old_target = settings.TARGET_EXPOSURE_KRW
+    old_max_order = settings.MAX_ORDER_KRW
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        object.__setattr__(settings, "TARGET_EXPOSURE_KRW", 60_000.0)
+        object.__setattr__(settings, "MAX_ORDER_KRW", 60_000.0)
+        result = coordinator.decide_cycle(
+            runtime_strategy_set=strategy_set,
+            candle_ts=123,
+            updated_ts=456,
+        )
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+        object.__setattr__(settings, "TARGET_EXPOSURE_KRW", old_target)
+        object.__setattr__(settings, "MAX_ORDER_KRW", old_max_order)
+    conn = ensure_db(db_path)
+    try:
+        counts = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "runtime_strategy_decision_result",
+                "strategy_contribution",
+                "portfolio_allocation_decision",
+                "execution_plan_batch",
+                "execution_plan",
+                "target_position_state",
+                "strategy_virtual_target_state",
+            )
+        }
+        allocation = conn.execute(
+            "SELECT allocation_decision_json FROM portfolio_allocation_decision"
+        ).fetchone()
+        execution_plan = conn.execute(
+            "SELECT execution_submit_plan_json FROM execution_plan"
+        ).fetchone()
+        target_state = conn.execute(
+            "SELECT * FROM target_position_state WHERE pair='KRW-BTC'"
+        ).fetchone()
+        virtual_rows = conn.execute(
+            "SELECT strategy_instance_id, state_json FROM strategy_virtual_target_state ORDER BY strategy_instance_id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert result.persistence_status == "persisted"
+    assert result.signal == "BUY"
+    assert len(result.strategy_virtual_lifecycle_transition_hashes) == 2
+    assert counts["runtime_strategy_decision_result"] == 2
+    assert counts["strategy_contribution"] == 2
+    assert counts["portfolio_allocation_decision"] == 1
+    assert counts["execution_plan_batch"] == 1
+    assert counts["execution_plan"] == 1
+    assert counts["target_position_state"] == 1
+    assert counts["strategy_virtual_target_state"] == 2
+    allocation_payload = json.loads(allocation["allocation_decision_json"])
+    contribution_hashes = [
+        item["virtual_lifecycle_transition_hash"] for item in allocation_payload["contributions"]
+    ]
+    assert contribution_hashes == list(result.strategy_virtual_lifecycle_transition_hashes)
+    assert allocation_payload["targets"][0]["target_exposure_krw"] == pytest.approx(60_000.0)
+    submit_payload = json.loads(execution_plan["execution_submit_plan_json"])
+    assert submit_payload["authority"] != "non_authoritative_strategy_virtual_lifecycle_state"
+    assert submit_payload.get("virtual_lifecycle_transition_hash") is None
+    assert target_state["actual_target_source"] == ACTUAL_PAIR_TARGET_SOURCE
+    assert target_state["runtime_strategy_decision_bundle_hash"] == result.runtime_strategy_decision_bundle_hash
+    assert target_state["portfolio_allocation_decision_hash"] == result.portfolio_allocation_decision_hash
+    assert target_state["portfolio_target_hash"] == result.portfolio_target_hash
+    assert target_state["execution_plan_batch_hash"] == result.execution_plan_batch_hash
+    assert target_state["execution_submit_plan_hash"] == result.execution_submit_plan_hash
+    provenance = json.loads(target_state["actual_target_provenance_json"])
+    assert provenance["provenance_complete"] is True
+    assert {row["strategy_instance_id"] for row in virtual_rows} == {"buy", "hold"}
+    for row in virtual_rows:
+        state_payload = json.loads(row["state_json"])
+        assert state_payload["authority"] == "non_authoritative_strategy_virtual_lifecycle_state"
+        assert state_payload["live_submit_authority"] is False
 
 
 def test_strict_target_delta_rejects_missing_strategy_target_exposure() -> None:

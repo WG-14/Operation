@@ -192,6 +192,33 @@ submit side, quantity, notional, target exposure, eligibility, pre-submit risk
 proof, or final broker payload. Typed execution planning rejects virtual target
 state if it is supplied as live submit authority.
 
+Every runtime strategy result must now produce a replayable strategy virtual
+lifecycle transition artifact, or an explicit skipped/fail-closed artifact when
+required scope evidence is unavailable. Transition artifacts carry
+`strategy_instance_id`, `strategy_name`, `pair`, `interval`, `scope_key_hash`,
+`runtime_contract_hash`, `before_hash`, `after_hash`, `evidence_hash`,
+`authority=non_authoritative_strategy_virtual_lifecycle_state`, and
+`live_submit_authority=false`. Paper/dev compatibility may persist
+`virtual_target_lifecycle_status=skipped` with a reason; live/live-like paths
+fail closed instead of silently dropping lifecycle evidence. The transition
+hashes are copied into `StrategyPreference`, `StrategyContribution`,
+`portfolio_allocation_decision.allocation_decision_json`, and runtime cycle
+artifacts for replay and attribution. These hashes are bound into contribution
+and allocation hashes, but they remain non-authoritative metadata and are not
+read by target exposure, submit sizing, submit eligibility, pre-submit risk, or
+broker payload construction.
+
+Startup/bootstrap pair target rows are not labeled as post-planning allocator
+authority sources. Flat startup initialization uses
+`startup_target_policy_initialization`, broker-position adoption uses
+`broker_position_adoption_pre_allocation`, and true-dust flat startup
+initialization uses `true_dust_flat_startup_initialization`. Normal
+post-planning target updates use the allocator-derived source only when the
+manifest -> decision bundle -> allocation -> portfolio target -> execution
+batch -> submit plan provenance chain is complete; incomplete post-planning
+provenance fails closed rather than masquerading as complete allocator-derived
+authority.
+
 The current live accounting ledger remains single-asset authority for the
 configured runtime pair. A single aggregate portfolio row such as
 `portfolio(id=1, asset_qty)` is not enough to authorize multi-pair live

@@ -230,6 +230,7 @@ class RuntimeCycleArtifact:
     execution_plan_id: int | None = None
     execution_plan_bundle_hash: str | None = None
     execution_submit_plan_hash: str | None = None
+    strategy_virtual_lifecycle_transition_hashes: Sequence[str] = ()
     strategy_risk_decision_hash: str | None = None
     strategy_risk_policy_hash: str | None = None
     strategy_risk_input_hash: str | None = None
@@ -278,6 +279,9 @@ class RuntimeCycleArtifact:
             "execution_plan_id": self.execution_plan_id,
             "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
             "execution_submit_plan_hash": self.execution_submit_plan_hash,
+            "strategy_virtual_lifecycle_transition_hashes": list(
+                self.strategy_virtual_lifecycle_transition_hashes
+            ),
             "strategy_risk_decision_hash": self.strategy_risk_decision_hash,
             "strategy_risk_policy_hash": self.strategy_risk_policy_hash,
             "strategy_risk_input_hash": self.strategy_risk_input_hash,
@@ -324,6 +328,9 @@ class RuntimeCycleArtifact:
                 "strategy_contribution_hash": self.strategy_contribution_hash,
                 "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
                 "execution_submit_plan_hash": self.execution_submit_plan_hash,
+                "strategy_virtual_lifecycle_transition_hashes": list(
+                    self.strategy_virtual_lifecycle_transition_hashes
+                ),
                 "strategy_risk_decision_hash": self.strategy_risk_decision_hash,
                 "strategy_risk_policy_hash": self.strategy_risk_policy_hash,
                 "strategy_risk_input_hash": self.strategy_risk_input_hash,

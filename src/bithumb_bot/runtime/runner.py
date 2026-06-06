@@ -462,6 +462,7 @@ class Runner:
                 execution_plan_id=decision_result.execution_plan_id,
                 execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
                 execution_submit_plan_hash=decision_result.execution_submit_plan_hash,
+                strategy_virtual_lifecycle_transition_hashes=decision_result.strategy_virtual_lifecycle_transition_hashes,
             )
         execution_result = c.execution_coordinator.execute_cycle(
             candle_ts=decision_result.candle_ts,
@@ -554,6 +555,7 @@ class Runner:
             execution_plan_id=decision_result.execution_plan_id,
             execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
             execution_submit_plan_hash=decision_result.execution_submit_plan_hash,
+            strategy_virtual_lifecycle_transition_hashes=decision_result.strategy_virtual_lifecycle_transition_hashes,
             strategy_risk_decision_hash=decision_result.strategy_risk_decision_hash,
             strategy_risk_policy_hash=decision_result.strategy_risk_policy_hash,
             strategy_risk_input_hash=decision_result.strategy_risk_input_hash,
@@ -629,6 +631,7 @@ def _record_runtime_cycle_artifact(
     execution_plan_id: int | None = None,
     execution_plan_bundle_hash: str | None = None,
     execution_submit_plan_hash: str | None = None,
+    strategy_virtual_lifecycle_transition_hashes: object = (),
     strategy_risk_decision_hash: str | None = None,
     strategy_risk_policy_hash: str | None = None,
     strategy_risk_input_hash: str | None = None,
@@ -662,6 +665,11 @@ def _record_runtime_cycle_artifact(
         if isinstance(notification_event_hashes, (list, tuple))
         else []
     )
+    virtual_lifecycle_hashes = (
+        list(strategy_virtual_lifecycle_transition_hashes)
+        if isinstance(strategy_virtual_lifecycle_transition_hashes, (list, tuple))
+        else []
+    )
     artifact = RuntimeCycleArtifact(
         cycle_id=cycle_id,
         candle_ts=candle_ts,
@@ -678,6 +686,9 @@ def _record_runtime_cycle_artifact(
         execution_plan_id=execution_plan_id,
         execution_plan_bundle_hash=execution_plan_bundle_hash,
         execution_submit_plan_hash=execution_submit_plan_hash,
+        strategy_virtual_lifecycle_transition_hashes=[
+            str(item) for item in virtual_lifecycle_hashes
+        ],
         strategy_risk_decision_hash=strategy_risk_decision_hash,
         strategy_risk_policy_hash=strategy_risk_policy_hash,
         strategy_risk_input_hash=strategy_risk_input_hash,

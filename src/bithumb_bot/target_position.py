@@ -25,6 +25,10 @@ TARGET_POLICY_BLOCK_UNSAFE_STATE = "block_unsafe_state"
 ACTUAL_PAIR_TARGET_AUTHORITY = "allocator_derived_pair_actual_target"
 ACTUAL_PAIR_TARGET_AUTHORITY_SCOPE = "pair"
 ACTUAL_PAIR_TARGET_SOURCE = "PortfolioAllocator->PortfolioTarget->ExecutionPlanBatch->ExecutionSubmitPlan"
+ACTUAL_PAIR_TARGET_SOURCE_PROVENANCE_INCOMPLETE = "allocator_derived_pair_actual_target_provenance_incomplete"
+STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION = "startup_target_policy_initialization"
+STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION = "broker_position_adoption_pre_allocation"
+STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION = "true_dust_flat_startup_initialization"
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,17 @@ def build_actual_pair_target_provenance(
         "authority_scope": ACTUAL_PAIR_TARGET_AUTHORITY_SCOPE,
         "pair": str(pair),
         "source": str(source or ACTUAL_PAIR_TARGET_SOURCE),
+        "provenance_complete": all(
+            bool(str(value or "").strip())
+            for value in (
+                runtime_strategy_set_manifest_hash,
+                runtime_strategy_decision_bundle_hash,
+                portfolio_allocation_decision_hash,
+                portfolio_target_hash,
+                execution_plan_batch_hash,
+                execution_submit_plan_hash,
+            )
+        ),
         "runtime_strategy_set_manifest_hash": str(runtime_strategy_set_manifest_hash or ""),
         "runtime_strategy_decision_bundle_hash": str(runtime_strategy_decision_bundle_hash or ""),
         "portfolio_allocation_decision_hash": str(portfolio_allocation_decision_hash or ""),

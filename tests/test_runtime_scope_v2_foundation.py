@@ -27,6 +27,7 @@ from bithumb_bot.execution_service import (
     ExecutionTargetPlanningInput,
 )
 from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
+from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
 from bithumb_bot.runtime.execution_coordinator import ExecutionCoordinator
 from bithumb_bot.portfolio_allocation import (
     PortfolioAllocationInput,
@@ -53,7 +54,10 @@ from bithumb_bot.runtime_strategy_set import _validate_feature_snapshot_scope_pr
 from bithumb_bot.virtual_target_state import (
     StrategyVirtualTargetState,
     assert_not_live_submit_authority,
+    build_strategy_virtual_lifecycle_skipped_artifact,
+    build_strategy_virtual_lifecycle_transition_artifact,
     evolve_strategy_virtual_target_state,
+    replay_strategy_virtual_lifecycle_transition_hash,
 )
 from bithumb_bot.research.strategy_registry import DataCapabilityRequirement
 
@@ -582,6 +586,65 @@ def test_virtual_target_state_evolves_without_actual_submit_authority() -> None:
     assert bought.as_dict()["live_submit_authority"] is False
     with pytest.raises(TypeError, match="virtual_target_state_not_live_submit_authority"):
         assert_not_live_submit_authority(bought.as_dict())
+
+
+def test_virtual_lifecycle_transition_artifact_hashes_and_replay_mismatch() -> None:
+    scope = _scope(strategy_instance_id="s1")
+    artifact = build_strategy_virtual_lifecycle_transition_artifact(
+        strategy_instance_id="s1",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        scope_key_hash=scope.scope_key_hash(),
+        runtime_contract_hash=scope.runtime_contract_hash,
+        before_hash="sha256:" + "a" * 64,
+        after_hash="sha256:" + "b" * 64,
+        evidence_hash="sha256:" + "c" * 64,
+    )
+
+    assert artifact["authority"] == "non_authoritative_strategy_virtual_lifecycle_state"
+    assert artifact["live_submit_authority"] is False
+    assert artifact["virtual_target_lifecycle_status"] == "transitioned"
+    assert str(artifact["transition_hash"]).startswith("sha256:")
+    assert replay_strategy_virtual_lifecycle_transition_hash(artifact) == artifact["transition_hash"]
+    with pytest.raises(RuntimeError, match="strategy_virtual_lifecycle_transition_hash_mismatch"):
+        replay_strategy_virtual_lifecycle_transition_hash({**artifact, "after_hash": "sha256:" + "d" * 64})
+
+
+def test_virtual_lifecycle_skipped_artifact_is_explicit_non_authority() -> None:
+    artifact = build_strategy_virtual_lifecycle_skipped_artifact(
+        strategy_instance_id="s1",
+        strategy_name="safe_hold",
+        pair="KRW-BTC",
+        interval="1m",
+        scope_key_hash="",
+        runtime_contract_hash="sha256:" + "1" * 64,
+        skip_reason="strategy_virtual_lifecycle_missing:scope_key_hash",
+    )
+
+    assert artifact["virtual_target_lifecycle_status"] == "skipped"
+    assert artifact["skip_reason"] == "strategy_virtual_lifecycle_missing:scope_key_hash"
+    assert artifact["live_submit_authority"] is False
+    assert replay_strategy_virtual_lifecycle_transition_hash(artifact) == artifact["transition_hash"]
+
+
+def test_runtime_cycle_artifact_binds_virtual_lifecycle_transition_hashes() -> None:
+    first = "sha256:" + "1" * 64
+    second = "sha256:" + "2" * 64
+    artifact = RuntimeCycleArtifact(
+        cycle_id="checkpoint:processed",
+        candle_ts=123,
+        strategy_virtual_lifecycle_transition_hashes=(first, second),
+    )
+    payload = artifact.as_dict()
+    changed = RuntimeCycleArtifact(
+        cycle_id="checkpoint:processed",
+        candle_ts=123,
+        strategy_virtual_lifecycle_transition_hashes=(first, "sha256:" + "3" * 64),
+    ).as_dict()
+
+    assert payload["strategy_virtual_lifecycle_transition_hashes"] == [first, second]
+    assert payload["evidence_hash"] != changed["evidence_hash"]
 
 
 def test_multi_asset_ledger_stores_balances_positions_and_blocks_portfolio_projection_authority() -> None:

@@ -97,6 +97,7 @@ class StrategyContribution:
     reason: str
     scope_key_hash: str = ""
     runtime_scope_key: Mapping[str, object] | None = None
+    virtual_lifecycle_evidence: Mapping[str, object] | None = None
     strategy_risk_policy: Mapping[str, object] | None = None
     strategy_risk_snapshot: Mapping[str, object] | None = None
     strategy_risk_profile: Mapping[str, object] | None = None
@@ -126,6 +127,41 @@ class StrategyContribution:
             "scope_key_hash": self.scope_key_hash,
             "runtime_scope_key": (
                 None if self.runtime_scope_key is None else dict(self.runtime_scope_key)
+            ),
+            "virtual_lifecycle_evidence": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else dict(self.virtual_lifecycle_evidence)
+            ),
+            "virtual_lifecycle_transition_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("transition_hash")
+            ),
+            "virtual_lifecycle_before_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("before_hash")
+            ),
+            "virtual_lifecycle_after_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("after_hash")
+            ),
+            "virtual_lifecycle_evidence_hash": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("evidence_hash")
+            ),
+            "virtual_lifecycle_authority": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("authority")
+            ),
+            "virtual_lifecycle_live_submit_authority": (
+                None
+                if self.virtual_lifecycle_evidence is None
+                else self.virtual_lifecycle_evidence.get("live_submit_authority")
             ),
             "desired_exposure_krw": self.desired_exposure_krw,
             "risk_budget_krw": self.risk_budget_krw,
@@ -449,6 +485,7 @@ class PortfolioAllocator:
             strategy_risk_decision=preference.strategy_risk_decision,
             scope_key_hash=preference.scope_key_hash,
             runtime_scope_key=preference.runtime_scope_key,
+            virtual_lifecycle_evidence=preference.virtual_lifecycle_evidence,
             reason=preference.reason,
         )
 
@@ -493,6 +530,14 @@ class PortfolioAllocator:
                 if isinstance(item.strategy_risk_profile, Mapping)
                 and str(item.strategy_risk_profile.get("risk_policy_hash") or "").strip()
             ],
+            "selected_virtual_lifecycle_transition_hashes": [
+                str(item.virtual_lifecycle_evidence.get("transition_hash") or "")
+                for item in top
+                if isinstance(item.virtual_lifecycle_evidence, Mapping)
+                and str(item.virtual_lifecycle_evidence.get("transition_hash") or "").strip()
+            ],
+            "virtual_lifecycle_authority": "non_authoritative_strategy_virtual_lifecycle_state",
+            "virtual_lifecycle_live_submit_authority": False,
             "conflict_count": conflict_count,
         }
         if conflict_count:

@@ -20,6 +20,10 @@ from bithumb_bot.runtime_compat import (
 )
 from bithumb_bot.execution_service import build_execution_decision_summary
 from bithumb_bot.target_position import (
+    ACTUAL_PAIR_TARGET_SOURCE,
+    STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION,
+    STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION,
+    STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION,
     TARGET_ORIGIN_ADOPTED_EXISTING_POSITION,
     TARGET_ORIGIN_FLAT_START,
     TARGET_ORIGIN_OPERATOR_CLOSEOUT,
@@ -465,6 +469,56 @@ def test_run_loop_resolver_missing_target_adopts_and_persists_broker_position(tm
     assert state.adopted_broker_qty == pytest.approx(0.0004998)
     assert state.adopted_broker_exposure_krw == pytest.approx(expected_exposure)
     assert state.created_from_signal == "HOLD"
+    assert metadata["actual_target_source"] == STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION
+    assert state.actual_target_source == STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION
+
+
+def test_run_loop_resolver_startup_flat_and_true_dust_source_labels(tmp_path) -> None:
+    old_engine = settings.EXECUTION_ENGINE
+    old_pair = settings.PAIR
+    try:
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
+        object.__setattr__(settings, "PAIR", "KRW-BTC")
+        flat_conn = ensure_db(str(tmp_path / "target_startup_flat.sqlite"))
+        try:
+            flat = _resolve_target_position_state_for_run_loop(
+                flat_conn,
+                readiness_payload=_readiness(broker_qty=0.0) | {
+                    "residual_proof_min_qty": 0.0001,
+                    "residual_proof_min_notional_krw": 5000.0,
+                },
+                reference_price=100_000_000.0,
+                raw_signal="HOLD",
+                updated_ts=123,
+            )
+            flat_state = load_target_position_state(flat_conn, pair="KRW-BTC")
+        finally:
+            flat_conn.close()
+        dust_conn = ensure_db(str(tmp_path / "target_startup_true_dust.sqlite"))
+        try:
+            dust = _resolve_target_position_state_for_run_loop(
+                dust_conn,
+                readiness_payload=_readiness(broker_qty=0.00000004) | {
+                    "residual_proof_min_qty": 0.0001,
+                    "residual_proof_min_notional_krw": 5000.0,
+                },
+                reference_price=100_000_000.0,
+                raw_signal="HOLD",
+                updated_ts=124,
+            )
+            dust_state = load_target_position_state(dust_conn, pair="KRW-BTC")
+        finally:
+            dust_conn.close()
+    finally:
+        object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
+        object.__setattr__(settings, "PAIR", old_pair)
+
+    assert flat["target_policy_metadata"]["actual_target_source"] == STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION
+    assert flat_state is not None
+    assert flat_state.actual_target_source == STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION
+    assert dust["target_policy_metadata"]["actual_target_source"] == STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION
+    assert dust_state is not None
+    assert dust_state.actual_target_source == STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION
 
 
 def test_execution_summary_after_startup_adoption_does_not_sell() -> None:
@@ -1385,9 +1439,12 @@ def test_target_position_state_persists_pair_actual_target_provenance(tmp_path) 
     assert state.portfolio_target_hash == target_hash
     assert state.execution_plan_batch_hash == batch_hash
     assert state.execution_submit_plan_hash == submit_hash
+    assert state.actual_target_source == ACTUAL_PAIR_TARGET_SOURCE
     provenance = json.loads(state.actual_target_provenance_json)
     assert provenance["authority"] == "allocator_derived_pair_actual_target"
     assert provenance["authority_scope"] == "pair"
+    assert provenance["source"] == ACTUAL_PAIR_TARGET_SOURCE
+    assert provenance["provenance_complete"] is True
     assert provenance["strategy_virtual_lifecycle_authority"] == "non_authoritative_observation_only"
     assert provenance["actual_target_provenance_hash"] == state.actual_target_provenance_hash
 
@@ -1442,6 +1499,41 @@ def test_run_loop_target_state_persister_records_allocator_execution_provenance(
     assert state.portfolio_target_hash == target_hash
     assert state.execution_plan_batch_hash == batch_hash
     assert state.execution_submit_plan_hash == submit_hash
+    assert state.actual_target_source == ACTUAL_PAIR_TARGET_SOURCE
+
+
+def test_run_loop_target_state_persister_rejects_incomplete_allocator_provenance(tmp_path) -> None:
+    from bithumb_bot.runtime.decision_coordinator import persist_target_position_state_for_run_loop
+
+    conn = ensure_db(str(tmp_path / "target-persister-incomplete-provenance.sqlite"))
+    try:
+        with pytest.raises(RuntimeError, match="actual_pair_target_allocator_provenance_incomplete"):
+            persist_target_position_state_for_run_loop(
+                conn,
+                execution_decision={
+                    "target_shadow_decision": {
+                        "target_new_exposure_krw": 80_000.0,
+                        "target_qty": 0.0008,
+                        "target_reference_price": 100_000_000.0,
+                        "target_origin": "allocator",
+                        "target_strategy_signal_source": "BUY",
+                    }
+                },
+                signal="BUY",
+                decision_id=33,
+                updated_ts=444,
+                settings_obj=SimpleNamespace(EXECUTION_ENGINE="target_delta", PAIR="KRW-BTC"),
+                runtime_pair="KRW-BTC",
+                provenance_context={
+                    "runtime_strategy_set_manifest_hash": "sha256:" + "a" * 64,
+                    "runtime_strategy_decision_bundle_hash": "sha256:" + "b" * 64,
+                    "portfolio_allocation_decision_hash": "sha256:" + "c" * 64,
+                    "portfolio_target_hash": "sha256:" + "d" * 64,
+                    "execution_plan_batch_hash": "sha256:" + "e" * 64,
+                },
+            )
+    finally:
+        conn.close()
 
 
 def test_target_delta_hold_without_startup_policy_fails_closed(tmp_path) -> None:

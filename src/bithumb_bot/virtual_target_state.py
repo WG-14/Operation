@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 from .canonical_decision import sha256_prefixed
 
+VIRTUAL_TARGET_LIFECYCLE_AUTHORITY = "non_authoritative_strategy_virtual_lifecycle_state"
+VIRTUAL_TARGET_LIFECYCLE_SKIPPED_STATUS = "skipped"
+
 
 @dataclass(frozen=True)
 class StrategyVirtualTargetState:
@@ -58,7 +61,7 @@ class StrategyVirtualTargetState:
 
     @property
     def authority(self) -> str:
-        return "non_authoritative_strategy_virtual_lifecycle_state"
+        return VIRTUAL_TARGET_LIFECYCLE_AUTHORITY
 
     def as_dict(self) -> dict[str, object]:
         payload = {
@@ -88,8 +91,91 @@ class StrategyVirtualTargetState:
 def assert_not_live_submit_authority(state: object) -> None:
     if isinstance(state, StrategyVirtualTargetState):
         raise TypeError("virtual_target_state_not_live_submit_authority")
-    if isinstance(state, Mapping) and str(state.get("authority") or "") == "non_authoritative_strategy_virtual_lifecycle_state":
+    if isinstance(state, Mapping) and str(state.get("authority") or "") == VIRTUAL_TARGET_LIFECYCLE_AUTHORITY:
         raise TypeError("virtual_target_state_not_live_submit_authority")
+
+
+def build_strategy_virtual_lifecycle_transition_artifact(
+    *,
+    strategy_instance_id: str,
+    strategy_name: str,
+    pair: str,
+    interval: str,
+    scope_key_hash: str,
+    runtime_contract_hash: str,
+    before_hash: str,
+    after_hash: str,
+    evidence_hash: str,
+    status: str = "transitioned",
+    skip_reason: str = "",
+) -> dict[str, object]:
+    payload = {
+        "artifact_type": "strategy_virtual_lifecycle_transition",
+        "schema_version": 1,
+        "strategy_instance_id": str(strategy_instance_id or ""),
+        "strategy_name": str(strategy_name or ""),
+        "pair": str(pair or ""),
+        "interval": str(interval or ""),
+        "scope_key_hash": str(scope_key_hash or ""),
+        "runtime_contract_hash": str(runtime_contract_hash or ""),
+        "before_hash": str(before_hash or ""),
+        "after_hash": str(after_hash or ""),
+        "evidence_hash": str(evidence_hash or ""),
+        "virtual_target_lifecycle_status": str(status or "transitioned"),
+        "skip_reason": str(skip_reason or ""),
+        "authority": VIRTUAL_TARGET_LIFECYCLE_AUTHORITY,
+        "live_submit_authority": False,
+    }
+    payload["transition_hash"] = sha256_prefixed(
+        {key: value for key, value in payload.items() if key != "transition_hash"}
+    )
+    return payload
+
+
+def build_strategy_virtual_lifecycle_skipped_artifact(
+    *,
+    strategy_instance_id: str,
+    strategy_name: str,
+    pair: str,
+    interval: str,
+    scope_key_hash: str,
+    runtime_contract_hash: str,
+    skip_reason: str,
+) -> dict[str, object]:
+    evidence = {
+        "schema_version": 1,
+        "strategy_instance_id": str(strategy_instance_id or ""),
+        "strategy_name": str(strategy_name or ""),
+        "pair": str(pair or ""),
+        "interval": str(interval or ""),
+        "scope_key_hash": str(scope_key_hash or ""),
+        "runtime_contract_hash": str(runtime_contract_hash or ""),
+        "skip_reason": str(skip_reason or ""),
+        "authority": VIRTUAL_TARGET_LIFECYCLE_AUTHORITY,
+        "live_submit_authority": False,
+    }
+    return build_strategy_virtual_lifecycle_transition_artifact(
+        strategy_instance_id=strategy_instance_id,
+        strategy_name=strategy_name,
+        pair=pair,
+        interval=interval,
+        scope_key_hash=scope_key_hash,
+        runtime_contract_hash=runtime_contract_hash,
+        before_hash="",
+        after_hash="",
+        evidence_hash=sha256_prefixed(evidence),
+        status=VIRTUAL_TARGET_LIFECYCLE_SKIPPED_STATUS,
+        skip_reason=skip_reason,
+    )
+
+
+def replay_strategy_virtual_lifecycle_transition_hash(artifact: Mapping[str, object]) -> str:
+    payload = dict(artifact)
+    recorded = str(payload.pop("transition_hash", "") or "")
+    replayed = sha256_prefixed(payload)
+    if recorded and recorded != replayed:
+        raise RuntimeError("strategy_virtual_lifecycle_transition_hash_mismatch")
+    return replayed
 
 
 def evolve_strategy_virtual_target_state(

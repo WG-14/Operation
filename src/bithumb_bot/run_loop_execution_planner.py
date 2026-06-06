@@ -50,13 +50,20 @@ from .strategy_risk_profile import strategy_risk_profile_from_profile_payload
 from .strategy_policy_contract import StrategyDecisionV2
 from .strategy_performance import evaluate_strategy_performance_gate
 from .target_position import (
+    STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION,
+    STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION,
+    STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION,
     TARGET_POLICY_ADOPT_EXISTING_BROKER_POSITION,
     TARGET_POLICY_INITIALIZE_FLAT_TARGET,
     TARGET_POLICY_INITIALIZE_TRUE_DUST_FLAT,
     TARGET_POLICY_USE_EXISTING_TARGET,
     resolve_startup_target_position_policy,
 )
-from .virtual_target_state import evolve_strategy_virtual_target_state
+from .virtual_target_state import (
+    build_strategy_virtual_lifecycle_skipped_artifact,
+    build_strategy_virtual_lifecycle_transition_artifact,
+    evolve_strategy_virtual_target_state,
+)
 
 
 READINESS_CONTEXT_KEYS = (
@@ -704,6 +711,12 @@ def resolve_target_position_state_for_run_loop(
         TARGET_POLICY_ADOPT_EXISTING_BROKER_POSITION,
         TARGET_POLICY_INITIALIZE_TRUE_DUST_FLAT,
     }:
+        startup_source_by_action = {
+            TARGET_POLICY_INITIALIZE_FLAT_TARGET: STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION,
+            TARGET_POLICY_ADOPT_EXISTING_BROKER_POSITION: STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION,
+            TARGET_POLICY_INITIALIZE_TRUE_DUST_FLAT: STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION,
+        }
+        metadata["actual_target_source"] = startup_source_by_action[policy.policy_action]
         upsert_target_position_state(
             conn,
             pair=pair,
@@ -718,6 +731,7 @@ def resolve_target_position_state_for_run_loop(
             adopted_broker_qty=policy.adopted_broker_qty,
             adopted_broker_exposure_krw=policy.adopted_broker_exposure_krw,
             created_from_signal=policy.created_from_signal,
+            actual_target_source=startup_source_by_action[policy.policy_action],
         )
         previous_target_state = load_target_position_state(conn, pair=pair)
     previous_exposure = (
@@ -1207,11 +1221,89 @@ class ExecutionPlanner:
                     runtime_contract_hash = str(
                         result_metadata.get("runtime_contract_hash") or ""
                     ).strip()
-                    if (
-                        scope_key_hash
-                        and runtime_contract_hash
-                        and callable(getattr(conn, "execute", None))
-                    ):
+                    virtual_lifecycle_artifact: dict[str, object]
+                    missing_virtual_lifecycle_fields = [
+                        field
+                        for field, value in (
+                            ("scope_key_hash", scope_key_hash),
+                            ("runtime_contract_hash", runtime_contract_hash),
+                        )
+                        if not str(value or "").strip()
+                    ]
+                    if missing_virtual_lifecycle_fields:
+                        skip_reason = "strategy_virtual_lifecycle_missing:" + ",".join(
+                            sorted(missing_virtual_lifecycle_fields)
+                        )
+                        live_like_virtual_lifecycle = str(
+                            getattr(self.settings_obj, "MODE", "") or ""
+                        ).strip().lower() == "live" or bool(
+                            getattr(self.settings_obj, "LIVE_REAL_ORDER_ARMED", False)
+                        )
+                        if live_like_virtual_lifecycle:
+                            raise ValueError(skip_reason)
+                        virtual_lifecycle_artifact = build_strategy_virtual_lifecycle_skipped_artifact(
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=str(spec.pair),
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            skip_reason=skip_reason,
+                        )
+                        result_metadata.update(
+                            {
+                                "virtual_target_lifecycle_authority": virtual_lifecycle_artifact[
+                                    "authority"
+                                ],
+                                "virtual_target_lifecycle_status": virtual_lifecycle_artifact[
+                                    "virtual_target_lifecycle_status"
+                                ],
+                                "virtual_target_lifecycle_skip_reason": skip_reason,
+                                "virtual_target_live_submit_authority": False,
+                                "virtual_target_state_before_hash": "",
+                                "virtual_target_state_after_hash": "",
+                                "virtual_target_state_evidence_hash": virtual_lifecycle_artifact[
+                                    "evidence_hash"
+                                ],
+                                "virtual_target_lifecycle_transition_hash": virtual_lifecycle_artifact[
+                                    "transition_hash"
+                                ],
+                                "virtual_target_lifecycle_transition_artifact": virtual_lifecycle_artifact,
+                            }
+                        )
+                    elif not callable(getattr(conn, "execute", None)):
+                        skip_reason = "strategy_virtual_lifecycle_missing:sqlite_persistence_connection"
+                        virtual_lifecycle_artifact = build_strategy_virtual_lifecycle_skipped_artifact(
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=str(spec.pair),
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            skip_reason=skip_reason,
+                        )
+                        result_metadata.update(
+                            {
+                                "virtual_target_lifecycle_authority": virtual_lifecycle_artifact[
+                                    "authority"
+                                ],
+                                "virtual_target_lifecycle_status": virtual_lifecycle_artifact[
+                                    "virtual_target_lifecycle_status"
+                                ],
+                                "virtual_target_lifecycle_skip_reason": skip_reason,
+                                "virtual_target_live_submit_authority": False,
+                                "virtual_target_state_before_hash": "",
+                                "virtual_target_state_after_hash": "",
+                                "virtual_target_state_evidence_hash": virtual_lifecycle_artifact[
+                                    "evidence_hash"
+                                ],
+                                "virtual_target_lifecycle_transition_hash": virtual_lifecycle_artifact[
+                                    "transition_hash"
+                                ],
+                                "virtual_target_lifecycle_transition_artifact": virtual_lifecycle_artifact,
+                            }
+                        )
+                    else:
                         previous_virtual_state = load_strategy_virtual_target_state(
                             conn,
                             strategy_instance_id=strategy_instance_id,
@@ -1264,15 +1356,33 @@ class ExecutionPlanner:
                             else previous_virtual_state.content_hash()
                         )
                         after_payload = virtual_state.as_dict()
+                        virtual_lifecycle_artifact = build_strategy_virtual_lifecycle_transition_artifact(
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=str(spec.pair),
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            before_hash=before_hash,
+                            after_hash=virtual_state.content_hash(),
+                            evidence_hash=virtual_state.evidence_hash,
+                        )
                         result_metadata.update(
                             {
                                 "virtual_target_lifecycle_authority": (
-                                    "non_authoritative_strategy_virtual_lifecycle_state"
+                                    virtual_lifecycle_artifact["authority"]
                                 ),
+                                "virtual_target_lifecycle_status": virtual_lifecycle_artifact[
+                                    "virtual_target_lifecycle_status"
+                                ],
                                 "virtual_target_live_submit_authority": False,
                                 "virtual_target_state_before_hash": before_hash,
                                 "virtual_target_state_after_hash": virtual_state.content_hash(),
                                 "virtual_target_state_evidence_hash": virtual_state.evidence_hash,
+                                "virtual_target_lifecycle_transition_hash": virtual_lifecycle_artifact[
+                                    "transition_hash"
+                                ],
+                                "virtual_target_lifecycle_transition_artifact": virtual_lifecycle_artifact,
                                 "virtual_target_state_artifact": after_payload,
                             }
                         )
@@ -1448,10 +1558,30 @@ class ExecutionPlanner:
                             risk_snapshot=spec.risk_snapshot,
                             strategy_risk_profile=strategy_risk_profile_payload,
                             strategy_risk_decision=strategy_risk_decision_payload,
+                            virtual_lifecycle_evidence=(
+                                result_metadata.get("virtual_target_lifecycle_transition_artifact")
+                                if isinstance(
+                                    result_metadata.get(
+                                        "virtual_target_lifecycle_transition_artifact"
+                                    ),
+                                    Mapping,
+                                )
+                                else None
+                            ),
                             metadata=result_metadata,
                         )
                     )
                 context["runtime_strategy_result_contexts"] = runtime_result_contexts
+                context["strategy_virtual_lifecycle_transition_hashes"] = [
+                    str(item.get("virtual_target_lifecycle_transition_hash") or "")
+                    for item in runtime_result_contexts
+                    if str(item.get("virtual_target_lifecycle_transition_hash") or "").strip()
+                ]
+                context["strategy_virtual_lifecycle_transition_artifacts"] = [
+                    dict(item.get("virtual_target_lifecycle_transition_artifact") or {})
+                    for item in runtime_result_contexts
+                    if isinstance(item.get("virtual_target_lifecycle_transition_artifact"), Mapping)
+                ]
                 preferences = tuple(preference_list)
             context["strategy_preference_count"] = len(preferences)
             context["strategy_preferences"] = [item.as_dict() for item in preferences]
