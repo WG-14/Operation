@@ -500,22 +500,15 @@ def test_strict_runtime_strategy_set_requires_explicit_market_scope(
 
 
 @pytest.mark.parametrize(
-    ("strategy_payload", "reason"),
+    "strategy_payload",
     [
-        (
-            {"strategy_name": "canary_non_sma", "interval": "1m"},
-            "runtime_strategy_pair_missing:canary_non_sma",
-        ),
-        (
-            {"strategy_name": "canary_non_sma", "pair": "KRW-BTC"},
-            "runtime_strategy_interval_missing:canary_non_sma",
-        ),
+        {"strategy_name": "canary_non_sma", "interval": "1m"},
+        {"strategy_name": "canary_non_sma", "pair": "KRW-BTC"},
     ],
 )
-def test_strict_runtime_strategy_set_requires_explicit_or_bound_spec_scope(
+def test_strict_runtime_strategy_set_binds_missing_spec_scope_to_market_scope(
     monkeypatch: pytest.MonkeyPatch,
     strategy_payload: dict[str, object],
-    reason: str,
 ) -> None:
     payload = {
         "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
@@ -524,10 +517,13 @@ def test_strict_runtime_strategy_set_requires_explicit_or_bound_spec_scope(
     monkeypatch.setenv("RUNTIME_STRATEGY_SET_JSON", json.dumps(payload))
     object.__setattr__(settings, "MODE", "live")
     try:
-        with pytest.raises(ValueError, match=reason):
-            RuntimeStrategySetResolver().resolve()
+        strategy_set = RuntimeStrategySetResolver().resolve()
     finally:
         object.__setattr__(settings, "MODE", "paper")
+    spec = strategy_set.active_strategies[0]
+    assert spec.pair == "KRW-BTC"
+    assert spec.interval == "1m"
+    assert dict(spec.source_audit)["legacy_compatibility_used"] is False
 
 
 def test_strict_runtime_strategy_set_allows_explicit_market_scope_binding(

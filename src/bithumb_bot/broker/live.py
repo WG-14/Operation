@@ -2390,6 +2390,37 @@ def _broker_submit_authority_allowed(
     return False
 
 
+def _copy_pre_submit_authority_fields(
+    target: dict[str, object],
+    execution_submit_plan: dict[str, object],
+) -> None:
+    for field in (
+        "pre_submit_risk_decision",
+        "pre_submit_risk_decision_hash",
+        "pre_submit_risk_policy_hash",
+        "effective_pre_submit_risk_policy_hash",
+        "pre_submit_risk_input_hash",
+        "pre_submit_risk_evidence_hash",
+        "pre_submit_risk_status",
+        "pre_submit_risk_reason_code",
+        "pre_submit_risk_state_source",
+        "pre_submit_risk_plan_hash",
+        "risk_policy_source",
+        "pre_submit_risk_policy_source",
+        "pre_submit_risk_policy_composition_rule",
+        "strategy_instance_ids",
+        "strategy_risk_profile_hashes",
+        "strategy_risk_policy_hashes",
+        "portfolio_risk_policy_hash",
+        "operational_risk_policy_hash",
+        "residual_risk_policy_hash",
+        "effective_pre_submit_risk_policy",
+    ):
+        value = execution_submit_plan.get(field)
+        if value not in (None, "", ()):
+            target[field] = value
+
+
 def _live_real_legacy_broker_path_blocked(*, signal: str) -> bool:
     if not _live_real_order_performance_gate_applies():
         return False
@@ -2617,50 +2648,50 @@ def _determine_live_execution_intent(
             min_notional_krw=float(position_state.effective_rules.min_notional_krw),
             non_executable_reason="executable",
         )
-        position_state.decision_observability.update(
-            {
-                "execution_engine": "target_delta",
-                "execution_submit_plan_source": "target_delta",
-                "execution_submit_plan_authority": str(target_plan.get("authority") or "canonical_target_delta_sizing"),
-                "execution_submit_plan_hash": str(
-                    target_plan.get("submit_plan_hash") or target_plan.get("content_hash") or ""
-                ),
-                "target_engine_mode": "target_delta",
-                "target_previous_exposure_krw": target_plan.get("target_previous_exposure_krw"),
-                "target_new_exposure_krw": target_plan.get("target_exposure_krw"),
-                "target_current_exposure_krw": target_plan.get("current_effective_exposure_krw"),
-                "target_qty": target_plan.get("target_qty"),
-                "target_delta_qty": target_plan.get("target_delta_qty"),
-                "target_delta_side": target_side,
-                "target_delta_notional_krw": target_plan.get("delta_krw"),
-                "target_delta_intent_type": "target_delta_rebalance",
-                "target_delta_strategy_context": "target_delta",
-                "target_delta_idempotency_key": target_plan.get("idempotency_key"),
-                "target_desired_qty": target_plan.get("target_desired_qty"),
-                "target_exchange_constrained_qty": target_plan.get("target_exchange_constrained_qty"),
-                "target_final_submitted_qty": target_plan.get("target_final_submitted_qty"),
-                "target_sizing_policy": (
-                    target_plan.get("target_sizing", {}).get("sizing_policy")
-                    if isinstance(target_plan.get("target_sizing"), dict)
-                    else None
-                ),
-                "invariant_status": target_plan.get("invariant_status"),
-                "dust_policy": target_plan.get("dust_policy"),
-                "rejected_remainder": target_plan.get("rejected_remainder"),
-                "target_dust_classification": target_plan.get("target_dust_classification"),
-                "target_position_truth_state": target_plan.get("target_position_truth_state"),
-                "source": "target_delta",
-                "authority": "canonical_target_delta_sizing",
-                "submit_qty_source": "canonical_target_delta_sizing",
-                "submit_qty_source_truth_source": "order_sizing.build_target_delta_execution_sizing",
-                "position_state_source": "broker_verified_current_position",
-                "position_state_source_truth_source": "target_delta.broker_position_evidence",
-                "sell_qty_basis_qty": target_qty,
-                "sell_qty_basis_source": "canonical_target_delta_sizing",
-                "sell_qty_basis_qty_truth_source": "target_delta.exchange_constrained_qty",
-                "sell_qty_basis_source_truth_source": "order_sizing.build_target_delta_execution_sizing",
-            }
-        )
+        target_observability = {
+            "execution_engine": "target_delta",
+            "execution_submit_plan_source": "target_delta",
+            "execution_submit_plan_authority": str(target_plan.get("authority") or "canonical_target_delta_sizing"),
+            "execution_submit_plan_hash": str(
+                target_plan.get("submit_plan_hash") or target_plan.get("content_hash") or ""
+            ),
+            "target_engine_mode": "target_delta",
+            "target_previous_exposure_krw": target_plan.get("target_previous_exposure_krw"),
+            "target_new_exposure_krw": target_plan.get("target_exposure_krw"),
+            "target_current_exposure_krw": target_plan.get("current_effective_exposure_krw"),
+            "target_qty": target_plan.get("target_qty"),
+            "target_delta_qty": target_plan.get("target_delta_qty"),
+            "target_delta_side": target_side,
+            "target_delta_notional_krw": target_plan.get("delta_krw"),
+            "target_delta_intent_type": "target_delta_rebalance",
+            "target_delta_strategy_context": "target_delta",
+            "target_delta_idempotency_key": target_plan.get("idempotency_key"),
+            "target_desired_qty": target_plan.get("target_desired_qty"),
+            "target_exchange_constrained_qty": target_plan.get("target_exchange_constrained_qty"),
+            "target_final_submitted_qty": target_plan.get("target_final_submitted_qty"),
+            "target_sizing_policy": (
+                target_plan.get("target_sizing", {}).get("sizing_policy")
+                if isinstance(target_plan.get("target_sizing"), dict)
+                else None
+            ),
+            "invariant_status": target_plan.get("invariant_status"),
+            "dust_policy": target_plan.get("dust_policy"),
+            "rejected_remainder": target_plan.get("rejected_remainder"),
+            "target_dust_classification": target_plan.get("target_dust_classification"),
+            "target_position_truth_state": target_plan.get("target_position_truth_state"),
+            "source": "target_delta",
+            "authority": "canonical_target_delta_sizing",
+            "submit_qty_source": "canonical_target_delta_sizing",
+            "submit_qty_source_truth_source": "order_sizing.build_target_delta_execution_sizing",
+            "position_state_source": "broker_verified_current_position",
+            "position_state_source_truth_source": "target_delta.broker_position_evidence",
+            "sell_qty_basis_qty": target_qty,
+            "sell_qty_basis_source": "canonical_target_delta_sizing",
+            "sell_qty_basis_qty_truth_source": "target_delta.exchange_constrained_qty",
+            "sell_qty_basis_source_truth_source": "order_sizing.build_target_delta_execution_sizing",
+        }
+        _copy_pre_submit_authority_fields(target_observability, target_plan)
+        position_state.decision_observability.update(target_observability)
         if target_side == "BUY" and _live_real_order_performance_gate_applies():
             if _record_strategy_performance_gate_block(
                 conn=conn,
@@ -2709,25 +2740,25 @@ def _determine_live_execution_intent(
         residual_qty = float(execution_submit_plan.get("qty") or 0.0)
         if residual_qty <= POSITION_EPSILON:
             return None
-        position_state.decision_observability.update(
-            {
-                "execution_submit_plan_source": "residual_inventory",
-                "execution_submit_plan_authority": "residual_inventory_policy",
-                "execution_submit_plan_hash": str(
-                    execution_submit_plan.get("submit_plan_hash")
-                    or execution_submit_plan.get("content_hash")
-                    or ""
-                ),
-                "source": "residual_inventory",
-                "authority": "residual_inventory_policy",
-                "submit_qty_source": "residual_inventory_policy",
-                "submit_qty_source_truth_source": "execution_submit_plan.residual_inventory_policy",
-                "sell_qty_basis_qty": residual_qty,
-                "sell_qty_basis_source": "residual_inventory_policy",
-                "sell_qty_basis_qty_truth_source": "execution_submit_plan.qty",
-                "sell_qty_basis_source_truth_source": "execution_submit_plan.authority",
-            }
-        )
+        residual_observability = {
+            "execution_submit_plan_source": "residual_inventory",
+            "execution_submit_plan_authority": "residual_inventory_policy",
+            "execution_submit_plan_hash": str(
+                execution_submit_plan.get("submit_plan_hash")
+                or execution_submit_plan.get("content_hash")
+                or ""
+            ),
+            "source": "residual_inventory",
+            "authority": "residual_inventory_policy",
+            "submit_qty_source": "residual_inventory_policy",
+            "submit_qty_source_truth_source": "execution_submit_plan.residual_inventory_policy",
+            "sell_qty_basis_qty": residual_qty,
+            "sell_qty_basis_source": "residual_inventory_policy",
+            "sell_qty_basis_qty_truth_source": "execution_submit_plan.qty",
+            "sell_qty_basis_source_truth_source": "execution_submit_plan.authority",
+        }
+        _copy_pre_submit_authority_fields(residual_observability, execution_submit_plan)
+        position_state.decision_observability.update(residual_observability)
         residual_sizing = SimpleNamespace(
             allowed=True,
             block_reason="none",

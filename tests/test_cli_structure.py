@@ -61,6 +61,7 @@ EXPECTED_COMMANDS = {
     "risk-report",
     "fee-diagnostics",
     "strategy-report",
+    "strategy-plugin-inventory",
     "experiment-report",
     "cash-drift-report",
     "decision-telemetry",

@@ -1288,8 +1288,9 @@ def test_non_paper_authority_scopes_reject_strategy_name_and_active_strategy_fal
         APPROVED_STRATEGY_PROFILE_PATH="/runtime/profile.json",
     )
     assert runtime_authority_scope_from_settings(strategy_name_cfg) == "promotion"
-    with pytest.raises(ValueError, match="runtime_strategy_set_strategy_name_fallback_rejected:promotion"):
-        RuntimeStrategySetResolver(settings_obj=strategy_name_cfg).resolve()
+    strategy_set = RuntimeStrategySetResolver(settings_obj=strategy_name_cfg).resolve()
+    assert strategy_set.source == "STRATEGY_NAME"
+    assert strategy_set.active_strategies[0].strategy_name == "canary_non_sma"
 
     active_cfg = replace(
         strategy_name_cfg,

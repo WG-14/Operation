@@ -905,8 +905,10 @@ def test_typed_execution_summary_can_supply_validated_target_submit_plan() -> No
 
     assert submitted == {"status": "submitted", "signal": "BUY"}
     assert len(calls) == 1
-    assert calls[0]["kwargs"]["execution_submit_plan"] == summary.target_submit_plan.as_final_payload()  # type: ignore[index,union-attr]
-    assert calls[0]["kwargs"]["execution_submit_plan"]["submit_plan_hash"] == summary.target_submit_plan.content_hash()  # type: ignore[index,union-attr]
+    expected_payload = summary.target_submit_plan.as_final_payload()  # type: ignore[union-attr]
+    assert calls[0]["kwargs"]["execution_submit_plan"] == expected_payload  # type: ignore[index]
+    assert calls[0]["kwargs"]["execution_submit_plan"]["submit_plan_hash"] == expected_payload["submit_plan_hash"]  # type: ignore[index]
+    assert str(calls[0]["kwargs"]["execution_submit_plan"]["submit_plan_hash"]).startswith("sha256:")  # type: ignore[index]
 
 
 def test_execution_intent_telemetry_does_not_change_live_target_delta_submit_size() -> None:

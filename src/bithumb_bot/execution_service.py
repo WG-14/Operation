@@ -508,7 +508,6 @@ def _attach_live_real_pre_submit_risk_proof(
 ) -> dict[str, object] | None:
     if not _pre_submit_risk_required_for_live_real(payload):
         return payload
-    payload["pre_submit_risk_required"] = True
     expected_hash = str(payload.get("submit_plan_hash") or "").strip()
     if not expected_hash:
         expected_hash = execution_submit_plan_payload_hash(payload)
@@ -590,6 +589,7 @@ def _attach_live_real_pre_submit_risk_proof(
                 "final_submit_payload_skip_reason": approval_error,
             }
         )
+        payload["content_hash"] = execution_submit_plan_payload_hash(payload)
         try:
             from .db_core import update_execution_plan_final_submit_payload
 
@@ -620,6 +620,7 @@ def _attach_live_real_pre_submit_risk_proof(
         )
         return None
     payload.update(proof_fields)
+    payload["content_hash"] = execution_submit_plan_payload_hash(payload)
     try:
         from .db_core import update_execution_plan_final_submit_payload
 
@@ -2160,10 +2161,15 @@ def _build_execution_decision_summary_from_authority_payload(
                 intent_type="residual_close",
                 qty=float(residual_candidate.qty),
             )
+            from .runtime_risk_engine import settings_risk_policy
+
+            residual_risk_policy = settings_risk_policy()
             residual_plan_extra = {
                 "intent_type": "residual_close",
                 "strategy_context": "residual_inventory_policy",
                 "residual_inventory_policy_exception": True,
+                "residual_risk_policy": residual_risk_policy.as_dict(),
+                "residual_risk_policy_hash": residual_risk_policy.policy_hash(),
                 "would_submit_pipeline": "standard",
                 "would_intent_key": residual_intent_key,
                 "would_client_order_id_shape": "live_<ts>_sell_<submit_attempt_id>",
@@ -2553,12 +2559,13 @@ class LiveSignalExecutionService:
             try:
                 if typed_target_plan is not None:
                     target_plan = typed_target_plan.as_final_payload()
-                    target_plan = _attach_live_real_pre_submit_risk_proof(
-                        target_plan,
-                        ts_ms=int(request.ts),
-                        market_price=float(request.market_price),
-                        field_name="target_submit_plan",
-                    ) or {}
+                    if _execution_engine() == "target_delta":
+                        target_plan = _attach_live_real_pre_submit_risk_proof(
+                            target_plan,
+                            ts_ms=int(request.ts),
+                            market_price=float(request.market_price),
+                            field_name="target_submit_plan",
+                        ) or {}
                 if typed_residual_plan is not None:
                     residual_plan = typed_residual_plan.as_final_payload()
                     residual_plan = _attach_live_real_pre_submit_risk_proof(

@@ -653,6 +653,31 @@ def execute_live_submission_and_application(
             decision_observability.get("execution_submit_plan_hash") or ""
         ),
     }
+    for field in (
+        "pre_submit_risk_decision",
+        "pre_submit_risk_decision_hash",
+        "pre_submit_risk_policy_hash",
+        "effective_pre_submit_risk_policy_hash",
+        "pre_submit_risk_input_hash",
+        "pre_submit_risk_evidence_hash",
+        "pre_submit_risk_status",
+        "pre_submit_risk_reason_code",
+        "pre_submit_risk_state_source",
+        "pre_submit_risk_plan_hash",
+        "risk_policy_source",
+        "pre_submit_risk_policy_source",
+        "pre_submit_risk_policy_composition_rule",
+        "strategy_instance_ids",
+        "strategy_risk_profile_hashes",
+        "strategy_risk_policy_hashes",
+        "portfolio_risk_policy_hash",
+        "operational_risk_policy_hash",
+        "residual_risk_policy_hash",
+        "effective_pre_submit_risk_policy",
+    ):
+        existing_value = decision_observability.get(field)
+        if existing_value not in (None, "", ()):
+            pre_submit_risk_fields[field] = existing_value
     if str(settings.MODE).strip().lower() == "live" and not bool(settings.LIVE_DRY_RUN):
         expected_plan_hash = str(decision_observability.get("execution_submit_plan_hash") or "").strip()
         decision_plan = risk_decision.evidence.get("submit_plan")

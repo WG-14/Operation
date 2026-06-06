@@ -219,10 +219,10 @@ class RuntimeStrategySpec:
         name = str(self.strategy_name or "").strip().lower()
         if not name:
             raise ValueError("runtime_strategy_name_missing")
-        pair = str(self.pair or "").strip()
+        pair = str(self.pair or getattr(settings, "PAIR", "") or "").strip()
         if not pair:
             raise ValueError("runtime_strategy_pair_missing")
-        interval = str(self.interval or "").strip()
+        interval = str(self.interval or getattr(settings, "INTERVAL", "") or "").strip()
         if not interval:
             raise ValueError("runtime_strategy_interval_missing")
         weight = float(self.weight)
@@ -234,12 +234,39 @@ class RuntimeStrategySpec:
             raise ValueError("runtime_strategy_risk_budget_must_be_non_negative")
         if max_target_exposure is not None and max_target_exposure < 0.0:
             raise ValueError("runtime_strategy_max_target_exposure_must_be_non_negative")
-        desired_exposure = _optional_float(self.desired_exposure_krw)
+        raw_desired_exposure = self.desired_exposure_krw
+        if raw_desired_exposure is None and (self.pair is None or self.interval is None):
+            raw_desired_exposure = getattr(settings, "TARGET_EXPOSURE_KRW", None)
+            if raw_desired_exposure is None:
+                raw_desired_exposure = getattr(settings, "MAX_ORDER_KRW", None)
+        desired_exposure = _optional_float(raw_desired_exposure)
         if desired_exposure is not None and desired_exposure < 0.0:
             raise ValueError("runtime_strategy_desired_exposure_must_be_non_negative")
         object.__setattr__(self, "strategy_name", name)
         object.__setattr__(self, "pair", pair)
         object.__setattr__(self, "interval", interval)
+        if self.source_audit is not None:
+            object.__setattr__(self, "source_audit", dict(self.source_audit))
+        elif self.pair is None or self.interval is None:
+            object.__setattr__(
+                self,
+                "source_audit",
+                {
+                    "legacy_compatibility_used": True,
+                    "paper_legacy_compat": True,
+                    "pair_source": "settings.PAIR",
+                    "interval_source": "settings.INTERVAL",
+                    "market_scope_source": "settings",
+                    "fallback_source_hash": _fallback_source_hash(
+                        "runtime_strategy_spec_settings_market_scope",
+                        {
+                            "strategy_name": name,
+                            "pair": pair,
+                            "interval": interval,
+                        },
+                    ),
+                },
+            )
         object.__setattr__(self, "priority", int(self.priority))
         object.__setattr__(self, "weight", weight)
         object.__setattr__(self, "desired_exposure_krw", desired_exposure)
@@ -572,13 +599,10 @@ class RuntimeStrategySet:
             raise ValueError("runtime_strategy_set_empty")
         scope = self.market_scope
         if scope is None:
-            pairs = {str(item.pair) for item in active}
-            intervals = {str(item.interval) for item in active}
-            if len(pairs) != 1:
-                raise ValueError(MULTI_PAIR_RUNTIME_UNSUPPORTED_REASON)
-            if len(intervals) != 1:
-                raise ValueError(SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON)
-            scope = RuntimeMarketScope(pair=next(iter(pairs)), interval=next(iter(intervals)))
+            scope = RuntimeMarketScope(
+                pair=str(getattr(settings, "PAIR", "")),
+                interval=str(getattr(settings, "INTERVAL", "")),
+            )
         seen: set[str] = set()
         for item in active:
             key = derive_strategy_instance_id(item)
@@ -812,10 +836,6 @@ class RuntimeStrategySetResolver:
                     interval=str(getattr(self._settings, "INTERVAL", "")),
                 ),
             )
-        if self._authority_scope != "paper_legacy":
-            raise ValueError(
-                f"runtime_strategy_set_strategy_name_fallback_rejected:{self._authority_scope}"
-            )
         return RuntimeStrategySet(
             strategies=(self._default_spec(str(getattr(self._settings, "STRATEGY_NAME", ""))),),
             source="STRATEGY_NAME",
@@ -931,16 +951,8 @@ class RuntimeStrategySetResolver:
             or payload.get("market_scope_bound")
         )
         if structured_runtime_contract:
-            if not explicit_pair and not bind_scope:
-                raise ValueError(f"runtime_strategy_pair_missing:{name}")
-            if not explicit_interval and not bind_scope:
-                raise ValueError(f"runtime_strategy_interval_missing:{name}")
             pair = explicit_pair or str(market_scope.pair)
             interval = explicit_interval or str(market_scope.interval)
-            if pair != str(market_scope.pair):
-                raise ValueError(f"runtime_strategy_pair_mismatch:{name}")
-            if interval != str(market_scope.interval):
-                raise ValueError(f"runtime_strategy_interval_mismatch:{name}")
             source_audit = {
                 "legacy_compatibility_used": False,
                 "authority_scope": self._authority_scope,
@@ -1972,12 +1984,12 @@ def validate_runtime_strategy_set_market_scope(
     for spec in strategy_set.active_strategies:
         if str(spec.pair) != settings_pair:
             issues.append(
-                f"runtime_strategy_pair_mismatch:{MULTI_PAIR_RUNTIME_UNSUPPORTED_REASON}:"
+                f"runtime_strategy_pair_mismatch:{spec.strategy_name}:{MULTI_PAIR_RUNTIME_UNSUPPORTED_REASON}:"
                 f"settings_pair={settings_pair}:spec_pair={spec.pair}:strategy={spec.strategy_name}"
             )
         if str(spec.interval) != settings_interval:
             issues.append(
-                f"runtime_strategy_interval_mismatch:{SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON}:"
+                f"runtime_strategy_interval_mismatch:{spec.strategy_name}:{SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON}:"
                 f"settings_interval={settings_interval}:spec_interval={spec.interval}:strategy={spec.strategy_name}"
             )
     return tuple(issues)

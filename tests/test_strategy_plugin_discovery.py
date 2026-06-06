@@ -523,6 +523,7 @@ def test_entry_point_strategy_plugin_is_discovered(monkeypatch: pytest.MonkeyPat
         "live_dry_run_allowed": True,
         "live_real_order_allowed": False,
         "approved_profile_required": True,
+        "accepts_empty_runtime_parameters": False,
         "fail_closed_reason": "dynamic_plugin_capability_missing",
     }
     assert payload["live_eligibility"] == {
