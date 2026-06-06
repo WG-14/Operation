@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import ast
@@ -8,6 +9,7 @@ from bithumb_bot.research.strategy_registry import list_research_strategy_plugin
 
 
 REPO = Path(__file__).resolve().parents[1]
+ARCHITECTURE_BOUNDARY_MANIFEST = REPO / "docs" / "architecture-boundaries.json"
 
 OFFICIAL_PATHS = (
     "src/bithumb_bot/approved_profile.py",
@@ -49,20 +51,6 @@ EXPLICIT_COMPATIBILITY_PATHS = {
     "src/bithumb_bot/strategy/registry.py",
 }
 
-STRATEGY_NEUTRAL_CORE_PATHS = (
-    "src/bithumb_bot/config.py",
-    "src/bithumb_bot/strategy_decision_service.py",
-    "src/bithumb_bot/runtime_data_provider.py",
-    "src/bithumb_bot/strategy_decision_input.py",
-    "src/bithumb_bot/runtime_strategy_decision.py",
-    "src/bithumb_bot/runtime_strategy_set.py",
-    "src/bithumb_bot/execution_service.py",
-    "src/bithumb_bot/run_loop_execution_planner.py",
-    "src/bithumb_bot/decision_envelope.py",
-)
-
-STRATEGY_LITERAL_EXCEPTION_ALLOWLIST: dict[str, dict[str, str]] = {}
-
 STRATEGY_NAME_BRANCH_NAMES = frozenset(
     {
         "key",
@@ -88,6 +76,42 @@ STRATEGY_SPECIFIC_CORE_REASON = (
     "strategy-specific logic belongs in plugin/adapter/projector/contract code, "
     "not strategy-neutral runtime/decision core"
 )
+
+
+def _load_architecture_boundary_manifest() -> dict[str, object]:
+    payload = json.loads(ARCHITECTURE_BOUNDARY_MANIFEST.read_text(encoding="utf-8"))
+    if int(payload.get("schema_version") or 0) != 1:
+        raise AssertionError("architecture boundary manifest schema_version must be 1")
+    core_paths = payload.get("strategy_neutral_core_paths")
+    if not isinstance(core_paths, list) or not all(isinstance(item, str) for item in core_paths):
+        raise AssertionError("architecture manifest strategy_neutral_core_paths must be a list of strings")
+    exceptions = payload.get("strategy_literal_exceptions", {})
+    if not isinstance(exceptions, dict):
+        raise AssertionError("architecture manifest strategy_literal_exceptions must be an object")
+    for relative, literal_reasons in exceptions.items():
+        if not isinstance(relative, str) or not isinstance(literal_reasons, dict):
+            raise AssertionError("architecture manifest exceptions must map path to literal reason mapping")
+        for literal, reason in literal_reasons.items():
+            if not isinstance(literal, str) or not str(reason).strip():
+                raise AssertionError("architecture manifest exception entries require concrete reasons")
+    policy = payload.get("strategy_literal_exception_policy", {})
+    if not isinstance(policy, dict) or policy.get("default") != "deny":
+        raise AssertionError("architecture manifest must use default-deny strategy literal policy")
+    return payload
+
+
+def _strategy_neutral_core_paths() -> tuple[str, ...]:
+    manifest = _load_architecture_boundary_manifest()
+    return tuple(str(item) for item in manifest["strategy_neutral_core_paths"])
+
+
+def _strategy_literal_exception_allowlist() -> dict[str, dict[str, str]]:
+    manifest = _load_architecture_boundary_manifest()
+    exceptions = manifest.get("strategy_literal_exceptions", {})
+    return {
+        str(relative): {str(literal): str(reason) for literal, reason in dict(literals).items()}
+        for relative, literals in dict(exceptions).items()
+    }
 
 
 def _iter_official_files() -> list[Path]:
@@ -143,7 +167,7 @@ def _registered_strategy_names() -> frozenset[str]:
 
 
 def _strategy_literal_allowed(*, relative: str, literal: str) -> bool:
-    return literal in STRATEGY_LITERAL_EXCEPTION_ALLOWLIST.get(relative, {})
+    return literal in _strategy_literal_exception_allowlist().get(relative, {})
 
 
 def _forbidden_strategy_literal(node: ast.AST, forbidden_literals: frozenset[str]) -> str | None:
@@ -233,7 +257,7 @@ def test_strategy_neutral_core_files_do_not_contain_strategy_specific_special_ca
     forbidden_literals = _registered_strategy_names()
     assert forbidden_literals
     failures: list[str] = []
-    for relative in STRATEGY_NEUTRAL_CORE_PATHS:
+    for relative in _strategy_neutral_core_paths():
         path = REPO / relative
         source = path.read_text(encoding="utf-8-sig")
         failures.extend(
@@ -248,6 +272,18 @@ def test_strategy_neutral_core_files_do_not_contain_strategy_specific_special_ca
         )
 
     assert failures == []
+
+
+def test_architecture_boundary_manifest_defines_strategy_neutral_core() -> None:
+    manifest = _load_architecture_boundary_manifest()
+    paths = _strategy_neutral_core_paths()
+
+    assert ARCHITECTURE_BOUNDARY_MANIFEST.exists()
+    assert "src/bithumb_bot/config.py" in paths
+    assert "src/bithumb_bot/runtime_risk_engine.py" in paths
+    assert manifest["strategy_literal_exception_policy"]["default"] == "deny"
+    for relative in paths:
+        assert (REPO / relative).exists(), relative
 
 
 def test_strategy_name_guard_uses_registered_plugin_inventory_for_literals() -> None:

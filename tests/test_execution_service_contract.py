@@ -91,11 +91,15 @@ def _with_pre_submit_risk_proof(payload: dict[str, object]) -> dict[str, object]
         "pre_submit_risk_status": "ALLOW",
         "pre_submit_risk_decision_hash": "sha256:" + "1" * 64,
         "pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
+        "effective_pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
         "pre_submit_risk_input_hash": "sha256:" + "3" * 64,
         "pre_submit_risk_evidence_hash": "sha256:" + "4" * 64,
         "pre_submit_risk_plan_hash": plan_hash,
         "pre_submit_risk_reason_code": "OK",
         "pre_submit_risk_state_source": "unit",
+        "risk_policy_source": "strategy_risk_profiles",
+        "pre_submit_risk_policy_composition_rule": "most_restrictive_selected_strategy_policy",
+        "strategy_risk_profile_hashes": ["sha256:" + "8" * 64],
     }
 
 
@@ -319,11 +323,15 @@ def test_operational_pre_submit_risk_approval_requires_allow_and_matching_plan_h
         "pre_submit_risk_status": "ALLOW",
         "pre_submit_risk_decision_hash": "sha256:" + "1" * 64,
         "pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
+        "effective_pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
         "pre_submit_risk_input_hash": "sha256:" + "3" * 64,
         "pre_submit_risk_evidence_hash": "sha256:" + "4" * 64,
         "pre_submit_risk_plan_hash": "sha256:plan",
         "pre_submit_risk_reason_code": "OK",
         "pre_submit_risk_state_source": "runtime_db_broker",
+        "risk_policy_source": "strategy_risk_profiles",
+        "pre_submit_risk_policy_composition_rule": "most_restrictive_selected_strategy_policy",
+        "strategy_risk_profile_hashes": ["sha256:" + "8" * 64],
     }
 
     assert operational_pre_submit_risk_approval_error(
@@ -392,11 +400,15 @@ def test_final_submit_payload_update_persists_broker_bound_pre_submit_proof() ->
             "pre_submit_risk_status": "ALLOW",
             "pre_submit_risk_decision_hash": "sha256:" + "1" * 64,
             "pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
+            "effective_pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
             "pre_submit_risk_input_hash": "sha256:" + "3" * 64,
             "pre_submit_risk_evidence_hash": "sha256:" + "4" * 64,
             "pre_submit_risk_plan_hash": "sha256:plan",
             "pre_submit_risk_reason_code": "OK",
             "pre_submit_risk_state_source": "runtime_db_broker",
+            "risk_policy_source": "strategy_risk_profiles",
+            "pre_submit_risk_policy_composition_rule": "most_restrictive_selected_strategy_policy",
+            "strategy_risk_profile_hashes": ["sha256:" + "8" * 64],
         }
 
         result = update_execution_plan_final_submit_payload(
@@ -497,6 +509,41 @@ def test_live_real_target_delta_pre_submit_rejects_missing_strategy_risk_profile
                 "portfolio_risk_policy_hash": "sha256:" + "9" * 64,
             }
         )
+
+
+def test_live_real_residual_pre_submit_rejects_runtime_settings_fallback() -> None:
+    from bithumb_bot.runtime_risk_engine import resolve_effective_pre_submit_risk_policy
+
+    with pytest.raises(ValueError, match="pre_submit_explicit_residual_risk_policy_missing"):
+        resolve_effective_pre_submit_risk_policy(
+            {
+                "source": "residual_inventory",
+                "authority": "residual_inventory_policy",
+                "pre_submit_risk_required": True,
+            }
+        )
+
+
+def test_live_real_residual_pre_submit_accepts_explicit_operational_policy() -> None:
+    from bithumb_bot.runtime_risk_engine import resolve_effective_pre_submit_risk_policy
+
+    policy = RiskPolicy(source="explicit_residual_unit", max_daily_order_count=3)
+    effective = resolve_effective_pre_submit_risk_policy(
+        {
+            "source": "residual_inventory",
+            "authority": "residual_inventory_policy",
+            "pre_submit_risk_required": True,
+            "operational_risk_policy": policy.as_dict(),
+            "operational_risk_policy_hash": policy.policy_hash(),
+        }
+    )
+    fields = effective.evidence_fields()
+
+    assert effective.risk_policy_source == "operational_risk_policy"
+    assert effective.policy.policy_hash() == policy.policy_hash()
+    assert fields["operational_risk_policy_hash"] == policy.policy_hash()
+    assert fields["effective_pre_submit_risk_policy_hash"] == policy.policy_hash()
+    assert fields["pre_submit_risk_policy_composition_rule"] == "explicit_operational_pre_submit_policy"
 
 
 def _typed_target_execution_summary() -> ExecutionDecisionSummary:

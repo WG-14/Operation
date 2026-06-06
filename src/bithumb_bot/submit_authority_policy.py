@@ -298,15 +298,33 @@ def operational_pre_submit_risk_approval_error(
         "pre_submit_risk_policy_hash",
         "pre_submit_risk_input_hash",
         "pre_submit_risk_evidence_hash",
+        "effective_pre_submit_risk_policy_hash",
     ):
         if not _valid_sha256_prefixed(payload.get(field)):
             return f"live_real_order_{field}_missing"
     for field in (
         "pre_submit_risk_reason_code",
         "pre_submit_risk_state_source",
+        "risk_policy_source",
+        "pre_submit_risk_policy_composition_rule",
     ):
         if not str(payload.get(field) or "").strip():
             return f"live_real_order_{field}_missing"
+    authority_hash_fields = (
+        "strategy_risk_profile_hashes",
+        "portfolio_risk_policy_hash",
+        "operational_risk_policy_hash",
+        "residual_risk_policy_hash",
+    )
+    if not any(
+        (
+            isinstance(payload.get(field), list)
+            and any(_valid_sha256_prefixed(item) for item in payload.get(field) or [])
+        )
+        or _valid_sha256_prefixed(payload.get(field))
+        for field in authority_hash_fields
+    ):
+        return "live_real_order_pre_submit_explicit_policy_authority_hash_missing"
     actual_plan_hash = str(payload.get("pre_submit_risk_plan_hash") or "").strip()
     if not str(expected_submit_plan_hash or "").strip():
         return "live_real_order_pre_submit_expected_plan_hash_missing"

@@ -40,6 +40,8 @@ class EffectivePreSubmitRiskPolicy:
     strategy_risk_profile_hashes: tuple[str, ...] = ()
     strategy_risk_policy_hashes: tuple[str, ...] = ()
     portfolio_risk_policy_hash: str | None = None
+    operational_risk_policy_hash: str | None = None
+    residual_risk_policy_hash: str | None = None
     composition_rule: str = "settings_fallback_no_plan_bound_strategy_policy"
 
     def evidence_fields(self) -> dict[str, object]:
@@ -51,6 +53,8 @@ class EffectivePreSubmitRiskPolicy:
             "strategy_risk_profile_hashes": list(self.strategy_risk_profile_hashes),
             "strategy_risk_policy_hashes": list(self.strategy_risk_policy_hashes),
             "portfolio_risk_policy_hash": self.portfolio_risk_policy_hash,
+            "operational_risk_policy_hash": self.operational_risk_policy_hash,
+            "residual_risk_policy_hash": self.residual_risk_policy_hash,
             "effective_pre_submit_risk_policy": self.policy.as_dict(),
             "effective_pre_submit_risk_policy_hash": self.policy.policy_hash(),
         }
@@ -60,10 +64,12 @@ def resolve_effective_pre_submit_risk_policy(
     submit_payload: Mapping[str, object],
 ) -> EffectivePreSubmitRiskPolicy:
     strategy_profiles = _strategy_risk_profiles_from_submit_payload(submit_payload)
+    source = str(submit_payload.get("source") or "").strip()
+    pre_submit_required = bool(submit_payload.get("pre_submit_risk_required"))
     if (
         not strategy_profiles
-        and str(submit_payload.get("source") or "").strip() == "target_delta"
-        and bool(submit_payload.get("pre_submit_risk_required"))
+        and source == "target_delta"
+        and pre_submit_required
     ):
         raise ValueError("pre_submit_strategy_risk_profiles_missing_for_target_delta")
     if strategy_profiles:
@@ -99,6 +105,32 @@ def resolve_effective_pre_submit_risk_policy(
             ),
             composition_rule="most_restrictive_selected_strategy_policy",
         )
+    explicit_policy = _explicit_non_target_pre_submit_policy(submit_payload)
+    if explicit_policy is not None:
+        policy, policy_source, declared_hash, composition_rule = explicit_policy
+        policy_hash = policy.policy_hash()
+        if declared_hash and declared_hash != policy_hash:
+            raise ValueError(f"pre_submit_{policy_source}_policy_hash_mismatch")
+        return EffectivePreSubmitRiskPolicy(
+            policy=policy,
+            risk_policy_source=policy_source,
+            portfolio_risk_policy_hash=(
+                policy_hash
+                if policy_source == "portfolio_risk_policy"
+                else str(submit_payload.get("portfolio_risk_policy_hash") or "").strip() or None
+            ),
+            operational_risk_policy_hash=(
+                policy_hash if policy_source == "operational_risk_policy" else None
+            ),
+            residual_risk_policy_hash=(
+                policy_hash if policy_source == "residual_risk_policy" else None
+            ),
+            composition_rule=composition_rule,
+        )
+    if source == "residual_inventory" and pre_submit_required:
+        raise ValueError("pre_submit_explicit_residual_risk_policy_missing")
+    if pre_submit_required:
+        raise ValueError("pre_submit_runtime_settings_fallback_rejected_for_live_real")
     return EffectivePreSubmitRiskPolicy(
         policy=settings_risk_policy(),
         risk_policy_source="runtime_settings_fallback",
@@ -106,6 +138,42 @@ def resolve_effective_pre_submit_risk_policy(
             str(submit_payload.get("portfolio_risk_policy_hash") or "").strip() or None
         ),
     )
+
+
+def _explicit_non_target_pre_submit_policy(
+    submit_payload: Mapping[str, object],
+) -> tuple[RiskPolicy, str, str | None, str] | None:
+    candidates = (
+        (
+            "residual_risk_policy",
+            "residual_risk_policy_hash",
+            "residual_risk_policy",
+            "explicit_residual_pre_submit_policy",
+        ),
+        (
+            "operational_risk_policy",
+            "operational_risk_policy_hash",
+            "operational_risk_policy",
+            "explicit_operational_pre_submit_policy",
+        ),
+        (
+            "portfolio_risk_policy",
+            "portfolio_risk_policy_hash",
+            "portfolio_risk_policy",
+            "explicit_portfolio_pre_submit_policy",
+        ),
+    )
+    for policy_field, hash_field, source, rule in candidates:
+        raw_policy = submit_payload.get(policy_field)
+        if not isinstance(raw_policy, Mapping):
+            continue
+        return (
+            risk_policy_from_mapping(raw_policy),
+            source,
+            str(submit_payload.get(hash_field) or "").strip() or None,
+            rule,
+        )
+    return None
 
 
 def _strategy_risk_profiles_from_submit_payload(

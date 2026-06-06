@@ -508,6 +508,7 @@ def _attach_live_real_pre_submit_risk_proof(
 ) -> dict[str, object] | None:
     if not _pre_submit_risk_required_for_live_real(payload):
         return payload
+    payload["pre_submit_risk_required"] = True
     expected_hash = str(payload.get("submit_plan_hash") or "").strip()
     if not expected_hash:
         expected_hash = execution_submit_plan_payload_hash(payload)

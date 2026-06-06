@@ -539,7 +539,7 @@ def test_live_preflight_validates_active_strategy_set(monkeypatch: pytest.Monkey
 
     msg = str(exc.value)
     assert "runtime_strategy_set_selection_failed" in msg
-    assert "sma_cross:strategy_plugin_not_registered" in msg
+    assert "runtime_strategy_set_active_strategies_fallback_rejected:live_dry_run" in msg
 
 
 def test_live_preflight_rejects_multi_active_strategies_without_structured_contract(
@@ -554,7 +554,7 @@ def test_live_preflight_rejects_multi_active_strategies_without_structured_contr
 
     msg = str(exc.value)
     assert "runtime_strategy_set_selection_failed" in msg
-    assert "ACTIVE_STRATEGIES:live_multi_strategy_requires_runtime_strategy_set_json" in msg
+    assert "runtime_strategy_set_active_strategies_fallback_rejected:live_dry_run" in msg
 
 
 def test_live_multi_strategy_requires_spec_bound_approved_profiles(

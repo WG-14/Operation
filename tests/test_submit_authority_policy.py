@@ -83,11 +83,15 @@ def _approved(plan: ExecutionSubmitPlan) -> ExecutionSubmitPlan:
             "pre_submit_risk_status": "ALLOW",
             "pre_submit_risk_decision_hash": "sha256:" + "1" * 64,
             "pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
+            "effective_pre_submit_risk_policy_hash": "sha256:" + "2" * 64,
             "pre_submit_risk_input_hash": "sha256:" + "3" * 64,
             "pre_submit_risk_evidence_hash": "sha256:" + "4" * 64,
             "pre_submit_risk_plan_hash": plan_hash,
             "pre_submit_risk_reason_code": "OK",
             "pre_submit_risk_state_source": "unit",
+            "risk_policy_source": "strategy_risk_profiles",
+            "pre_submit_risk_policy_composition_rule": "most_restrictive_selected_strategy_policy",
+            "strategy_risk_profile_hashes": ["sha256:" + "8" * 64],
         }
     )
     return replace(plan, extra_payload=extra)

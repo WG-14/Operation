@@ -32,6 +32,7 @@ from bithumb_bot.runtime_strategy_set import (
     RuntimeStrategySetResolver,
     RuntimeStrategySpec,
     normalized_runtime_strategy_set_manifest,
+    runtime_authority_scope_from_settings,
     validate_runtime_strategy_set_market_scope,
     validate_runtime_strategy_set_profile_binding,
 )
@@ -1273,6 +1274,66 @@ def test_paper_legacy_compat_is_explicit_when_fallback_is_used() -> None:
     assert request.runtime_strategy_spec.legacy_compatibility_used is True
     assert request.runtime_strategy_spec.parameter_authority_audit["authority"] == "paper_legacy_compat"
     assert request.runtime_strategy_spec.parameter_authority_audit["legacy_fallback"] == "STRATEGY_PARAMETERS_JSON"
+    assert request.runtime_strategy_spec.parameter_authority_audit["paper_legacy_compat"] is True
+    assert str(request.runtime_strategy_spec.parameter_authority_audit["fallback_source_hash"]).startswith("sha256:")
+
+
+def test_non_paper_authority_scopes_reject_strategy_name_and_active_strategy_fallbacks() -> None:
+    strategy_name_cfg = replace(
+        settings,
+        MODE="paper",
+        STRATEGY_NAME="canary_non_sma",
+        ACTIVE_STRATEGIES="",
+        RUNTIME_STRATEGY_SET_JSON="",
+        APPROVED_STRATEGY_PROFILE_PATH="/runtime/profile.json",
+    )
+    assert runtime_authority_scope_from_settings(strategy_name_cfg) == "promotion"
+    with pytest.raises(ValueError, match="runtime_strategy_set_strategy_name_fallback_rejected:promotion"):
+        RuntimeStrategySetResolver(settings_obj=strategy_name_cfg).resolve()
+
+    active_cfg = replace(
+        strategy_name_cfg,
+        ACTIVE_STRATEGIES="canary_non_sma,sma_with_filter",
+    )
+    with pytest.raises(ValueError, match="runtime_strategy_set_active_strategies_fallback_rejected:promotion"):
+        RuntimeStrategySetResolver(settings_obj=active_cfg).resolve()
+
+
+def test_runtime_replay_scope_rejects_hidden_parameter_fallback() -> None:
+    cfg = replace(
+        settings,
+        MODE="paper",
+        STRATEGY_PARAMETERS_JSON=json.dumps(_complete_canary_parameters()),
+    )
+
+    with pytest.raises(RuntimeError, match="strict_runtime_rejects_strategy_parameters_json_fallback"):
+        RuntimeDecisionRequestBuilder(
+            settings_obj=cfg,
+            authority_scope="runtime_replay",
+        ).build_for_spec(
+            RuntimeStrategySpec("canary_non_sma", pair="KRW-BTC", interval="1m"),
+            through_ts_ms=1_700_000_180_000,
+        )
+
+
+def test_structured_runtime_scope_preserves_reproducibility_hashes() -> None:
+    request = RuntimeDecisionRequestBuilder(authority_scope="runtime_replay").build_for_spec(
+        RuntimeStrategySpec(
+            "canary_non_sma",
+            pair="KRW-BTC",
+            interval="1m",
+            parameters=_complete_canary_parameters(),
+        ),
+        through_ts_ms=1_700_000_180_000,
+    )
+    fields = request.observability_fields()
+
+    assert str(fields["runtime_decision_request_hash"]).startswith("sha256:")
+    assert str(fields["runtime_contract_hash"]).startswith("sha256:")
+    assert str(fields["plugin_contract_hash"]).startswith("sha256:")
+    assert str(fields["strategy_parameters_hash"]).startswith("sha256:")
+    assert request.runtime_strategy_spec.profile_authority_context["authority_scope"] == "runtime_replay"
+    assert request.parameter_source == "runtime_strategy_spec"
 
 
 def test_runtime_strategy_spec_parameters_are_authoritative_without_settings_fallback(

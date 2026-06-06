@@ -396,9 +396,12 @@ def _global_approved_profile_selector(cfg: object) -> str:
 
 
 def _resolve_runtime_strategy_set_for_live_startup(cfg: Settings):
-    from .runtime_strategy_set import RuntimeStrategySetResolver
+    from .runtime_strategy_set import RuntimeStrategySetResolver, runtime_authority_scope_from_settings
 
-    return RuntimeStrategySetResolver(settings_obj=cfg).resolve()
+    return RuntimeStrategySetResolver(
+        settings_obj=cfg,
+        authority_scope=runtime_authority_scope_from_settings(cfg),
+    ).resolve()
 
 
 def _runtime_selection_kind(strategy_set: object) -> Literal["single_strategy", "multi_strategy"]:
@@ -553,13 +556,17 @@ def validate_runtime_strategy_set_selection(cfg: Settings) -> None:
         ProfileAuthorityContext,
         RuntimeStrategySetResolver,
         derive_strategy_instance_id,
+        runtime_authority_scope_from_settings,
         validate_runtime_strategy_set_market_scope,
         validate_runtime_strategy_set_profile_binding,
     )
     from . import runtime_strategy_set as runtime_strategy_set_module
 
     try:
-        strategy_set = RuntimeStrategySetResolver(settings_obj=cfg).resolve()
+        strategy_set = RuntimeStrategySetResolver(
+            settings_obj=cfg,
+            authority_scope=runtime_authority_scope_from_settings(cfg),
+        ).resolve()
     except Exception as exc:
         raise LiveModeValidationError(
             f"runtime_strategy_set_selection_failed: resolve_failed:{type(exc).__name__}:{exc}"

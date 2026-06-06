@@ -58,6 +58,54 @@ from .runtime_data_provider import (
     runtime_data_provider_contract_hash,
 )
 
+RuntimeAuthorityScope = Literal[
+    "paper_legacy",
+    "promotion",
+    "runtime_replay",
+    "live_dry_run",
+    "live_real_order",
+]
+
+
+def normalize_runtime_authority_scope(value: str | None) -> RuntimeAuthorityScope:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return "paper_legacy"
+    if normalized not in {
+        "paper_legacy",
+        "promotion",
+        "runtime_replay",
+        "live_dry_run",
+        "live_real_order",
+    }:
+        raise ValueError(f"runtime_authority_scope_unsupported:{normalized}")
+    return normalized  # type: ignore[return-value]
+
+
+def runtime_authority_scope_from_settings(settings_obj: object = settings) -> RuntimeAuthorityScope:
+    mode = str(getattr(settings_obj, "MODE", "") or "").strip().lower()
+    if mode == "live":
+        if bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False)) and not bool(
+            getattr(settings_obj, "LIVE_DRY_RUN", True)
+        ):
+            return "live_real_order"
+        return "live_dry_run"
+    if str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
+        return "promotion"
+    if str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip():
+        return "promotion"
+    return "paper_legacy"
+
+
+def _fallback_source_hash(source: str, payload: Mapping[str, object]) -> str:
+    return sha256_prefixed(
+        {
+            "paper_legacy_compat": True,
+            "fallback_source": source,
+            "fallback_payload": dict(payload),
+        }
+    )
+
 
 def _optional_float(value: object) -> float | None:
     if value is None or value == "":
@@ -593,6 +641,7 @@ class ProfileAuthorityContext:
     runtime_mode: str | None = None
     live_dry_run: bool | None = None
     live_real_order_armed: bool | None = None
+    authority_scope: RuntimeAuthorityScope = "paper_legacy"
 
     def __post_init__(self) -> None:
         selection_kind = str(self.selection_kind or "").strip()
@@ -611,6 +660,7 @@ class ProfileAuthorityContext:
         object.__setattr__(self, "expected_profile_modes", modes)
         if self.runtime_mode is not None:
             object.__setattr__(self, "runtime_mode", str(self.runtime_mode).strip().lower() or None)
+        object.__setattr__(self, "authority_scope", normalize_runtime_authority_scope(self.authority_scope))
 
     @classmethod
     def for_strategy_set(
@@ -635,6 +685,7 @@ class ProfileAuthorityContext:
             runtime_mode=str(getattr(settings_obj, "MODE", "") or "").strip().lower() or None,
             live_dry_run=bool(getattr(settings_obj, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False)),
+            authority_scope=runtime_authority_scope_from_settings(settings_obj),
         )
 
     @classmethod
@@ -660,6 +711,7 @@ class ProfileAuthorityContext:
             live_real_order_armed=(
                 bool(payload["live_real_order_armed"]) if "live_real_order_armed" in payload else None
             ),
+            authority_scope=str(payload.get("authority_scope") or "paper_legacy"),  # type: ignore[arg-type]
         )
 
     @classmethod
@@ -672,6 +724,7 @@ class ProfileAuthorityContext:
             runtime_mode=str(getattr(settings, "MODE", "") or "").strip().lower() or None,
             live_dry_run=bool(getattr(settings, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False)),
+            authority_scope=runtime_authority_scope_from_settings(settings),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -687,6 +740,7 @@ class ProfileAuthorityContext:
             "runtime_mode": self.runtime_mode,
             "live_dry_run": self.live_dry_run,
             "live_real_order_armed": self.live_real_order_armed,
+            "authority_scope": self.authority_scope,
             "profile_binding_kind": (
                 "spec_bound_approved_profiles"
                 if self.require_spec_bound_profile
@@ -708,9 +762,13 @@ class RuntimeStrategySetResolver:
         *,
         env_getter: Callable[[str], str | None] | None = None,
         settings_obj: object = settings,
+        authority_scope: RuntimeAuthorityScope | str | None = None,
     ) -> None:
         self._env_getter = env_getter or os.getenv
         self._settings = settings_obj
+        self._authority_scope = normalize_runtime_authority_scope(
+            str(authority_scope) if authority_scope is not None else runtime_authority_scope_from_settings(settings_obj)
+        )
 
     def resolve(self) -> RuntimeStrategySet:
         raw_json = str(
@@ -719,13 +777,13 @@ class RuntimeStrategySetResolver:
             or ""
         ).strip()
         if raw_json:
-            specs, market_scope = self._load_json_strategy_set(raw_json)
+            specs, market_scope, structured_runtime_contract = self._load_json_strategy_set(raw_json)
             return RuntimeStrategySet(
                 strategies=tuple(
                     self._spec_from_mapping(
                         item,
                         market_scope=market_scope,
-                        structured_runtime_contract=True,
+                        structured_runtime_contract=structured_runtime_contract,
                     )
                     for item in specs
                 ),
@@ -738,6 +796,10 @@ class RuntimeStrategySetResolver:
             or ""
         ).strip()
         if raw_active:
+            if self._authority_scope != "paper_legacy":
+                raise ValueError(
+                    f"runtime_strategy_set_active_strategies_fallback_rejected:{self._authority_scope}"
+                )
             return RuntimeStrategySet(
                 strategies=tuple(
                     self._default_spec(name.strip())
@@ -750,6 +812,10 @@ class RuntimeStrategySetResolver:
                     interval=str(getattr(self._settings, "INTERVAL", "")),
                 ),
             )
+        if self._authority_scope != "paper_legacy":
+            raise ValueError(
+                f"runtime_strategy_set_strategy_name_fallback_rejected:{self._authority_scope}"
+            )
         return RuntimeStrategySet(
             strategies=(self._default_spec(str(getattr(self._settings, "STRATEGY_NAME", ""))),),
             source="STRATEGY_NAME",
@@ -759,7 +825,10 @@ class RuntimeStrategySetResolver:
             ),
         )
 
-    def _load_json_strategy_set(self, raw_json: str) -> tuple[list[Mapping[str, object]], RuntimeMarketScope]:
+    def _load_json_strategy_set(
+        self,
+        raw_json: str,
+    ) -> tuple[list[Mapping[str, object]], RuntimeMarketScope, bool]:
         payload = json.loads(raw_json)
         live_like = (
             str(getattr(self._settings, "MODE", "") or "").strip().lower() == "live"
@@ -768,6 +837,7 @@ class RuntimeStrategySetResolver:
             or str(getattr(self._settings, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
         )
         if isinstance(payload, Mapping):
+            structured_runtime_contract = True
             strategies_payload = payload.get("strategies", ())
             if "strategies" in payload and not isinstance(strategies_payload, list):
                 raise ValueError("runtime_strategy_set_json_must_be_list")
@@ -781,6 +851,7 @@ class RuntimeStrategySetResolver:
         elif live_like:
             raise ValueError("runtime_strategy_set_json_object_required_for_live_like")
         else:
+            structured_runtime_contract = False
             market_scope_payload = {
                 "mode": "single_pair",
                 "pair": str(getattr(self._settings, "PAIR", "")),
@@ -806,6 +877,7 @@ class RuntimeStrategySetResolver:
                 pair=str(market_scope_payload.get("pair") or ""),
                 interval=str(market_scope_payload.get("interval") or ""),
             ),
+            structured_runtime_contract,
         )
 
     def _default_spec(self, strategy_name: str) -> RuntimeStrategySpec:
@@ -820,12 +892,24 @@ class RuntimeStrategySetResolver:
             interval=str(getattr(self._settings, "INTERVAL", "")),
             desired_exposure_krw=_optional_float(target),
             source_audit={
+                "authority_scope": self._authority_scope,
                 "legacy_compatibility_used": True,
+                "paper_legacy_compat": True,
                 "pair_source": "settings.PAIR",
                 "interval_source": "settings.INTERVAL",
                 "market_scope_source": "settings",
                 "target_exposure_source": target_source,
                 "allocation_target_source": target_source,
+                "fallback_source_hash": _fallback_source_hash(
+                    "settings_default_spec",
+                    {
+                        "strategy_name": strategy_name,
+                        "pair": str(getattr(self._settings, "PAIR", "")),
+                        "interval": str(getattr(self._settings, "INTERVAL", "")),
+                        "target_source": target_source,
+                        "target": target,
+                    },
+                ),
             },
         )
 
@@ -859,6 +943,7 @@ class RuntimeStrategySetResolver:
                 raise ValueError(f"runtime_strategy_interval_mismatch:{name}")
             source_audit = {
                 "legacy_compatibility_used": False,
+                "authority_scope": self._authority_scope,
                 "pair_source": "runtime_strategy_spec.pair" if explicit_pair else "market_scope_binding",
                 "interval_source": "runtime_strategy_spec.interval" if explicit_interval else "market_scope_binding",
                 "market_scope_source": "RUNTIME_STRATEGY_SET_JSON.market_scope",
@@ -880,6 +965,7 @@ class RuntimeStrategySetResolver:
             interval = explicit_interval or str(default.interval)
             source_audit = {
                 **dict(default.source_audit or {}),
+                "authority_scope": self._authority_scope,
                 "pair_source": "runtime_strategy_spec.pair" if explicit_pair else "settings.PAIR",
                 "interval_source": "runtime_strategy_spec.interval" if explicit_interval else "settings.INTERVAL",
                 "market_scope_source": "paper_legacy_compatibility",
@@ -949,6 +1035,14 @@ class RuntimeStrategySetResolver:
 @dataclass(frozen=True)
 class ParameterAuthorityResolver:
     settings_obj: object = settings
+    authority_scope: RuntimeAuthorityScope = "paper_legacy"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "authority_scope",
+            normalize_runtime_authority_scope(self.authority_scope),
+        )
 
     def resolve(
         self,
@@ -964,6 +1058,7 @@ class ParameterAuthorityResolver:
             legacy_used = False
             audit = {
                 "authority": "approved_profile",
+                "authority_scope": self.authority_scope,
                 "parameter_source": parameter_source,
                 "approved_profile_path": approved_profile_path,
                 "approved_profile_hash": approved_profile_hash,
@@ -996,6 +1091,7 @@ class ParameterAuthorityResolver:
                 False,
                 {
                     "authority": "runtime_strategy_spec",
+                    "authority_scope": self.authority_scope,
                     "parameter_source": source,
                     "legacy_compatibility_used": False,
                 },
@@ -1009,6 +1105,7 @@ class ParameterAuthorityResolver:
                 False,
                 {
                     "authority": "runtime_builtin",
+                    "authority_scope": self.authority_scope,
                     "parameter_source": source,
                     "legacy_compatibility_used": False,
                 },
@@ -1031,15 +1128,22 @@ class ParameterAuthorityResolver:
             if not isinstance(payload, Mapping):
                 raise RuntimeError("strategy_parameters_json_must_be_object")
             source = "paper_legacy_compat"
+            payload = {str(key): value for key, value in payload.items()}
             return (
-                {str(key): value for key, value in payload.items()},
+                payload,
                 source,
                 True,
                 {
                     "authority": "paper_legacy_compat",
+                    "authority_scope": self.authority_scope,
                     "parameter_source": source,
                     "legacy_fallback": "STRATEGY_PARAMETERS_JSON",
                     "legacy_compatibility_used": True,
+                    "paper_legacy_compat": True,
+                    "fallback_source_hash": _fallback_source_hash(
+                        "STRATEGY_PARAMETERS_JSON",
+                        payload,
+                    ),
                 },
             )
         if plugin is not None and plugin.runtime_parameter_adapter is not None:
@@ -1050,15 +1154,22 @@ class ParameterAuthorityResolver:
                     f"strict_runtime_rejects_plugin_from_settings_fallback:{spec.strategy_name}"
                 )
             source = "paper_legacy_compat"
+            payload = dict(plugin.runtime_parameter_adapter.from_settings(self.settings_obj))
             return (
-                dict(plugin.runtime_parameter_adapter.from_settings(self.settings_obj)),
+                payload,
                 source,
                 True,
                 {
                     "authority": "paper_legacy_compat",
+                    "authority_scope": self.authority_scope,
                     "parameter_source": source,
                     "legacy_fallback": "runtime_parameter_adapter.from_settings",
                     "legacy_compatibility_used": True,
+                    "paper_legacy_compat": True,
+                    "fallback_source_hash": _fallback_source_hash(
+                        "runtime_parameter_adapter.from_settings",
+                        payload,
+                    ),
                 },
             )
         raise RuntimeError(f"runtime_strategy_parameters_missing:{spec.strategy_name}")
@@ -1095,6 +1206,8 @@ class ParameterAuthorityResolver:
         return parameters
 
     def _strict_runtime_mode(self) -> bool:
+        if self.authority_scope != "paper_legacy":
+            return True
         if str(getattr(self.settings_obj, "MODE", "") or "").strip().lower() == "live":
             return True
         if str(getattr(self.settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
@@ -1109,18 +1222,25 @@ class RuntimeDecisionRequestBuilder:
     settings_obj: object = settings
     require_spec_bound_approved_profile: bool = False
     profile_authority_context: ProfileAuthorityContext | None = None
+    authority_scope: RuntimeAuthorityScope | str | None = None
 
     def _authority_context(self) -> ProfileAuthorityContext:
         if self.profile_authority_context is not None:
             return self.profile_authority_context
+        if self.authority_scope is not None:
+            scope = normalize_runtime_authority_scope(str(self.authority_scope))
+        else:
+            scope = runtime_authority_scope_from_settings(self.settings_obj)
         require_spec_bound = bool(self.require_spec_bound_approved_profile)
         if not require_spec_bound:
-            return ProfileAuthorityContext.builder_default()
+            context = ProfileAuthorityContext.builder_default()
+            return replace(context, authority_scope=scope)
         return ProfileAuthorityContext(
             selection_kind="multi_strategy",
             runtime_strategy_set_source="explicit_builder_requirement",
             require_spec_bound_profile=True,
             allow_global_profile_fallback=False,
+            authority_scope=scope,
         )
 
     def with_authority_context(
@@ -1192,7 +1312,10 @@ class RuntimeDecisionRequestBuilder:
         else:
             approved_profile_hash = spec.approved_profile_hash
 
-        authority = ParameterAuthorityResolver(settings_obj=self.settings_obj).resolve(
+        authority = ParameterAuthorityResolver(
+            settings_obj=self.settings_obj,
+            authority_scope=authority_context.authority_scope,
+        ).resolve(
             spec,
             profile=profile,
             approved_profile_path=approved_profile_path,
