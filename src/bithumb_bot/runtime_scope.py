@@ -128,6 +128,8 @@ class ReplayHashChain:
     runtime_decision_request_hash: str = ""
     allocation_input_hash: str = ""
     portfolio_target_hash: str = ""
+    execution_plan_batch_hash: str = ""
+    pair_execution_plan_hash: str = ""
     execution_submit_plan_hash: str = ""
     pre_submit_risk_decision_hash: str = ""
     schema_version: int = 1
@@ -141,6 +143,8 @@ class ReplayHashChain:
             "runtime_decision_request_hash",
             "allocation_input_hash",
             "portfolio_target_hash",
+            "execution_plan_batch_hash",
+            "pair_execution_plan_hash",
             "execution_submit_plan_hash",
             "pre_submit_risk_decision_hash",
         ):
@@ -156,6 +160,8 @@ class ReplayHashChain:
             "runtime_decision_request_hash": self.runtime_decision_request_hash,
             "allocation_input_hash": self.allocation_input_hash,
             "portfolio_target_hash": self.portfolio_target_hash,
+            "execution_plan_batch_hash": self.execution_plan_batch_hash,
+            "pair_execution_plan_hash": self.pair_execution_plan_hash,
             "execution_submit_plan_hash": self.execution_submit_plan_hash,
             "pre_submit_risk_decision_hash": self.pre_submit_risk_decision_hash,
         }
@@ -186,6 +192,8 @@ class ReplayHashChain:
             portfolio_target_hash=str(
                 payload.get("portfolio_target_hash") or payload.get("final_portfolio_target_hash") or ""
             ),
+            execution_plan_batch_hash=str(payload.get("execution_plan_batch_hash") or ""),
+            pair_execution_plan_hash=str(payload.get("pair_execution_plan_hash") or ""),
             execution_submit_plan_hash=str(
                 payload.get("execution_submit_plan_hash") or payload.get("submit_plan_hash") or ""
             ),

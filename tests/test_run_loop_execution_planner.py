@@ -323,7 +323,10 @@ def test_plan_envelope_submit_plan_is_selected_from_typed_summary_not_persistenc
     assert result.submit_plan.source == "target_delta"
     assert result.submit_plan.qty == 0.001
     assert result.persistence_context["execution_plan_bundle"]["primary_submit_plan"]["source"] == "target_delta"  # type: ignore[index]
-    assert result.persistence_context["execution_plan_bundle"]["submit_plan_authority"] == "ExecutionSubmitPlan"  # type: ignore[index]
+    assert result.persistence_context["execution_plan_bundle"]["submit_plan_authority"] == "derived_from_execution_plan_batch_pair_plan"  # type: ignore[index]
+    assert result.persistence_context["execution_plan_batch_hash"]
+    assert result.persistence_context["execution_plan_batch_pair_count"] == 1
+    assert result.persistence_context["pair_execution_plan_pair"] == "KRW-BTC"
     assert result.persistence_context["execution_decision"]["target_submit_plan"]["source"] == "legacy_context"  # type: ignore[index]
 
 
@@ -366,6 +369,7 @@ def test_execution_plan_bundle_hash_is_stable_for_equivalent_bundles() -> None:
 
     assert left.content_hash() == right.content_hash()
     assert left.persistence_context["execution_plan_bundle_hash"] == right.persistence_context["execution_plan_bundle_hash"]
+    assert left.persistence_context["execution_plan_batch_hash"] == right.persistence_context["execution_plan_batch_hash"]
     assert left.status is not None
     assert left.status.status == "PLANNED"
 

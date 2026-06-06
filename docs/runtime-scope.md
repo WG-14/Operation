@@ -49,9 +49,21 @@ Allocation input is pair-aware through `previous_target_exposure_by_pair` and
 allocator must resolve HOLD state and price data for the pair being allocated.
 
 Execution batching is represented by an `ExecutionPlanBatch` artifact. A
-batch-size-one plan is the single-pair degenerate case. Multi-pair live
-submission remains blocked until scoped shards, batch risk, budget locks,
-reconcile loops, and multi-asset ledger authority are verified end to end.
+batch-size-one plan is the single-pair degenerate case and is emitted by the
+runtime planner for the current production scope. The compatibility
+`ExecutionPlanBundle.primary_submit_plan` is derived from the batch-selected
+`PairExecutionPlan`; runtime execution validates that the batch has exactly one
+pair plan for the runtime pair and that the pair plan hash matches the selected
+submit plan. Missing, mismatched, duplicate, or malformed batch evidence fails
+closed before submit. Multi-pair live submission remains blocked until scoped
+shards, batch risk, budget locks, reconcile loops, and multi-asset ledger
+authority are verified end to end.
+
+For a BUY pair plan the batch lock evidence references a quote-currency
+`budget_locks` row when the runtime DB schema is available. For a SELL pair
+plan it references a base-asset `order_locks` row. Runtime replay or diagnostic
+contexts without the lock tables emit explicit diagnostic-unpersisted lock
+evidence and do not claim persisted lock authority.
 
 The multi-asset ledger foundation records currency balances, pair positions,
 budget locks, and order locks. `portfolio(id=1, asset_qty)` remains a
@@ -66,8 +78,17 @@ that invariant.
 
 Replay payloads preserve a hash chain containing manifest, scope key, runtime
 data availability, feature snapshot, runtime decision request, allocation input,
-portfolio target, execution submit plan, and pre-submit risk decision hashes.
-Replay mismatch fails closed at the failing layer.
+portfolio target, execution plan batch, pair execution plan, execution submit
+plan, and pre-submit risk decision hashes. Replay mismatch fails closed at the
+failing layer.
+
+Operator-facing decision context and persisted execution-plan rows expose
+`runtime_scope_mode`, `scope_key_hash` where available,
+`execution_plan_batch_hash`, `execution_plan_batch_id`,
+`pair_execution_plan_hash`, pair-plan pair, batch lock status, and fail-closed
+reason fields. Multi-asset ledger diagnostics expose table presence,
+authority verification status, evidence freshness, lock consistency, reconcile
+status, and the explicit multi-pair fail-closed reason.
 
 `multi_pair_runtime_unsupported` is intentional fail-closed behavior. It is not
 a bug to bypass. Removing the validator is unsafe because runtime data preflight,

@@ -8,6 +8,7 @@ from ..config import settings
 from ..db_core import (
     ensure_db,
     record_execution_plan,
+    record_execution_plan_batch,
     record_portfolio_allocation_decision,
     record_runtime_strategy_decision_bundle,
     record_strategy_decision,
@@ -190,6 +191,8 @@ class DecisionCycleResult:
     portfolio_target_hash: str | None = None
     strategy_contribution_hash: str | None = None
     execution_plan_id: int | None = None
+    execution_plan_batch_hash: str | None = None
+    execution_plan_batch_id: str | None = None
     execution_submit_plan_hash: str | None = None
     strategy_risk_decision_hash: str | None = None
     strategy_risk_policy_hash: str | None = None
@@ -237,6 +240,8 @@ class DecisionCycleResult:
             "portfolio_target_hash": self.portfolio_target_hash,
             "strategy_contribution_hash": self.strategy_contribution_hash,
             "execution_plan_id": self.execution_plan_id,
+            "execution_plan_batch_hash": self.execution_plan_batch_hash,
+            "execution_plan_batch_id": self.execution_plan_batch_id,
             "execution_plan_bundle_hash": self.execution_plan_bundle_hash,
             "execution_submit_plan_hash": self.execution_submit_plan_hash,
             "strategy_risk_decision_hash": self.strategy_risk_decision_hash,
@@ -280,6 +285,7 @@ class DecisionCoordinator:
     persistence_context_builder: Callable[..., object] = prepare_strategy_decision_persistence_context
     record_runtime_strategy_decision_bundle_fn: Callable[..., dict[str, object]] = record_runtime_strategy_decision_bundle
     record_portfolio_allocation_decision_fn: Callable[..., dict[str, object]] = record_portfolio_allocation_decision
+    record_execution_plan_batch_fn: Callable[..., dict[str, object]] = record_execution_plan_batch
     record_execution_plan_fn: Callable[..., dict[str, object]] = record_execution_plan
     record_strategy_decision_fn: Callable[..., int] = record_strategy_decision
     target_position_state_persister: Callable[..., bool] = persist_target_position_state_for_run_loop
@@ -385,6 +391,15 @@ class DecisionCoordinator:
                 allocation_decision=allocation_payload,
             )
             context.update(allocation_refs)
+            execution_plan_batch = getattr(planning_bundle, "execution_plan_batch", None)
+            if execution_plan_batch is None:
+                raise RuntimeError("execution_plan_batch_missing")
+            batch_refs = self.record_execution_plan_batch_fn(
+                conn,
+                execution_plan_batch=execution_plan_batch,
+                created_ts=updated_ts,
+            )
+            context.update(batch_refs)
             execution_refs = self.record_execution_plan_fn(
                 conn,
                 allocation_id=int(allocation_refs["portfolio_allocation_decision_id"]),
@@ -407,6 +422,12 @@ class DecisionCoordinator:
                 ]
                 context["execution_submit_plan_hash"] = execution_refs[
                     "execution_submit_plan_hash"
+                ]
+                context["execution_plan_batch_hash"] = batch_refs[
+                    "execution_plan_batch_hash"
+                ]
+                context["execution_plan_batch_id"] = batch_refs[
+                    "execution_plan_batch_id"
                 ]
             if typed_bundle.strategy_set.multi_strategy_enabled:
                 signal = str(context.get("authoritative_execution_signal") or "HOLD").upper()
@@ -495,6 +516,8 @@ class DecisionCoordinator:
             portfolio_target_hash=_context_str(context, "portfolio_target_hash"),
             strategy_contribution_hash=_context_str(context, "strategy_contribution_hash"),
             execution_plan_id=_context_int(context, "execution_plan_id"),
+            execution_plan_batch_hash=_context_str(context, "execution_plan_batch_hash"),
+            execution_plan_batch_id=_context_str(context, "execution_plan_batch_id"),
             execution_submit_plan_hash=_context_str(context, "execution_submit_plan_hash"),
             strategy_risk_decision_hash=risk_layer_fields["strategy_risk_decision_hash"],
             strategy_risk_policy_hash=risk_layer_fields["strategy_risk_policy_hash"],

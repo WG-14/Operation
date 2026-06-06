@@ -22,7 +22,8 @@ Runtime strategy set
   -> authoritative PortfolioTarget linked through the allocation decision
   -> portfolio/allocation risk decision
   -> readiness / target-delta planning
-  -> ExecutionSubmitPlan linked to the same manifest
+  -> ExecutionPlanBatch with one PairExecutionPlan for the runtime pair
+  -> ExecutionSubmitPlan linked to the batch-selected pair plan
   -> execution service
 ```
 
@@ -41,9 +42,13 @@ Runtime strategy set
   `portfolio_risk_policy_hash`, `portfolio_risk_input_hash`,
   `portfolio_risk_evidence_hash`,
   `portfolio_risk_state_source`, effective limits, and replayable evidence.
-- `ExecutionSubmitPlan` remains the final execution authority, but live
-  real-order submission also requires a valid pre-submit operational risk
-  approval bound to the stable submit-plan hash.
+- `ExecutionPlanBatch` is the top-level runtime execution authority. In the
+  current production scope it contains exactly one `PairExecutionPlan` for the
+  runtime pair.
+- `ExecutionSubmitPlan` remains the broker-facing typed submit payload, but it
+  is selected through the batch pair plan. Live real-order submission also
+  requires a valid pre-submit operational risk approval bound to the stable
+  submit-plan hash and carries batch/pair-plan evidence in the final payload.
 
 Strategy modules and runtime adapters must not create live orders or authoritative submit plans. Their `final_signal` and `execution_intent` fields are strategy preferences only. `StrategyDecisionV2.execution_intent` is preserved as a non-authoritative hint for diagnostics and reproducibility.
 
@@ -137,11 +142,16 @@ The persisted chain is:
 runtime_strategy_set_manifest
   -> runtime_strategy_decision_bundle
   -> portfolio_allocation_decision
+  -> execution_plan_batch
   -> execution_plan
   -> execution_submit_plan
 ```
 
-Allocation and execution plan rows carry the same manifest id/hash. Compatibility projections in `strategy_decisions` remain non-authoritative; replay should use the manifest-to-plan chain.
+Allocation, execution batch, and execution plan rows carry the same manifest
+id/hash. The `execution_plan` row is a single-pair compatibility projection
+linked to `execution_plan_batch_hash` and `execution_plan_batch_id`.
+Compatibility projections in `strategy_decisions` remain non-authoritative;
+replay should use the manifest-to-batch-to-plan chain.
 
 ## Target State And Accounting Scope
 

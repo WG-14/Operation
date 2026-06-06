@@ -117,6 +117,23 @@ class ExecutionCoordinator:
             )
         expectation = self.resolve_submit_expectation(execution_decision_summary)
         primary_plan = primary_execution_submit_plan(execution_decision_summary)
+        batch_error = _batch_selected_pair_plan_error(
+            execution_plan_bundle=execution_plan_bundle,
+            primary_plan=primary_plan,
+            decision_context=decision_context,
+            require_batch=execution_plan_bundle is not None or execution_service is not None,
+        )
+        if batch_error is not None:
+            return ExecutionCycleResult(
+                candle_ts=candle_ts,
+                decision_id=decision_id,
+                planning_status=batch_error,
+                submit_expected=False,
+                submitted=False,
+                post_trade_reconciled=False,
+                mark_processed_allowed=True,
+                input_hash=input_hash,
+            )
         invariant_error = execution_submit_plan_invariant_error(
             primary_plan,
             compatibility_signal=signal or "HOLD",
@@ -347,6 +364,55 @@ def authoritative_execution_signal_for_trade(
                 return planned
     fallback = str(fallback_signal or "HOLD").strip().upper()
     return fallback if fallback in {"BUY", "SELL", "HOLD"} else "HOLD"
+
+
+def _batch_selected_pair_plan_error(
+    *,
+    execution_plan_bundle: object | None,
+    primary_plan: object | None,
+    decision_context: Mapping[str, object] | None,
+    require_batch: bool,
+) -> str | None:
+    batch = getattr(execution_plan_bundle, "execution_plan_batch", None)
+    if batch is None:
+        return "execution_plan_batch_missing" if require_batch else None
+    pair_plans = tuple(getattr(batch, "pair_plans", ()) or ())
+    if not pair_plans:
+        return "execution_plan_batch_pair_plans_missing"
+    if len(pair_plans) != 1:
+        return "execution_plan_batch_single_pair_required"
+    pair_plan = pair_plans[0]
+    runtime_pair = ""
+    if isinstance(decision_context, Mapping):
+        runtime_pair = str(decision_context.get("runtime_pair") or "").strip()
+    if not runtime_pair and primary_plan is not None:
+        runtime_pair = str(getattr(primary_plan, "pair", "") or "").strip()
+    pair_plan_pair = str(getattr(pair_plan, "pair", "") or "").strip()
+    if not pair_plan_pair:
+        return "execution_plan_batch_pair_plan_pair_missing"
+    if runtime_pair and pair_plan_pair != runtime_pair:
+        return "execution_plan_batch_pair_mismatch"
+    if len({str(getattr(plan, "pair", "") or "").strip() for plan in pair_plans}) != len(pair_plans):
+        return "execution_plan_batch_duplicate_pair_plan"
+    if primary_plan is not None:
+        submit_hash = primary_plan.content_hash() if callable(getattr(primary_plan, "content_hash", None)) else ""
+        if str(getattr(pair_plan, "execution_submit_plan_hash", "") or "") != submit_hash:
+            return "execution_plan_batch_submit_plan_hash_mismatch"
+        if bool(getattr(primary_plan, "submit_expected", False)):
+            if not str(getattr(pair_plan, "lock_evidence_hash", "") or "").strip():
+                return "execution_plan_batch_lock_evidence_missing"
+            if str(getattr(pair_plan, "lock_status", "") or "").strip() not in {"active", "not_required"}:
+                return "execution_plan_batch_lock_status_invalid"
+    batch_hash = batch.content_hash() if callable(getattr(batch, "content_hash", None)) else ""
+    if isinstance(decision_context, Mapping):
+        expected_batch_hash = str(decision_context.get("execution_plan_batch_hash") or "").strip()
+        if expected_batch_hash and expected_batch_hash != batch_hash:
+            return "execution_plan_batch_hash_mismatch"
+        expected_pair_hash = str(decision_context.get("pair_execution_plan_hash") or "").strip()
+        pair_hash = pair_plan.content_hash() if callable(getattr(pair_plan, "content_hash", None)) else ""
+        if expected_pair_hash and expected_pair_hash != pair_hash:
+            return "pair_execution_plan_hash_mismatch"
+    return None
 @dataclass(frozen=True)
 class TypedExecutionSubmitExpectation:
     submit_expected: bool

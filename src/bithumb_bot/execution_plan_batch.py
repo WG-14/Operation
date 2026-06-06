@@ -25,6 +25,9 @@ class PairExecutionPlan:
     reconcile_status: str = "not_started"
     scope_key_hash: str = ""
     execution_plan_hash: str = ""
+    lock_evidence_hash: str = ""
+    lock_type: str = "none"
+    lock_status: str = "not_required"
     submit_expected: bool = False
     replay_evidence: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = 1
@@ -40,6 +43,9 @@ class PairExecutionPlan:
             "reconcile_status",
             "scope_key_hash",
             "execution_plan_hash",
+            "lock_evidence_hash",
+            "lock_type",
+            "lock_status",
         ):
             object.__setattr__(self, field_name, _clean(getattr(self, field_name)))
         object.__setattr__(
@@ -69,6 +75,9 @@ class PairExecutionPlan:
             "portfolio_target_hash": self.portfolio_target_hash,
             "execution_submit_plan_hash": self.execution_submit_plan_hash,
             "execution_plan_hash": self.execution_plan_hash,
+            "lock_evidence_hash": self.lock_evidence_hash,
+            "lock_type": self.lock_type,
+            "lock_status": self.lock_status,
             "idempotency_key": self.idempotency_key,
             "submit_authority_policy_hash": self.submit_authority_policy_hash,
             "pre_submit_risk_decision_hash": self.pre_submit_risk_decision_hash,

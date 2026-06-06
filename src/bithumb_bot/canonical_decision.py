@@ -95,6 +95,8 @@ COMMON_CANONICAL_DECISION_FIELDS_V2 = (
     "runtime_strategy_set_manifest_hash",
     "approved_profile_hash",
     "execution_plan_bundle_hash",
+    "execution_plan_batch_hash",
+    "pair_execution_plan_hash",
     "execution_summary_hash",
     "execution_submit_plan_hash",
     "final_action",
@@ -201,6 +203,8 @@ PROMOTION_REQUIRED_CANONICAL_FIELDS = (
     "runtime_strategy_set_manifest_hash",
     "approved_profile_hash",
     "execution_plan_bundle_hash",
+    "execution_plan_batch_hash",
+    "pair_execution_plan_hash",
     "execution_summary_hash",
     "execution_submit_plan_hash",
     "final_action",
@@ -937,6 +941,16 @@ def _runtime_execution_plan_evidence(
         no_submit_proof = build_typed_no_submit_proof(summary_payload)
         provenance = {
             "execution_plan_bundle_hash": bundle_hash,
+            "execution_plan_batch_hash": str(
+                observability.get("execution_plan_batch_hash")
+                or context.get("execution_plan_batch_hash")
+                or ""
+            ),
+            "pair_execution_plan_hash": str(
+                observability.get("pair_execution_plan_hash")
+                or context.get("pair_execution_plan_hash")
+                or ""
+            ),
             "execution_plan_bundle_evidence": execution_plan_bundle.as_dict(),
             "typed_execution_summary_evidence": summary_payload,
             "execution_evidence_source": PROMOTION_TYPED_EXECUTION_EVIDENCE_SOURCE,
@@ -1013,10 +1027,14 @@ def _runtime_execution_plan_evidence(
                 "decision_envelope_present": bool(context.get("decision_envelope_present")),
                 "execution_plan_bundle_present": bool(context.get("execution_plan_bundle_present")),
                 "execution_plan_bundle_hash": str(context.get("execution_plan_bundle_hash") or ""),
+                "execution_plan_batch_hash": str(context.get("execution_plan_batch_hash") or ""),
+                "pair_execution_plan_hash": str(context.get("pair_execution_plan_hash") or ""),
                 "persistence_context_authoritative": int(context.get("persistence_context_authoritative") or 0),
                 "runtime_replay_planning_error": runtime_replay_planning_error,
             },
             "execution_plan_bundle_hash": str(context.get("execution_plan_bundle_hash") or ""),
+            "execution_plan_batch_hash": str(context.get("execution_plan_batch_hash") or ""),
+            "pair_execution_plan_hash": str(context.get("pair_execution_plan_hash") or ""),
             "execution_evidence_source": "diagnostic_context_fallback",
             "typed_execution_summary_present": False,
             "artifact_grade": "diagnostic_only",
@@ -1066,12 +1084,16 @@ def _runtime_execution_plan_evidence(
                 "decision_envelope_present": bool(context.get("decision_envelope_present")),
                 "execution_plan_bundle_present": False,
                 "execution_plan_bundle_hash": "",
+                "execution_plan_batch_hash": str(context.get("execution_plan_batch_hash") or ""),
+                "pair_execution_plan_hash": str(context.get("pair_execution_plan_hash") or ""),
                 "persistence_context_authoritative": int(context.get("persistence_context_authoritative") or 0),
                 "runtime_replay_planning_error": runtime_replay_planning_error,
                 "execution_plan_status": "ERROR" if runtime_replay_planning_error else "",
                 "execution_plan_reason_code": execution_block_reason if final_signal in {"BUY", "SELL"} else "",
             },
             "execution_plan_bundle_hash": "",
+            "execution_plan_batch_hash": str(context.get("execution_plan_batch_hash") or ""),
+            "pair_execution_plan_hash": str(context.get("pair_execution_plan_hash") or ""),
             "execution_evidence_source": "typed_execution_plan_bundle_missing_fail_closed",
             "typed_execution_summary_present": False,
             "artifact_grade": "diagnostic_only",
@@ -1093,6 +1115,8 @@ def _runtime_execution_observability(
     runtime_replay_planning_error: str,
 ) -> dict[str, object]:
     status = execution_plan_bundle.status
+    batch = getattr(execution_plan_bundle, "execution_plan_batch", None)
+    pair_plans = tuple(getattr(batch, "pair_plans", ()) or ()) if batch is not None else ()
     return {
         "decision_authority_source": execution_plan_bundle.persistence_context.get(
             "decision_authority_source", ""
@@ -1102,6 +1126,14 @@ def _runtime_execution_observability(
         ),
         "execution_plan_bundle_present": True,
         "execution_plan_bundle_hash": str(execution_plan_bundle.content_hash()),
+        "execution_plan_batch_hash": (
+            batch.content_hash() if batch is not None and callable(getattr(batch, "content_hash", None)) else ""
+        ),
+        "pair_execution_plan_hash": (
+            pair_plans[0].content_hash()
+            if len(pair_plans) == 1 and callable(getattr(pair_plans[0], "content_hash", None))
+            else ""
+        ),
         "persistence_context_authoritative": int(
             execution_plan_bundle.persistence_context.get("persistence_context_authoritative") or 0
         ),

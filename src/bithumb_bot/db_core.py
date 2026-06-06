@@ -252,6 +252,8 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "status",
         "execution_plan_bundle_json",
         "execution_submit_plan_json",
+        "execution_plan_batch_hash",
+        "execution_plan_batch_id",
     ),
 }
 
@@ -1198,6 +1200,8 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "execution_plan", "submit_plan_idempotency_key", "submit_plan_idempotency_key TEXT")
     _ensure_column(conn, "execution_plan", "submit_plan_source", "submit_plan_source TEXT")
     _ensure_column(conn, "execution_plan", "submit_plan_authority", "submit_plan_authority TEXT")
+    _ensure_column(conn, "execution_plan", "execution_plan_batch_hash", "execution_plan_batch_hash TEXT")
+    _ensure_column(conn, "execution_plan", "execution_plan_batch_id", "execution_plan_batch_id TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_execution_plan_bundle_hash
@@ -2927,6 +2931,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         ON strategy_virtual_target_state(scope_key_hash, pair, interval)
         """
     )
+    _ensure_column(conn, "strategy_virtual_target_state", "strategy_name", "strategy_name TEXT NOT NULL DEFAULT ''")
 
     conn.execute(
         """
@@ -3689,6 +3694,13 @@ def record_execution_plan(
 ) -> dict[str, Any]:
     bundle_payload = execution_plan_bundle.as_dict()
     bundle_hash = str(execution_plan_bundle.content_hash())
+    execution_plan_batch = getattr(execution_plan_bundle, "execution_plan_batch", None)
+    execution_plan_batch_hash = None
+    execution_plan_batch_id = None
+    if execution_plan_batch is not None:
+        batch_payload = execution_plan_batch.as_dict()
+        execution_plan_batch_hash = str(batch_payload.get("batch_hash") or "")
+        execution_plan_batch_id = str(batch_payload.get("batch_id") or "")
     submit_plan = getattr(execution_plan_bundle, "submit_plan", None)
     submit_payload = submit_plan.as_dict() if submit_plan is not None and hasattr(submit_plan, "as_dict") else None
     submit_hash = None
@@ -3742,9 +3754,10 @@ def record_execution_plan(
             execution_submit_plan_hash, submit_plan_side, submit_plan_qty,
             submit_plan_notional_krw, submit_plan_idempotency_key, submit_plan_source,
             submit_plan_authority, submit_expected, final_action, block_reason,
-            status, execution_plan_bundle_json, execution_submit_plan_json
+            status, execution_plan_bundle_json, execution_submit_plan_json,
+            execution_plan_batch_hash, execution_plan_batch_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             int(allocation_id),
@@ -3765,6 +3778,8 @@ def record_execution_plan(
             status_text,
             _json_dumps_stable(bundle_payload),
             None if submit_payload is None else _json_dumps_stable(submit_payload),
+            execution_plan_batch_hash,
+            execution_plan_batch_id,
         ),
     )
     row = conn.execute(
@@ -3780,6 +3795,8 @@ def record_execution_plan(
         "execution_plan_id": int(row["id"]),
         "execution_plan_bundle_hash": bundle_hash,
         "execution_submit_plan_hash": submit_hash,
+        "execution_plan_batch_hash": execution_plan_batch_hash,
+        "execution_plan_batch_id": execution_plan_batch_id,
         "runtime_strategy_set_manifest_id": manifest_id,
         "runtime_strategy_set_manifest_hash": manifest_hash,
     }
@@ -4381,12 +4398,13 @@ def upsert_strategy_virtual_target_state(conn: sqlite3.Connection, state: object
     conn.execute(
         """
         INSERT INTO strategy_virtual_target_state(
-            strategy_instance_id, pair, interval, scope_key_hash,
+            strategy_instance_id, strategy_name, pair, interval, scope_key_hash,
             runtime_contract_hash, virtual_target_exposure_krw, virtual_target_qty,
             lifecycle_state, last_signal, updated_ts, evidence_hash, state_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(strategy_instance_id, pair, interval, scope_key_hash) DO UPDATE SET
+            strategy_name=excluded.strategy_name,
             runtime_contract_hash=excluded.runtime_contract_hash,
             virtual_target_exposure_krw=excluded.virtual_target_exposure_krw,
             virtual_target_qty=excluded.virtual_target_qty,
@@ -4398,6 +4416,7 @@ def upsert_strategy_virtual_target_state(conn: sqlite3.Connection, state: object
         """,
         (
             state.strategy_instance_id,
+            state.strategy_name,
             state.pair,
             state.interval,
             state.scope_key_hash,
@@ -4436,6 +4455,7 @@ def load_strategy_virtual_target_state(
     payload = _json_loads_object(row["state_json"])
     return StrategyVirtualTargetState(
         strategy_instance_id=str(payload["strategy_instance_id"]),
+        strategy_name=str(payload.get("strategy_name") or ""),
         pair=str(payload["pair"]),
         interval=str(payload["interval"]),
         scope_key_hash=str(payload["scope_key_hash"]),
@@ -4530,6 +4550,122 @@ def upsert_pair_position(
     )
 
 
+def create_or_get_budget_lock(
+    conn: sqlite3.Connection,
+    *,
+    currency: str,
+    pair: str,
+    amount: float,
+    reason: str,
+    created_ts: int,
+    idempotency_key: str,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    amount_n = float(amount)
+    if amount_n < 0.0:
+        raise RuntimeError("budget_lock_negative_amount")
+    evidence_payload = {
+        "schema_version": 1,
+        "lock_table": "budget_locks",
+        "currency": str(currency).strip().upper(),
+        "pair": str(pair or "").strip(),
+        "amount": amount_n,
+        "reason": str(reason or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "evidence": dict(evidence or {}),
+    }
+    lock_hash = sha256_prefixed(evidence_payload)
+    evidence_hash = sha256_prefixed(evidence_payload)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO budget_locks(
+            lock_hash, currency, pair, amount, status, reason, created_ts, evidence_hash
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            lock_hash,
+            evidence_payload["currency"],
+            evidence_payload["pair"],
+            amount_n,
+            "active",
+            evidence_payload["reason"],
+            int(created_ts),
+            evidence_hash,
+        ),
+    )
+    row = conn.execute(
+        "SELECT lock_hash, status, evidence_hash FROM budget_locks WHERE lock_hash=?",
+        (lock_hash,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("budget_lock_persist_failed")
+    return {
+        "lock_hash": str(row["lock_hash"]),
+        "lock_type": "quote_budget",
+        "lock_status": str(row["status"]),
+        "evidence_hash": str(row["evidence_hash"] or ""),
+    }
+
+
+def create_or_get_order_lock(
+    conn: sqlite3.Connection,
+    *,
+    pair: str,
+    currency: str,
+    amount: float,
+    reason: str,
+    created_ts: int,
+    idempotency_key: str,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    amount_n = float(amount)
+    if amount_n < 0.0:
+        raise RuntimeError("order_lock_negative_amount")
+    evidence_payload = {
+        "schema_version": 1,
+        "lock_table": "order_locks",
+        "pair": str(pair or "").strip(),
+        "currency": str(currency).strip().upper(),
+        "amount": amount_n,
+        "reason": str(reason or "").strip(),
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "evidence": dict(evidence or {}),
+    }
+    lock_hash = sha256_prefixed(evidence_payload)
+    evidence_hash = sha256_prefixed(evidence_payload)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO order_locks(
+            lock_hash, pair, currency, amount, status, reason, created_ts, evidence_hash
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            lock_hash,
+            evidence_payload["pair"],
+            evidence_payload["currency"],
+            amount_n,
+            "active",
+            evidence_payload["reason"],
+            int(created_ts),
+            evidence_hash,
+        ),
+    )
+    row = conn.execute(
+        "SELECT lock_hash, status, evidence_hash FROM order_locks WHERE lock_hash=?",
+        (lock_hash,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("order_lock_persist_failed")
+    return {
+        "lock_hash": str(row["lock_hash"]),
+        "lock_type": "base_order",
+        "lock_status": str(row["status"]),
+        "evidence_hash": str(row["evidence_hash"] or ""),
+    }
+
+
 def multi_asset_ledger_authority_status(conn: sqlite3.Connection) -> dict[str, Any]:
     tables = {
         "account_balances",
@@ -4542,14 +4678,56 @@ def multi_asset_ledger_authority_status(conn: sqlite3.Connection) -> dict[str, A
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     missing = sorted(tables.difference(existing))
+    counts = {
+        table: (
+            0
+            if table in missing
+            else int(conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"])
+        )
+        for table in tables
+    }
+    stale_or_missing_evidence: list[str] = []
+    if not missing:
+        for table in ("account_balances", "pair_positions"):
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM {table} WHERE COALESCE(updated_ts, 0) <= 0 OR COALESCE(evidence_hash, '') = ''"
+            ).fetchone()
+            if int(row["count"]) > 0:
+                stale_or_missing_evidence.append(table)
+        for table in ("budget_locks", "order_locks"):
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM {table}
+                WHERE status NOT IN ('active', 'released', 'submit_failed', 'broker_error', 'reconcile_failed', 'recovered')
+                   OR COALESCE(evidence_hash, '') = ''
+                """
+            ).fetchone()
+            if int(row["count"]) > 0:
+                stale_or_missing_evidence.append(table)
+    authority_verified = bool(not missing and not stale_or_missing_evidence and counts["account_balances"] > 0)
     return {
         "schema_version": 1,
         "authority_model": "multi_asset_ledger_v1",
         "status": "present" if not missing else "missing",
+        "authority_verification_status": (
+            "verified" if authority_verified else ("present_unverified" if not missing else "missing")
+        ),
         "missing_tables": missing,
+        "table_counts": counts,
+        "evidence_freshness_status": "pass" if not stale_or_missing_evidence else "fail",
+        "stale_or_missing_evidence_tables": stale_or_missing_evidence,
+        "lock_consistency_status": "pass" if not any(table in stale_or_missing_evidence for table in ("budget_locks", "order_locks")) else "fail",
+        "reconcile_status": "not_multi_pair_verified",
+        "authority_verified": authority_verified,
         "portfolio_id_1_multi_pair_live_authority": False,
         "live_multi_pair_enablement": "fail_closed_until_scoped_batch_ledger_authority_verified",
-        "fail_closed_reason": "multi_asset_ledger_authority_missing" if missing else "multi_pair_runtime_unsupported",
+        "fail_closed_reason": (
+            "multi_asset_ledger_authority_missing"
+            if missing
+            else "multi_asset_ledger_authority_unverified"
+            if not authority_verified
+            else "multi_pair_runtime_unsupported"
+        ),
     }
 
 

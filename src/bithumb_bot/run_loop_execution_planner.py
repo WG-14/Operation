@@ -4,10 +4,16 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping
 
 from .config import settings
-from .db_core import load_target_position_state, upsert_target_position_state
+from .db_core import (
+    create_or_get_budget_lock,
+    create_or_get_order_lock,
+    load_target_position_state,
+    upsert_target_position_state,
+)
 from .decision_envelope import DecisionEnvelope, _thaw_mapping
 from .decision_equivalence import sha256_prefixed
 from .execution_order_rules import resolve_execution_order_rules
+from .execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
 from .execution_service import (
     ExecutionDecisionSummary,
     ExecutionReadinessPlanningInput,
@@ -96,6 +102,7 @@ class ExecutionPlanBundle:
     target_policy_metadata: dict[str, object]
     planning_error: str | None = None
     status: "ExecutionPlanStatus | None" = None
+    execution_plan_batch: ExecutionPlanBatch | None = None
 
     def as_dict(self) -> dict[str, object]:
         submit_plan = None if self.submit_plan is None else {
@@ -104,13 +111,30 @@ class ExecutionPlanBundle:
         }
         summary = None if self.summary is None else self.summary.as_dict()
         status = None if self.status is None else self.status.as_dict()
+        batch_payload = None if self.execution_plan_batch is None else self.execution_plan_batch.as_dict()
         return {
             "schema_version": 1,
             "authority_label": "ExecutionPlanBundle",
             "summary_authority": "ExecutionDecisionSummary" if self.summary is not None else "missing",
-            "submit_plan_authority": "ExecutionSubmitPlan" if self.submit_plan is not None else "none",
+            "submit_plan_authority": (
+                "derived_from_execution_plan_batch_pair_plan"
+                if self.submit_plan is not None and self.execution_plan_batch is not None
+                else "ExecutionSubmitPlan"
+                if self.submit_plan is not None
+                else "none"
+            ),
+            "execution_plan_batch_authority": (
+                "ExecutionPlanBatch" if self.execution_plan_batch is not None else "missing"
+            ),
             "summary": summary,
             "primary_submit_plan": submit_plan,
+            "execution_plan_batch": batch_payload,
+            "execution_plan_batch_hash": None
+            if self.execution_plan_batch is None
+            else self.execution_plan_batch.content_hash(),
+            "execution_plan_batch_id": None
+            if self.execution_plan_batch is None
+            else self.execution_plan_batch.batch_id,
             "execution_submit_plan_hash": None
             if self.submit_plan is None
             else self.submit_plan.content_hash(),
@@ -831,15 +855,32 @@ class ExecutionPlanner:
         )
         submit_plan = _primary_submit_plan(planning.execution_decision_summary)
         context = dict(planning.context)
+        batch = _build_execution_plan_batch_for_runtime_pair(
+            conn,
+            context=context,
+            submit_plan=submit_plan,
+            updated_ts=int(updated_ts),
+        )
         context.update(
             {
                 "decision_authority_source": "DecisionEnvelope.strategy_decision",
                 "decision_envelope_present": True,
                 "execution_plan_bundle_present": True,
                 "submit_plan_source": None if submit_plan is None else submit_plan.source,
-                "submit_plan_authority": None if submit_plan is None else submit_plan.authority,
+                "submit_plan_authority": (
+                    None
+                    if submit_plan is None
+                    else "derived_from_execution_plan_batch_pair_plan"
+                ),
                 "persistence_context_authoritative": 0,
                 "non_authoritative_observability_payload": True,
+                "execution_plan_batch_authority": "ExecutionPlanBatch",
+                "execution_plan_batch_hash": batch.content_hash(),
+                "execution_plan_batch_id": batch.batch_id,
+                "execution_plan_batch_pair_count": len(batch.pair_plans),
+                "pair_execution_plan_hash": batch.pair_plans[0].content_hash(),
+                "pair_execution_plan_pair": batch.pair_plans[0].pair,
+                "batch_lock_status": batch.pair_plans[0].lock_status,
             }
         )
         bundle = ExecutionPlanBundle(
@@ -850,6 +891,7 @@ class ExecutionPlanner:
             target_policy_metadata=planning.target_policy_metadata,
             planning_error=planning.planning_error,
             status=_plan_status(planning),
+            execution_plan_batch=batch,
         )
         context["execution_plan_bundle"] = bundle.as_dict()
         context["execution_plan_bundle_hash"] = bundle.content_hash()
@@ -875,6 +917,12 @@ class ExecutionPlanner:
         )
         submit_plan = _primary_submit_plan(planning.execution_decision_summary)
         context = dict(planning.context)
+        batch = _build_execution_plan_batch_for_runtime_pair(
+            conn,
+            context=context,
+            submit_plan=submit_plan,
+            updated_ts=int(updated_ts),
+        )
         context.update(
             {
                 "decision_authority_source": "PortfolioAllocator.portfolio_target",
@@ -882,9 +930,20 @@ class ExecutionPlanner:
                 "decision_envelope_present": not result_bundle.strategy_set.multi_strategy_enabled,
                 "execution_plan_bundle_present": True,
                 "submit_plan_source": None if submit_plan is None else submit_plan.source,
-                "submit_plan_authority": None if submit_plan is None else submit_plan.authority,
+                "submit_plan_authority": (
+                    None
+                    if submit_plan is None
+                    else "derived_from_execution_plan_batch_pair_plan"
+                ),
                 "persistence_context_authoritative": 0,
                 "non_authoritative_observability_payload": True,
+                "execution_plan_batch_authority": "ExecutionPlanBatch",
+                "execution_plan_batch_hash": batch.content_hash(),
+                "execution_plan_batch_id": batch.batch_id,
+                "execution_plan_batch_pair_count": len(batch.pair_plans),
+                "pair_execution_plan_hash": batch.pair_plans[0].content_hash(),
+                "pair_execution_plan_pair": batch.pair_plans[0].pair,
+                "batch_lock_status": batch.pair_plans[0].lock_status,
             }
         )
         bundle = ExecutionPlanBundle(
@@ -895,6 +954,7 @@ class ExecutionPlanner:
             target_policy_metadata=planning.target_policy_metadata,
             planning_error=planning.planning_error,
             status=_plan_status(planning),
+            execution_plan_batch=batch,
         )
         context["execution_plan_bundle"] = bundle.as_dict()
         context["execution_plan_bundle_hash"] = bundle.content_hash()
@@ -1057,6 +1117,20 @@ class ExecutionPlanner:
                     "legacy_target_exposure_fallback_used": bool(
                         fallback_legacy and not strict_target_exposure
                     ),
+                }
+            )
+            previous_target_exposure_by_pair = {runtime_pair: previous_target_exposure_krw}
+            reference_price_by_pair = {
+                runtime_pair: None if reference_price is None else float(reference_price)
+            }
+            context.update(
+                {
+                    "previous_target_exposure_by_pair": dict(previous_target_exposure_by_pair),
+                    "reference_price_by_pair": dict(reference_price_by_pair),
+                    "pair_aware_allocation_input": True,
+                    "single_pair_scalar_pair_map_equivalence": True,
+                    "previous_target_exposure_lookup_source": "target_position_state(pair)",
+                    "reference_price_lookup_source": "runtime_market_price",
                 }
             )
             if runtime_result_bundle is None:
@@ -1314,7 +1388,11 @@ class ExecutionPlanner:
                 reference_price=(
                     None if reference_price is None else float(reference_price)
                 ),
+                previous_target_exposure_by_pair=previous_target_exposure_by_pair,
+                reference_price_by_pair=reference_price_by_pair,
             )
+            context["portfolio_allocation_input"] = allocation_input.as_dict()
+            context["allocation_input_hash"] = allocation_input.content_hash()
             allocation_decision = PortfolioAllocator(allocation_config).allocate(allocation_input)
             allocation_context = _allocation_context_fields(allocation_decision, runtime_pair=runtime_pair)
             context.update(allocation_context)
@@ -1525,6 +1603,182 @@ def _primary_submit_plan(
         or summary.typed_residual_submit_plan()
         or summary.typed_buy_submit_plan()
     )
+
+
+def _base_currency_from_pair(pair: str) -> str:
+    text = str(pair or "").strip()
+    if "-" in text:
+        return text.split("-", 1)[1].upper()
+    return text[-3:].upper() if len(text) >= 3 else text.upper()
+
+
+def _build_execution_plan_batch_for_runtime_pair(
+    conn,
+    *,
+    context: Mapping[str, object],
+    submit_plan: ExecutionSubmitPlan | None,
+    updated_ts: int,
+) -> ExecutionPlanBatch:
+    runtime_pair = str(context.get("runtime_pair") or getattr(settings, "PAIR", "") or "").strip()
+    if not runtime_pair and submit_plan is not None:
+        runtime_pair = str(submit_plan.pair or "").strip()
+    if not runtime_pair:
+        runtime_pair = "unknown"
+    portfolio_target_hash = str(
+        context.get("portfolio_target_hash")
+        or (submit_plan.portfolio_target_hash if submit_plan is not None else "")
+        or sha256_prefixed({"portfolio_target": "missing", "runtime_pair": runtime_pair})
+    )
+    submit_hash = (
+        submit_plan.content_hash()
+        if submit_plan is not None
+        else sha256_prefixed(
+            {
+                "submit_expected": False,
+                "runtime_pair": runtime_pair,
+                "block_reason": str(context.get("execution_block_reason") or context.get("final_reason") or ""),
+            }
+        )
+    )
+    idempotency_key = str(
+        (submit_plan.idempotency_key if submit_plan is not None else "")
+        or context.get("submit_plan_idempotency_key")
+        or sha256_prefixed({"runtime_pair": runtime_pair, "submit_plan_hash": submit_hash})
+    )
+    side = str(submit_plan.side if submit_plan is not None else context.get("authoritative_execution_signal") or "HOLD").upper()
+    lock_evidence: dict[str, object]
+    db_locking_available = _batch_lock_tables_available(conn)
+    if submit_plan is not None and bool(submit_plan.submit_expected) and side == "BUY" and db_locking_available:
+        lock_evidence = create_or_get_budget_lock(
+            conn,
+            currency="KRW",
+            pair=runtime_pair,
+            amount=float(submit_plan.notional_krw or 0.0),
+            reason="execution_plan_batch_buy_budget_lock",
+            created_ts=int(updated_ts),
+            idempotency_key=idempotency_key,
+            evidence={
+                "execution_submit_plan_hash": submit_hash,
+                "portfolio_target_hash": portfolio_target_hash,
+                "runtime_pair": runtime_pair,
+            },
+        )
+    elif submit_plan is not None and bool(submit_plan.submit_expected) and side == "SELL" and db_locking_available:
+        lock_evidence = create_or_get_order_lock(
+            conn,
+            pair=runtime_pair,
+            currency=_base_currency_from_pair(runtime_pair),
+            amount=float(submit_plan.qty or 0.0),
+            reason="execution_plan_batch_sell_order_lock",
+            created_ts=int(updated_ts),
+            idempotency_key=idempotency_key,
+            evidence={
+                "execution_submit_plan_hash": submit_hash,
+                "portfolio_target_hash": portfolio_target_hash,
+                "runtime_pair": runtime_pair,
+            },
+        )
+    else:
+        evidence_hash = sha256_prefixed(
+            {
+                "schema_version": 1,
+                "lock_required": bool(submit_plan is not None and bool(submit_plan.submit_expected) and side in {"BUY", "SELL"}),
+                "lock_persistence": "db_unavailable_diagnostic" if not db_locking_available else "not_required",
+                "runtime_pair": runtime_pair,
+                "execution_submit_plan_hash": submit_hash,
+                "submit_expected": False if submit_plan is None else bool(submit_plan.submit_expected),
+                "side": side,
+            }
+        )
+        lock_evidence = {
+            "lock_hash": evidence_hash,
+            "lock_type": (
+                "quote_budget"
+                if side == "BUY" and submit_plan is not None and bool(submit_plan.submit_expected)
+                else "base_order"
+                if side == "SELL" and submit_plan is not None and bool(submit_plan.submit_expected)
+                else "none"
+            ),
+            "lock_status": "diagnostic_unpersisted" if not db_locking_available else "not_required",
+            "evidence_hash": evidence_hash,
+        }
+    pre_submit_hash = str(
+        context.get("pre_submit_risk_decision_hash")
+        or (
+            submit_plan.extra_payload.get("pre_submit_risk_decision_hash")
+            if submit_plan is not None and isinstance(submit_plan.extra_payload, dict)
+            else ""
+        )
+        or sha256_prefixed({"pre_submit_risk": "not_applicable", "execution_submit_plan_hash": submit_hash})
+    )
+    pair_plan = PairExecutionPlan(
+        pair=runtime_pair,
+        scope_key_hash=str(context.get("scope_key_hash") or ""),
+        portfolio_target_hash=portfolio_target_hash,
+        execution_submit_plan_hash=submit_hash,
+        execution_plan_hash=str(context.get("execution_plan_bundle_hash") or ""),
+        idempotency_key=idempotency_key,
+        submit_authority_policy_hash=str(
+            (submit_plan.submit_authority_policy_hash if submit_plan is not None else "")
+            or context.get("submit_authority_policy_hash")
+            or sha256_prefixed({"submit_authority_policy": "compatibility"})
+        ),
+        pre_submit_risk_decision_hash=pre_submit_hash,
+        submit_expected=False if submit_plan is None else bool(submit_plan.submit_expected),
+        lock_evidence_hash=str(lock_evidence["evidence_hash"]),
+        lock_type=str(lock_evidence["lock_type"]),
+        lock_status=str(lock_evidence["lock_status"]),
+        replay_evidence={
+            "execution_submit_plan_hash": submit_hash,
+            "portfolio_target_hash": portfolio_target_hash,
+            "submit_plan_source": "" if submit_plan is None else submit_plan.source,
+            "submit_plan_authority": "" if submit_plan is None else submit_plan.authority,
+        },
+    )
+    batch_risk_evidence = {
+        "schema_version": 1,
+        "risk_scope": "batch_size_one_single_pair",
+        "runtime_pair": runtime_pair,
+        "pair_plan_hashes": [pair_plan.content_hash()],
+        "lock_evidence_hashes": [str(lock_evidence["evidence_hash"])],
+        "pre_submit_risk_decision_hash": pre_submit_hash,
+        "status": "ALLOW" if submit_plan is not None and bool(submit_plan.submit_expected) else "NOT_REQUIRED",
+    }
+    return ExecutionPlanBatch(
+        runtime_strategy_set_manifest_hash=str(
+            context.get("runtime_strategy_set_manifest_hash")
+            or sha256_prefixed({"runtime_strategy_set_manifest": "missing_compatibility"})
+        ),
+        allocation_decision_hash=str(
+            context.get("allocation_decision_hash")
+            or sha256_prefixed({"allocation_decision": "missing_compatibility", "runtime_pair": runtime_pair})
+        ),
+        pair_plans=(pair_plan,),
+        batch_risk_decision_evidence=batch_risk_evidence,
+        budget_lock_hash=sha256_prefixed(
+            {
+                "schema_version": 1,
+                "batch_lock_evidence": [lock_evidence],
+                "pair_plan_hashes": [pair_plan.content_hash()],
+            }
+        ),
+    )
+
+
+def _batch_lock_tables_available(conn) -> bool:
+    if not callable(getattr(conn, "execute", None)):
+        return False
+    try:
+        rows = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name IN ('budget_locks', 'order_locks')
+            """
+        ).fetchall()
+    except Exception:
+        return False
+    names = {str(row["name"] if hasattr(row, "keys") else row[0]) for row in rows}
+    return {"budget_locks", "order_locks"}.issubset(names)
 
 
 def _plan_status(planning: ExecutionPlanningResult) -> ExecutionPlanStatus:

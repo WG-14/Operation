@@ -911,6 +911,27 @@ def primary_execution_submit_plan(
     )
 
 
+def _execution_batch_payload_extra(request: TypedExecutionRequest) -> dict[str, object]:
+    batch = getattr(request.execution_plan_bundle, "execution_plan_batch", None)
+    if batch is None or not callable(getattr(batch, "content_hash", None)):
+        return {}
+    pair_plans = tuple(getattr(batch, "pair_plans", ()) or ())
+    if len(pair_plans) != 1:
+        return {}
+    pair_plan = pair_plans[0]
+    pair_hash = pair_plan.content_hash() if callable(getattr(pair_plan, "content_hash", None)) else ""
+    return {
+        "execution_plan_batch_hash": batch.content_hash(),
+        "execution_plan_batch_id": str(getattr(batch, "batch_id", "") or ""),
+        "pair_execution_plan_hash": pair_hash,
+        "pair_execution_plan_pair": str(getattr(pair_plan, "pair", "") or ""),
+        "pair_execution_plan_lock_evidence_hash": str(
+            getattr(pair_plan, "lock_evidence_hash", "") or ""
+        ),
+        "pair_execution_plan_lock_status": str(getattr(pair_plan, "lock_status", "") or ""),
+    }
+
+
 def _validate_submit_authority_before_executor(
     plan: Mapping[str, object],
     *,
@@ -2570,7 +2591,9 @@ class LiveSignalExecutionService:
             typed_buy_plan = typed_summary.typed_buy_submit_plan()
             try:
                 if typed_target_plan is not None:
-                    target_plan = typed_target_plan.as_final_payload()
+                    target_plan = typed_target_plan.as_final_payload(
+                        extra=_execution_batch_payload_extra(request)
+                    )
                     if _execution_engine() == "target_delta":
                         target_plan = _attach_live_real_pre_submit_risk_proof(
                             target_plan,
@@ -2579,7 +2602,9 @@ class LiveSignalExecutionService:
                             field_name="target_submit_plan",
                         ) or {}
                 if typed_residual_plan is not None:
-                    residual_plan = typed_residual_plan.as_final_payload()
+                    residual_plan = typed_residual_plan.as_final_payload(
+                        extra=_execution_batch_payload_extra(request)
+                    )
                     residual_plan = _attach_live_real_pre_submit_risk_proof(
                         residual_plan,
                         ts_ms=int(request.ts),
@@ -2587,7 +2612,9 @@ class LiveSignalExecutionService:
                         field_name="residual_submit_plan",
                     ) or {}
                 if typed_buy_plan is not None:
-                    buy_plan = typed_buy_plan.as_final_payload()
+                    buy_plan = typed_buy_plan.as_final_payload(
+                        extra=_execution_batch_payload_extra(request)
+                    )
             except ValueError as exc:
                 _log_live_submit_plan_block(
                     reason=str(exc),

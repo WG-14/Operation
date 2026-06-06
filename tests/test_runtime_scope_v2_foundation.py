@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,9 @@ from bithumb_bot.execution_plan_batch import (
     PairExecutionPlan,
     reject_dict_only_batch_authority,
 )
+from bithumb_bot.execution_service import ExecutionDecisionSummary, ExecutionSubmitPlan
+from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
+from bithumb_bot.runtime.execution_coordinator import ExecutionCoordinator
 from bithumb_bot.portfolio_allocation import (
     PortfolioAllocationInput,
     PortfolioAllocator,
@@ -38,6 +42,7 @@ from bithumb_bot.strategy_preference import StrategyPreference
 from bithumb_bot.virtual_target_state import (
     StrategyVirtualTargetState,
     assert_not_live_submit_authority,
+    evolve_strategy_virtual_target_state,
 )
 from bithumb_bot.research.strategy_registry import DataCapabilityRequirement
 
@@ -108,6 +113,8 @@ def test_replay_hash_chain_detects_missing_and_mismatched_layers() -> None:
         runtime_decision_request_hash="sha256:" + "d" * 64,
         allocation_input_hash="sha256:" + "e" * 64,
         portfolio_target_hash="sha256:" + "f" * 64,
+        execution_plan_batch_hash="sha256:" + "7" * 64,
+        pair_execution_plan_hash="sha256:" + "6" * 64,
         execution_submit_plan_hash="sha256:" + "0" * 64,
         pre_submit_risk_decision_hash="sha256:" + "9" * 64,
     )
@@ -192,11 +199,186 @@ def test_execution_plan_batch_hash_stability_and_dict_authority_rejection() -> N
         reject_dict_only_batch_authority(batch.as_dict())
 
 
+def _submit_plan(*, idempotency_key: str = "idem-btc") -> ExecutionSubmitPlan:
+    return ExecutionSubmitPlan(
+        side="BUY",
+        source="target_delta",
+        authority="canonical_target_delta_sizing",
+        final_action="REBALANCE_TO_TARGET",
+        qty=0.001,
+        notional_krw=100_000.0,
+        target_exposure_krw=100_000.0,
+        current_effective_exposure_krw=0.0,
+        delta_krw=100_000.0,
+        submit_expected=True,
+        pre_submit_proof_status="passed",
+        block_reason="none",
+        idempotency_key=idempotency_key,
+        pair="KRW-BTC",
+        portfolio_target_hash="sha256:" + "a" * 64,
+        submit_authority_policy_hash="sha256:" + "c" * 64,
+    )
+
+
+def _summary(plan: ExecutionSubmitPlan) -> ExecutionDecisionSummary:
+    return ExecutionDecisionSummary(
+        raw_signal=plan.side,
+        final_signal=plan.side,
+        final_action=plan.final_action,
+        submit_expected=True,
+        pre_submit_proof_status="passed",
+        block_reason="none",
+        strategy_sell_candidate=None,
+        residual_sell_candidate=None,
+        target_exposure_krw=plan.target_exposure_krw,
+        current_effective_exposure_krw=plan.current_effective_exposure_krw,
+        tracked_residual_exposure_krw=None,
+        buy_delta_krw=plan.delta_krw,
+        residual_live_sell_mode="off",
+        residual_buy_sizing_mode="target",
+        residual_submit_plan=None,
+        buy_submit_plan=None,
+        target_shadow_decision=None,
+        target_submit_plan=plan,
+    )
+
+
+def _batch_for_plan(plan: ExecutionSubmitPlan) -> ExecutionPlanBatch:
+    pair_plan = PairExecutionPlan(
+        pair="KRW-BTC",
+        portfolio_target_hash=str(plan.portfolio_target_hash),
+        execution_submit_plan_hash=plan.content_hash(),
+        idempotency_key=str(plan.idempotency_key),
+        submit_authority_policy_hash=str(plan.submit_authority_policy_hash),
+        pre_submit_risk_decision_hash="sha256:" + "d" * 64,
+        lock_evidence_hash="sha256:" + "e" * 64,
+        lock_type="quote_budget",
+        lock_status="active",
+        submit_expected=True,
+    )
+    return ExecutionPlanBatch(
+        runtime_strategy_set_manifest_hash="sha256:" + "f" * 64,
+        allocation_decision_hash="sha256:" + "1" * 64,
+        pair_plans=(pair_plan,),
+        batch_risk_decision_evidence={"status": "ALLOW"},
+        budget_lock_hash="sha256:" + "2" * 64,
+    )
+
+
+def test_execution_coordinator_requires_batch_selected_pair_plan_for_runtime_bundle() -> None:
+    plan = _submit_plan()
+    summary = _summary(plan)
+    coordinator = ExecutionCoordinator("target_delta")
+    missing = coordinator.execute_cycle(
+        candle_ts=1,
+        decision_id=1,
+        signal="BUY",
+        decision_context={"runtime_pair": "KRW-BTC"},
+        execution_plan_bundle=SimpleNamespace(),
+        execution_decision_summary=summary,
+        submit_invoker=lambda: {"submitted": True},
+    )
+    assert missing.planning_status == "execution_plan_batch_missing"
+
+    batch = _batch_for_plan(plan)
+    valid = coordinator.execute_cycle(
+        candle_ts=1,
+        decision_id=1,
+        signal="BUY",
+        decision_context={
+            "runtime_pair": "KRW-BTC",
+            "execution_plan_batch_hash": batch.content_hash(),
+            "pair_execution_plan_hash": batch.pair_plans[0].content_hash(),
+        },
+        execution_plan_bundle=SimpleNamespace(execution_plan_batch=batch),
+        execution_decision_summary=summary,
+        submit_invoker=lambda: {"submitted": True},
+    )
+    assert valid.planning_status == "submitted"
+    assert valid.submitted is True
+
+
+def test_decision_coordinator_records_execution_plan_batch_in_normal_cycle() -> None:
+    conn = SimpleNamespace(close=lambda: None, commit=lambda: None)
+    plan = _submit_plan()
+    batch = _batch_for_plan(plan)
+    planning_bundle = SimpleNamespace(
+        summary=_summary(plan),
+        execution_plan_batch=batch,
+        persistence_context={
+            "portfolio_allocation_decision": {"allocation_decision_hash": "sha256:" + "1" * 64},
+            "execution_decision": {},
+            "ts": 123,
+            "last_close": 10.0,
+            "execution_plan_batch_hash": batch.content_hash(),
+            "execution_plan_batch_id": batch.batch_id,
+        },
+    )
+    typed_bundle = SimpleNamespace(
+        candle_ts=123,
+        market_price=10.0,
+        strategy_set=SimpleNamespace(
+            multi_strategy_enabled=False,
+            market_scope=SimpleNamespace(pair="KRW-BTC", interval="1m"),
+        ),
+        results=(
+            SimpleNamespace(
+                decision=SimpleNamespace(
+                    strategy_name="safe_hold",
+                    final_signal="HOLD",
+                    final_reason="unit",
+                )
+            ),
+        ),
+    )
+    calls: list[str] = []
+    coordinator = DecisionCoordinator(
+        db_factory=lambda: conn,
+        decision_gateway_factory=lambda: SimpleNamespace(decide_bundle=lambda *_args, **_kwargs: typed_bundle),
+        planner_factory=lambda **_kwargs: SimpleNamespace(
+            plan_runtime_strategy_results=lambda *_args, **_kwargs: planning_bundle
+        ),
+        record_runtime_strategy_decision_bundle_fn=lambda *_args, **_kwargs: {
+            calls.append("bundle") or "runtime_strategy_decision_bundle_id": 1,
+            "runtime_strategy_decision_bundle_hash": "sha256:" + "3" * 64,
+        },
+        record_portfolio_allocation_decision_fn=lambda *_args, **_kwargs: {
+            calls.append("allocation") or "portfolio_allocation_decision_id": 2,
+            "allocation_decision_hash": "sha256:" + "1" * 64,
+            "portfolio_target_id": 3,
+            "portfolio_target_hash": str(plan.portfolio_target_hash),
+        },
+        record_execution_plan_batch_fn=lambda *_args, **_kwargs: {
+            calls.append("batch") or "execution_plan_batch_hash": batch.content_hash(),
+            "execution_plan_batch_id": batch.batch_id,
+        },
+        record_execution_plan_fn=lambda *_args, **_kwargs: {
+            calls.append("execution") or "execution_plan_id": 4,
+            "execution_plan_bundle_hash": "sha256:" + "4" * 64,
+            "execution_submit_plan_hash": plan.content_hash(),
+        },
+        record_strategy_decision_fn=lambda *_args, **_kwargs: 5,
+        target_position_state_persister=lambda *_args, **_kwargs: False,
+    )
+
+    result = coordinator.decide_cycle(
+        runtime_strategy_set=typed_bundle.strategy_set,
+        candle_ts=123,
+        updated_ts=456,
+    )
+
+    assert calls == ["bundle", "allocation", "batch", "execution"]
+    assert result.execution_plan_batch_hash == batch.content_hash()
+    assert result.execution_plan_batch_id == batch.batch_id
+    assert result.as_dict()["execution_plan_batch_hash"] == batch.content_hash()
+
+
 def test_virtual_target_state_is_independent_and_not_live_submit_authority() -> None:
     conn = _memory_conn()
     try:
         first = StrategyVirtualTargetState(
             strategy_instance_id="s1",
+            strategy_name="sma_with_filter",
             pair="KRW-BTC",
             interval="1m",
             scope_key_hash=_scope(strategy_instance_id="s1").scope_key_hash(),
@@ -209,6 +391,7 @@ def test_virtual_target_state_is_independent_and_not_live_submit_authority() -> 
         )
         second = StrategyVirtualTargetState(
             strategy_instance_id="s2",
+            strategy_name="safe_hold",
             pair="KRW-BTC",
             interval="1m",
             scope_key_hash=_scope(strategy_instance_id="s2").scope_key_hash(),
@@ -237,10 +420,60 @@ def test_virtual_target_state_is_independent_and_not_live_submit_authority() -> 
         )
         assert loaded_first is not None and loaded_first.virtual_target_exposure_krw == pytest.approx(10_000.0)
         assert loaded_second is not None and loaded_second.virtual_target_exposure_krw == pytest.approx(0.0)
+        assert loaded_first.strategy_name == "sma_with_filter"
         with pytest.raises(TypeError, match="virtual_target_state_not_live_submit_authority"):
             assert_not_live_submit_authority(first)
     finally:
         conn.close()
+
+
+def test_virtual_target_state_evolves_without_actual_submit_authority() -> None:
+    scope = _scope(strategy_instance_id="s1")
+    bought = evolve_strategy_virtual_target_state(
+        previous=None,
+        strategy_instance_id="s1",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        scope_key_hash=scope.scope_key_hash(),
+        runtime_contract_hash=scope.runtime_contract_hash,
+        signal="BUY",
+        target_exposure_krw=50_000.0,
+        reference_price=25_000_000.0,
+        updated_ts=10,
+    )
+    held = evolve_strategy_virtual_target_state(
+        previous=bought,
+        strategy_instance_id="s1",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        scope_key_hash=scope.scope_key_hash(),
+        runtime_contract_hash=scope.runtime_contract_hash,
+        signal="HOLD",
+        target_exposure_krw=None,
+        reference_price=25_000_000.0,
+        updated_ts=11,
+    )
+    sold = evolve_strategy_virtual_target_state(
+        previous=held,
+        strategy_instance_id="s1",
+        strategy_name="sma_with_filter",
+        pair="KRW-BTC",
+        interval="1m",
+        scope_key_hash=scope.scope_key_hash(),
+        runtime_contract_hash=scope.runtime_contract_hash,
+        signal="SELL",
+        target_exposure_krw=None,
+        reference_price=25_000_000.0,
+        updated_ts=12,
+    )
+    assert bought.virtual_target_exposure_krw == pytest.approx(50_000.0)
+    assert held.virtual_target_exposure_krw == pytest.approx(50_000.0)
+    assert sold.virtual_target_exposure_krw == pytest.approx(0.0)
+    assert bought.as_dict()["live_submit_authority"] is False
+    with pytest.raises(TypeError, match="virtual_target_state_not_live_submit_authority"):
+        assert_not_live_submit_authority(bought.as_dict())
 
 
 def test_multi_asset_ledger_stores_balances_positions_and_blocks_portfolio_projection_authority() -> None:
@@ -272,6 +505,9 @@ def test_multi_asset_ledger_stores_balances_positions_and_blocks_portfolio_proje
         ]
         status = multi_asset_ledger_authority_status(conn)
         assert status["status"] == "present"
+        assert status["authority_verification_status"] == "present_unverified"
+        assert status["authority_verified"] is False
+        assert status["reconcile_status"] == "not_multi_pair_verified"
         assert status["portfolio_id_1_multi_pair_live_authority"] is False
         assert status["live_multi_pair_enablement"] == "fail_closed_until_scoped_batch_ledger_authority_verified"
     finally:
