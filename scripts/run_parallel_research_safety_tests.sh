@@ -23,10 +23,10 @@ if [[ -n "${PYTEST_BIN:-}" ]]; then
 else
   pytest_cmd=(uv run pytest)
 fi
-"${pytest_cmd[@]}" -q -n "${PYTEST_XDIST_WORKERS:-2}" --dist="${PYTEST_XDIST_DIST:-loadfile}" \
+"${pytest_cmd[@]}" -q -n "${PYTEST_XDIST_WORKERS:-2}" --dist="${PYTEST_XDIST_DIST:-worksteal}" \
   tests/test_research_process_runtime.py \
   -W error::DeprecationWarning
-"${pytest_cmd[@]}" -q -n "${PYTEST_XDIST_WORKERS:-2}" --dist="${PYTEST_XDIST_DIST:-loadfile}" \
+"${pytest_cmd[@]}" -q -n "${PYTEST_XDIST_WORKERS:-2}" --dist="${PYTEST_XDIST_DIST:-worksteal}" \
   -m "$PARALLEL_RESEARCH_SAFETY_MARKER_EXPR" \
   -W error::DeprecationWarning
 

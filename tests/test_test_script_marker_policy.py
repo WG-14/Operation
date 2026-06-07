@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from tests.policy.research_runner_policy import DEFAULT_FAST_EXCLUDED_RESEARCH_MARKERS
@@ -76,8 +77,132 @@ def test_parallel_research_safety_script_runs_warning_as_error_and_runtime_artif
 
     assert "-W error::DeprecationWarning" in text
     assert '-n "${PYTEST_XDIST_WORKERS:-2}"' in text
-    assert '--dist="${PYTEST_XDIST_DIST:-loadfile}"' in text
+    assert '--dist="${PYTEST_XDIST_DIST:-worksteal}"' in text
     assert "./scripts/check_repo_runtime_artifacts.sh" in text
+
+
+def test_full_runner_defaults_to_worksteal() -> None:
+    text = Path("scripts/run_full_pytest_tests.sh").read_text(encoding="utf-8")
+
+    assert 'PYTEST_XDIST_DIST:-worksteal' in text
+    assert 'PYTEST_XDIST_DIST:-loadfile' not in text
+    assert '--dist=worksteal' not in text
+    assert 'echo "[PYTEST-XDIST] workers=${PYTEST_XDIST_WORKERS} dist=${pytest_dist}"' in text
+
+
+def test_full_suite_wrapper_defaults_to_worksteal() -> None:
+    text = Path("scripts/full_suite.sh").read_text(encoding="utf-8")
+
+    assert 'pytest_dist="${PYTEST_XDIST_DIST:-worksteal}"' in text
+    assert 'pytest_dist="${PYTEST_XDIST_DIST:-loadfile}"' not in text
+
+
+def test_full_runner_allows_explicit_loadfile_override() -> None:
+    text = Path("scripts/run_full_pytest_tests.sh").read_text(encoding="utf-8")
+
+    assert 'pytest_dist="${PYTEST_XDIST_DIST:-worksteal}"' in text
+    assert '--dist="${pytest_dist}"' in text
+    assert '--dist=worksteal' not in text
+
+
+def test_parallel_research_safety_runner_uses_parallel_marker_expression() -> None:
+    path = Path("scripts/run_parallel_research_safety_tests.sh")
+    text = path.read_text(encoding="utf-8")
+
+    assert _shell_assignment(path, "PARALLEL_RESEARCH_SAFETY_MARKER_EXPR") == "parallel_e2e or memory_sensitive"
+    assert '-m "$PARALLEL_RESEARCH_SAFETY_MARKER_EXPR"' in text
+    assert 'PYTEST_XDIST_DIST:-worksteal' in text
+
+
+def test_parallel_research_safety_runner_runs_process_runtime_tests_first() -> None:
+    text = Path("scripts/run_parallel_research_safety_tests.sh").read_text(encoding="utf-8")
+
+    runtime_index = text.index("tests/test_research_process_runtime.py")
+    marker_index = text.index('-m "$PARALLEL_RESEARCH_SAFETY_MARKER_EXPR"')
+
+    assert runtime_index < marker_index
+
+
+def test_full_runner_does_not_replace_parallel_safety_runner() -> None:
+    full_text = Path("scripts/run_full_pytest_tests.sh").read_text(encoding="utf-8")
+    safety_text = Path("scripts/run_parallel_research_safety_tests.sh").read_text(encoding="utf-8")
+
+    assert "-m" not in full_text
+    assert "PARALLEL_RESEARCH_SAFETY_MARKER_EXPR" in safety_text
+    assert "tests/test_research_process_runtime.py" in safety_text
+
+
+def test_worksteal_diagnostic_runner_exists() -> None:
+    path = Path("scripts/run_xdist_worksteal_diagnostics.sh")
+
+    assert path.exists()
+    assert path.stat().st_mode & 0o111
+    assert 'PYTEST_XDIST_DIST="${PYTEST_XDIST_DIST:-worksteal}"' in path.read_text(encoding="utf-8")
+
+
+def test_worksteal_diagnostic_runner_fails_on_first_failed_iteration(tmp_path) -> None:
+    script = tmp_path / "scripts" / "run_xdist_worksteal_diagnostics.sh"
+    script.parent.mkdir()
+    script.write_text(Path("scripts/run_xdist_worksteal_diagnostics.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    fake_runner = tmp_path / "scripts" / "run_full_pytest_tests.sh"
+    fake_runner.write_text(
+        "#!/usr/bin/env bash\n"
+        "count_file=\"$PWD/count\"\n"
+        "count=0\n"
+        "if [[ -f \"$count_file\" ]]; then count=$(cat \"$count_file\"); fi\n"
+        "count=$((count + 1))\n"
+        "printf '%s' \"$count\" > \"$count_file\"\n"
+        "exit 1\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    fake_runner.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(script)],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTEST_WORKSTEAL_DIAGNOSTIC_ITERATIONS": "3"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert (tmp_path / "count").read_text(encoding="utf-8") == "1"
+
+
+def test_worksteal_diagnostic_runner_logs_iteration_number() -> None:
+    text = Path("scripts/run_xdist_worksteal_diagnostics.sh").read_text(encoding="utf-8")
+
+    assert "iteration=${iteration}/${iterations}" in text
+
+
+def test_operator_tests_are_split_across_multiple_files() -> None:
+    operator_files = sorted(Path("tests/operator").glob("test_*.py"))
+
+    assert len(operator_files) >= 3
+    assert Path("tests/test_operator_commands.py").exists()
+
+
+def test_no_operator_test_file_exceeds_collection_limit() -> None:
+    proc = subprocess.run(
+        ["uv", "run", "pytest", "--collect-only", "-q", "tests/operator", "tests/test_operator_commands.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    counts: dict[str, int] = {}
+    for line in proc.stdout.splitlines():
+        if "::test_" not in line:
+            continue
+        file_name = line.split("::", 1)[0]
+        counts[file_name] = counts.get(file_name, 0) + 1
+    assert counts
+    assert max(counts.values()) <= 200
+    assert counts.get("tests/test_operator_commands.py", 0) <= 50
 
 
 def test_fast_pr_script_exports_fast_test_tier_before_pytest() -> None:

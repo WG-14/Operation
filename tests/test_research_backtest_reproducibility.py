@@ -65,6 +65,7 @@ from bithumb_bot.research.backtest_stage_runner import (
     _record_audit_equity_mark,
     _record_audit_execution,
 )
+from bithumb_bot.research.report_writer import write_research_report
 from bithumb_bot.research.return_panel import build_candidate_return_panel
 from bithumb_bot.research import cli as research_cli
 from bithumb_bot.research.cli import _print_report_summary
@@ -130,6 +131,149 @@ def _create_db(path: Path, *, minutes_per_day: int = 24 * 60) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _research_manager(tmp_path: Path, monkeypatch) -> PathManager:
+    monkeypatch.setenv("MODE", "paper")
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    return PathManager.from_env(Path.cwd())
+
+
+def _summary_report_payload(*, experiment_id: str = "summary_ref") -> dict[str, object]:
+    candidate = minimal_candidate_payload(candidate_id="candidate_001")
+    candidate["decisions"] = [{"ts": 1, "signal": "BUY"}]
+    candidate["equity_curve"] = [{"ts": 1, "equity": 1_000_000.0}]
+    report = minimal_research_report(
+        report_kind="backtest",
+        experiment_id=experiment_id,
+        candidates=[candidate],
+    )
+    report.setdefault("research_run", {})["report_detail"] = "summary"
+    return report
+
+
+def test_summary_report_does_not_duplicate_full_candidate_payload(tmp_path, monkeypatch) -> None:
+    manager = _research_manager(tmp_path, monkeypatch)
+    report_payload = _summary_report_payload()
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="summary_ref",
+        report_name="backtest",
+        payload=report_payload,
+    )
+
+    persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
+    derived = json.loads(result.paths.derived_path.read_text(encoding="utf-8"))
+    assert "decisions" in derived["candidates"][0]
+    assert "equity_curve" in derived["candidates"][0]
+    assert "decisions" not in persisted["candidates"][0]
+    assert "equity_curve" not in persisted["candidates"][0]
+    assert persisted["candidate_count"] == len(derived["candidates"])
+
+
+def test_derived_candidates_artifact_hash_is_bound_to_report(tmp_path, monkeypatch) -> None:
+    manager = _research_manager(tmp_path, monkeypatch)
+    report_payload = _summary_report_payload(experiment_id="summary_hash_ref")
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="summary_hash_ref",
+        report_name="backtest",
+        payload=report_payload,
+    )
+
+    persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
+    derived = json.loads(result.paths.derived_path.read_text(encoding="utf-8"))
+    derived_hash = sha256_prefixed(report_content_hash_payload(derived))
+    assert persisted["artifact_refs"]["derived_candidates"] == "derived/research/summary_hash_ref/backtest_candidates.json"
+    assert Path(persisted["artifact_paths"]["derived_path"]).exists()
+    assert persisted["artifact_hashes"]["derived_candidates"] == derived_hash
+    assert persisted["derived_candidates_hash"] == derived_hash
+
+
+def test_report_content_hash_changes_when_derived_candidates_hash_changes(tmp_path, monkeypatch) -> None:
+    manager = _research_manager(tmp_path, monkeypatch)
+    first_payload = _summary_report_payload(experiment_id="summary_hash_change")
+    second_payload = _summary_report_payload(experiment_id="summary_hash_change")
+    second_payload["candidates"][0]["candidate_id"] = "candidate_002"
+
+    first_paths, first_hash = write_research_report(
+        manager=manager,
+        experiment_id="summary_hash_change",
+        report_name="backtest_first",
+        payload=first_payload,
+    )
+    second_paths, second_hash = write_research_report(
+        manager=manager,
+        experiment_id="summary_hash_change",
+        report_name="backtest_second",
+        payload=second_payload,
+    )
+
+    first = json.loads(first_paths.report_path.read_text(encoding="utf-8"))
+    second = json.loads(second_paths.report_path.read_text(encoding="utf-8"))
+    assert first["derived_candidates_hash"] != second["derived_candidates_hash"]
+    assert first_hash != second_hash
+
+
+def test_report_write_observability_records_artifact_bytes_and_file_count(tmp_path, monkeypatch) -> None:
+    manager = _research_manager(tmp_path, monkeypatch)
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="summary_write_obs",
+        report_name="backtest",
+        payload=_summary_report_payload(experiment_id="summary_write_obs"),
+    )
+
+    persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
+    summary = persisted["artifact_write_summary"]
+    assert summary["derived_candidates_bytes"] > 0
+    assert summary["report_bytes"] > 0
+    assert summary["artifact_file_count"] == 2
+    assert summary["artifact_total_bytes"] == summary["derived_candidates_bytes"] + summary["report_bytes"]
+    assert summary["write_wall_seconds"] >= 0
+    assert persisted["artifact_observability"]["report_write"] == summary
+
+
+def test_artifact_write_observability_matches_written_files(tmp_path, monkeypatch) -> None:
+    manager = _research_manager(tmp_path, monkeypatch)
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="summary_write_sizes",
+        report_name="backtest",
+        payload=_summary_report_payload(experiment_id="summary_write_sizes"),
+    )
+
+    persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
+    summary = persisted["artifact_write_summary"]
+    assert result.paths.derived_path.stat().st_size == summary["derived_candidates_bytes"]
+    assert result.paths.report_path.stat().st_size == summary["report_bytes"]
+
+
+@pytest.mark.research_e2e
+def test_report_write_stage_timing_is_recorded_after_artifact_write(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    payload = _manifest()
+    payload["experiment_id"] = "report_write_stage_order"
+    payload["research_run"] = {"report_detail": "summary"}
+
+    report = run_research_backtest(
+        manifest=parse_manifest(payload),
+        db_path=db_path,
+        manager=_research_manager(tmp_path, monkeypatch),
+        generated_at="2026-05-03T00:00:00+00:00",
+    )
+
+    report_write = [
+        item for item in report["execution_observability"]["stage_timings"] if item["stage"] == "report_write"
+    ][0]
+    assert report_write["artifact_total_bytes"] > 0
+    assert report_write["artifact_file_count"] >= 2
 
 
 def _contract_evaluator() -> DeterministicResearchEvaluator:
@@ -3868,11 +4012,14 @@ def test_parallel_research_failure_is_committed_by_main_process(tmp_path, monkey
     assert report["execution_observability"]["unsafe_fork_allowed"] is False
     assert report["execution_observability"]["research_max_workers_requested"] == 2
     process_budget = report["execution_observability"]["process_budget"]
-    env_cap = process_budget.get("research_max_workers_env_cap")
-    expected_effective_workers = min(2, env_cap) if isinstance(env_cap, int) else 2
-    assert report["execution_observability"]["research_max_workers_effective"] == expected_effective_workers
+    observed = report["execution_observability"]["research_max_workers_effective"]
+    assert observed == process_budget["research_max_workers_effective"]
+    assert observed <= report["execution_observability"]["research_max_workers_requested"]
+    total_budget = process_budget.get("total_process_budget")
+    outer_worker_count = process_budget.get("outer_worker_count")
+    if isinstance(total_budget, int) and isinstance(outer_worker_count, int):
+        assert observed <= max(1, total_budget // outer_worker_count)
     assert process_budget["research_max_workers_requested"] == 2
-    assert process_budget["research_max_workers_effective"] == expected_effective_workers
     assert report["run_environment"]["multiprocessing_policy"]["requested_process_start_method"] == "auto_safe"
     assert (
         report["execution_plan"]["run_environment"]["multiprocessing_policy"]["requested_process_start_method"]

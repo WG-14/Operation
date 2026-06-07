@@ -262,6 +262,40 @@ def test_walk_forward_report_persists_artifact_discovery_metadata(tmp_path, monk
     assert persisted["execution_observability"]["contract_evaluator_used"] is True
 
 
+def test_walk_forward_summary_report_uses_candidate_artifact_ref(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    candidate = {
+        "candidate_id": "candidate_001",
+        "decisions": [{"ts": 1, "signal": "BUY"}],
+        "equity_curve": [{"ts": 1, "equity": 1_000_000.0}],
+    }
+    payload = minimal_research_report(
+        report_kind="walk_forward",
+        experiment_id="walk_summary_ref",
+        candidates=[candidate],
+        execution_observability={
+            "production_evaluator_used": False,
+            "contract_evaluator_used": True,
+            "parallel_executor_used": False,
+        },
+    )
+    payload.setdefault("research_run", {})["report_detail"] = "summary"
+    assert_fast_research_workload(payload)
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="walk_summary_ref",
+        report_name="walk_forward",
+        payload=payload,
+    )
+
+    persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
+    derived = json.loads(result.paths.derived_path.read_text(encoding="utf-8"))
+    assert persisted["artifact_refs"]["derived_candidates"] == "derived/research/walk_summary_ref/walk_forward_candidates.json"
+    assert "decisions" in derived["candidates"][0]
+    assert "decisions" not in persisted["candidates"][0]
+
+
 def test_repeated_positive_test_windows_pass_aggregate_walk_forward(monkeypatch) -> None:
     manifest = _manifest()
     windows = _rolling_walk_forward_windows(manifest)

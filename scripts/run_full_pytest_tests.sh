@@ -20,6 +20,8 @@ bithumb_pytest_run_preflight "research workload budget full" uv run python scrip
 bithumb_pytest_mark_pytest_started
 pytest_args=(-q)
 if [[ -n "${PYTEST_XDIST_WORKERS:-}" && "${PYTEST_XDIST_WORKERS:-0}" != "0" ]]; then
-  pytest_args+=(-n "$PYTEST_XDIST_WORKERS" --dist="${PYTEST_XDIST_DIST:-loadfile}")
+  pytest_dist="${PYTEST_XDIST_DIST:-worksteal}"
+  echo "[PYTEST-XDIST] workers=${PYTEST_XDIST_WORKERS} dist=${pytest_dist}"
+  pytest_args+=(-n "$PYTEST_XDIST_WORKERS" --dist="${pytest_dist}")
 fi
 uv run pytest "${pytest_args[@]}"

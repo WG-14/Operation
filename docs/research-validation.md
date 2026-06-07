@@ -156,6 +156,14 @@ How to add a new research data source:
 is not, by itself, a complete experiment record. Embedded report retention caps
 such as `max_decisions_retained` and `max_equity_points_retained` control report
 preview size only; they must not be treated as forensic audit retention.
+Summary reports use a reference-first candidate layout: full candidate payloads
+are written to the derived candidates artifact under
+`DATA_ROOT/<mode>/derived/research/<experiment_id>/`, while the report body under
+`DATA_ROOT/<mode>/reports/research/<experiment_id>/` keeps compact candidate
+summaries, candidate counts, derived artifact refs, and `sha256:` bindings. The
+report content hash is bound to the derived candidates hash. Promotion or audit
+flows that require complete embedded candidate payloads must use an explicitly
+full-detail/evidence path rather than relying on summary report duplication.
 
 Complete replay evidence is written as external candidate/scenario/split trace
 artifacts when `research_run.audit_trail.mode=complete_external` is enabled, or
@@ -368,7 +376,8 @@ Optional full-suite xdist validation is available through the full runner, not
 ad-hoc selector-less pytest:
 
 ```bash
-PYTEST_XDIST_WORKERS=4 PYTEST_XDIST_DIST=loadfile ./scripts/run_full_pytest_tests.sh
+PYTEST_XDIST_WORKERS=4 PYTEST_XDIST_DIST=worksteal ./scripts/run_full_pytest_tests.sh
+PYTEST_XDIST_WORKERS=4 PYTEST_XDIST_DIST=loadfile ./scripts/run_full_pytest_tests.sh  # explicit compatibility override
 ```
 
 ### Parallel Research Safety Matrix
@@ -433,7 +442,7 @@ Keep the safety gate default at:
 
 ```text
 PYTEST_XDIST_WORKERS=2
-PYTEST_XDIST_DIST=loadfile
+PYTEST_XDIST_DIST=worksteal
 BITHUMB_RESEARCH_MP_START_METHOD=auto_safe
 BITHUMB_RESEARCH_MAX_WORKERS=2 for local/pipeline matrix runs
 ```

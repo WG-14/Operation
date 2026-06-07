@@ -55,3 +55,23 @@ def test_research_report_finalizer_adds_stable_artifact_refs_paths_and_content_h
     assert finalized["artifact_paths"]["report_path"] == str(paths.report_path.resolve())
     assert finalized["artifact_paths"]["derived_path"] == str(paths.derived_path.resolve())
     assert sha256_prefixed(report_content_hash_payload(finalized)) == content_hash
+
+
+def test_research_report_refs_derived_candidates_artifact(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MODE", "paper")
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    manager = PathManager.from_env(Path.cwd())
+    payload = minimal_research_report(report_kind="backtest", experiment_id="ref_contract")
+    payload.setdefault("research_run", {})["report_detail"] = "summary"
+
+    result = write_research_report(
+        manager=manager,
+        experiment_id="ref_contract",
+        report_name="backtest",
+        payload=payload,
+    )
+
+    persisted = result.paths.report_path.read_text(encoding="utf-8")
+    assert '"derived_candidates": "derived/research/ref_contract/backtest_candidates.json"' in persisted
+    assert result.paths.derived_path.exists()

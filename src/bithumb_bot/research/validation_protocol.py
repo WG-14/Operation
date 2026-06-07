@@ -900,17 +900,32 @@ def run_research_backtest(
         candidate_count=len(candidates),
     )
     stage_started = time.perf_counter()
-    stage_timings.append(_stage_timing("report_write", stage_started, candidate_count=len(candidates)))
-    paths, _content_hash = write_research_report(
+    write_result = write_research_report(
         manager=manager,
         experiment_id=manifest.experiment_id,
         report_name="backtest",
         payload=report,
         artifact_context=artifact_context,
     )
+    paths = write_result.paths
+    stage_timings.append(
+        _stage_timing(
+            "report_write",
+            stage_started,
+            candidate_count=len(candidates),
+            artifact_total_bytes=write_result.artifact_write_summary["artifact_total_bytes"],
+            artifact_file_count=write_result.artifact_write_summary["artifact_file_count"],
+            derived_candidates_bytes=write_result.artifact_write_summary["derived_candidates_bytes"],
+            report_bytes=write_result.artifact_write_summary["report_bytes"],
+        )
+    )
+    full_candidates = report.get("candidates")
     persisted_report = json.loads(paths.report_path.read_text(encoding="utf-8"))
     report.clear()
     report.update(persisted_report)
+    if manifest.research_run.report_detail == "summary":
+        report["candidates"] = full_candidates
+    report["execution_observability"]["stage_timings"] = stage_timings
     _emit_progress(
         progress_callback,
         stage="complete",
@@ -1100,17 +1115,32 @@ def run_research_walk_forward(
         candidate_count=len(candidates),
     )
     stage_started = time.perf_counter()
-    stage_timings.append(_stage_timing("report_write", stage_started, candidate_count=len(candidates)))
-    paths, _content_hash = write_research_report(
+    write_result = write_research_report(
         manager=manager,
         experiment_id=manifest.experiment_id,
         report_name="walk_forward",
         payload=report,
         artifact_context=artifact_context,
     )
+    paths = write_result.paths
+    stage_timings.append(
+        _stage_timing(
+            "report_write",
+            stage_started,
+            candidate_count=len(candidates),
+            artifact_total_bytes=write_result.artifact_write_summary["artifact_total_bytes"],
+            artifact_file_count=write_result.artifact_write_summary["artifact_file_count"],
+            derived_candidates_bytes=write_result.artifact_write_summary["derived_candidates_bytes"],
+            report_bytes=write_result.artifact_write_summary["report_bytes"],
+        )
+    )
+    full_candidates = report.get("candidates")
     persisted_report = json.loads(paths.report_path.read_text(encoding="utf-8"))
     report.clear()
     report.update(persisted_report)
+    if manifest.research_run.report_detail == "summary":
+        report["candidates"] = full_candidates
+    report["execution_observability"]["stage_timings"] = stage_timings
     _emit_progress(
         progress_callback,
         stage="complete",

@@ -8,6 +8,14 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class WorkspaceScan:
+    total_bytes: int
+    largest_file_bytes: int
+    largest_files: list[dict[str, Any]]
+    file_count: int
+
+
+@dataclass(frozen=True)
 class TestRunWorkspace:
     __test__ = False
     run_id: str
@@ -57,32 +65,37 @@ class TestRunWorkspace:
         )
 
     def total_workspace_bytes(self) -> int:
+        return self._scan_files(limit=0).total_bytes
+
+    def largest_file_size(self) -> int:
+        return self._scan_files(limit=1).largest_file_bytes
+
+    def largest_files(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        return self._scan_files(limit=limit).largest_files
+
+    def _scan_files(self, *, limit: int = 10) -> WorkspaceScan:
         if not self.root.exists():
-            return 0
+            return WorkspaceScan(total_bytes=0, largest_file_bytes=0, largest_files=[], file_count=0)
+        files = []
         total = 0
         for path in self.root.rglob("*"):
             if path.is_file():
-                total += path.stat().st_size
-        return total
-
-    def largest_file_size(self) -> int:
-        largest = 0
-        for item in self.largest_files(limit=1):
-            largest = int(item["bytes"])
-        return largest
-
-    def largest_files(self, *, limit: int = 10) -> list[dict[str, Any]]:
-        if not self.root.exists():
-            return []
-        files = []
-        for path in self.root.rglob("*"):
-            if path.is_file():
-                files.append({"path": str(path.resolve()), "bytes": path.stat().st_size})
-        return sorted(files, key=lambda item: int(item["bytes"]), reverse=True)[:limit]
+                size = path.stat().st_size
+                total += size
+                files.append({"path": str(path.resolve()), "bytes": size})
+        largest_files = sorted(files, key=lambda item: int(item["bytes"]), reverse=True)
+        largest_file_bytes = int(largest_files[0]["bytes"]) if largest_files else 0
+        return WorkspaceScan(
+            total_bytes=total,
+            largest_file_bytes=largest_file_bytes,
+            largest_files=largest_files[:limit],
+            file_count=len(files),
+        )
 
     def budget_status(self) -> dict[str, Any]:
-        total = self.total_workspace_bytes()
-        largest = self.largest_file_size()
+        scan = self._scan_files(limit=10)
+        total = scan.total_bytes
+        largest = scan.largest_file_bytes
         violations = []
         if total > self.max_total_bytes:
             violations.append(
@@ -106,6 +119,8 @@ class TestRunWorkspace:
             "root": str(self.root),
             "total_bytes": total,
             "largest_file_bytes": largest,
+            "file_count": scan.file_count,
+            "largest_files": scan.largest_files,
             "max_total_bytes": self.max_total_bytes,
             "max_single_file_bytes": self.max_single_file_bytes,
             "ok": not violations,
@@ -120,7 +135,7 @@ class TestRunWorkspace:
                 f"largest_file_bytes={status['largest_file_bytes']} ok={status['ok']}"
             )
         ]
-        for item in self.largest_files(limit=10):
+        for item in status["largest_files"]:
             lines.append(f"pytest workspace large_file_bytes={item['bytes']} path={item['path']}")
         for violation in status["violations"]:
             lines.append(

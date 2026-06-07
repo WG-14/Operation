@@ -17,6 +17,8 @@ REPORT_TOP_LEVEL_HASH_EXCLUDED_FIELDS = frozenset(
         "audit_trail_trace_manifest_path",
         "trace_manifest_path",
         "execution_observability",
+        "artifact_observability",
+        "artifact_write_summary",
         "run_environment",
     }
 )

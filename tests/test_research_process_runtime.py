@@ -143,6 +143,66 @@ def test_total_process_budget_caps_inner_workers_when_outer_count_known(monkeypa
     assert runtime.process_budget["total_process_budget"] == 6
 
 
+def test_total_budget_equal_to_outer_worker_count_caps_inner_worker_to_one(monkeypatch) -> None:
+    monkeypatch.setattr(process_runtime.mp, "get_all_start_methods", lambda: ["forkserver", "spawn"])
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "8")
+    monkeypatch.setenv("BITHUMB_TOTAL_PROCESS_BUDGET", "8")
+
+    runtime = resolve_research_process_runtime(requested_max_workers=2)
+
+    assert runtime.max_workers_requested == 2
+    assert runtime.max_workers_effective == 1
+    assert runtime.process_budget["outer_worker_count"] == 8
+    assert runtime.process_budget["total_process_budget"] == 8
+    assert runtime.process_budget["research_max_workers_effective"] == 1
+
+
+def test_total_budget_matrix_records_effective_worker_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(process_runtime.mp, "get_all_start_methods", lambda: ["forkserver", "spawn"])
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+    monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "8")
+    monkeypatch.setenv("BITHUMB_TOTAL_PROCESS_BUDGET", "16")
+
+    runtime = resolve_research_process_runtime(requested_max_workers=4)
+    payload = runtime.observability_payload()
+
+    assert runtime.max_workers_effective == 2
+    assert payload["research_max_workers_effective"] == 2
+    assert payload["process_budget"]["research_max_workers_effective"] == 2
+    assert payload["process_budget"]["research_max_workers_requested"] == 4
+    assert payload["process_budget"]["outer_parallel_context"] == "pytest-xdist"
+
+
+@pytest.mark.parametrize(
+    ("outer_workers", "total_budget", "requested_workers", "expected_effective"),
+    [
+        (8, 8, 2, 1),
+        (8, 16, 4, 2),
+        (4, 16, 8, 4),
+        (2, 16, 8, 8),
+    ],
+)
+def test_total_process_budget_matrix_for_xdist_outer_counts(
+    monkeypatch,
+    outer_workers: int,
+    total_budget: int,
+    requested_workers: int,
+    expected_effective: int,
+) -> None:
+    monkeypatch.setattr(process_runtime.mp, "get_all_start_methods", lambda: ["forkserver", "spawn"])
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", str(outer_workers))
+    monkeypatch.setenv("BITHUMB_TOTAL_PROCESS_BUDGET", str(total_budget))
+
+    runtime = resolve_research_process_runtime(requested_max_workers=requested_workers)
+
+    assert runtime.max_workers_effective == expected_effective
+    assert runtime.process_budget["research_max_workers_effective"] == expected_effective
+    assert runtime.process_budget["outer_worker_count"] == outer_workers
+    assert runtime.process_budget["total_process_budget"] == total_budget
+
+
 def test_total_process_budget_caps_inner_workers_without_outer_count(monkeypatch) -> None:
     monkeypatch.setattr(process_runtime.mp, "get_all_start_methods", lambda: ["forkserver", "spawn"])
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)

@@ -53,6 +53,138 @@ def test_test_run_workspace_reports_size_budget_status(tmp_path: Path) -> None:
     assert "budget_violation" in workspace.format_summary()
 
 
+def test_workspace_scan_reports_total_largest_and_file_count(tmp_path: Path) -> None:
+    workspace = TestRunWorkspace.create(
+        base_root=tmp_path,
+        project_root=Path.cwd(),
+        run_id="run-scan",
+        suite_name="fast",
+        node_name="tests/example.py::test_scan",
+    )
+    (workspace.artifact_root / "a.bin").write_bytes(b"123")
+    (workspace.runtime_root / "b.bin").write_bytes(b"12345")
+
+    scan = workspace._scan_files(limit=10)
+
+    assert scan.total_bytes == 8
+    assert scan.largest_file_bytes == 5
+    assert scan.file_count == 2
+    assert scan.largest_files[0]["bytes"] == 5
+
+
+def test_workspace_budget_status_scans_files_once(tmp_path: Path, monkeypatch) -> None:
+    workspace = TestRunWorkspace.create(
+        base_root=tmp_path,
+        project_root=Path.cwd(),
+        run_id="run-budget-scan",
+        suite_name="fast",
+        node_name="tests/example.py::test_budget_scan",
+    )
+    (workspace.artifact_root / "a.bin").write_bytes(b"123")
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(self: Path, pattern: str):
+        nonlocal calls
+        calls += 1
+        yield from original_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+
+    status = workspace.budget_status()
+
+    assert status["total_bytes"] == 3
+    assert calls == 1
+
+
+def test_workspace_format_summary_reuses_single_scan(tmp_path: Path, monkeypatch) -> None:
+    workspace = TestRunWorkspace.create(
+        base_root=tmp_path,
+        project_root=Path.cwd(),
+        run_id="run-summary-scan",
+        suite_name="fast",
+        node_name="tests/example.py::test_summary_scan",
+    )
+    (workspace.artifact_root / "a.bin").write_bytes(b"123")
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(self: Path, pattern: str):
+        nonlocal calls
+        calls += 1
+        yield from original_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+
+    summary = workspace.format_summary()
+
+    assert "total_bytes=3" in summary
+    assert calls == 1
+
+
+def test_autouse_global_reset_does_not_require_test_run_workspace() -> None:
+    text = Path("tests/conftest.py").read_text(encoding="utf-8")
+
+    assert "def _restore_global_settings_state():" in text
+    assert "def _restore_global_settings_state(test_run_workspace" not in text
+    assert "def _restore_global_settings_state(managed_runtime_env" not in text
+
+
+def test_pure_unit_test_does_not_create_node_workspace(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    proc = subprocess.run(
+        [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/test_research_process_runtime.py::test_auto_safe_prefers_forkserver_when_available",
+        ],
+        env={**os.environ, "BITHUMB_PYTEST_WORKSPACE_ROOT": str(workspace_root)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not any(workspace_root.glob("**/tests_test_research_process_runtime.py__test_auto_safe_prefers_forkserver_when_available*"))
+
+
+def test_managed_runtime_env_still_creates_external_workspace(tmp_path: Path) -> None:
+    proc = subprocess.run(
+        [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/test_oms_smoke_path_policy.py::test_managed_runtime_env_fixture_uses_non_repo_tmp_path",
+        ],
+        env={
+            **os.environ,
+            "BITHUMB_PYTEST_WORKSPACE_ROOT": str(tmp_path / "workspace"),
+            "KEEP_BITHUMB_TEST_ARTIFACTS": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert list((tmp_path / "workspace").glob("**/tests_test_oms_smoke_path_policy.py__test_managed_runtime_env_fixture_uses_non_repo_tmp_path*"))
+
+
+def test_workspace_fixture_remains_outside_repo(tmp_path: Path) -> None:
+    workspace = TestRunWorkspace.create(
+        base_root=tmp_path,
+        project_root=Path.cwd(),
+        run_id="run-outside",
+        suite_name="fast",
+        node_name="tests/example.py::test_outside",
+    )
+
+    assert Path.cwd().resolve() not in workspace.root.resolve().parents
+
+
 def test_pytest_workspace_wrapper_cleans_successful_workspace(tmp_path: Path) -> None:
     script = Path("scripts/lib/pytest_workspace.sh").resolve()
     workspace_root = tmp_path / "workspace"
@@ -404,7 +536,8 @@ def test_full_runner_supports_optional_xdist_without_changing_serial_default() -
     text = Path("scripts/run_full_pytest_tests.sh").read_text(encoding="utf-8")
 
     assert 'if [[ -n "${PYTEST_XDIST_WORKERS:-}" && "${PYTEST_XDIST_WORKERS:-0}" != "0" ]]' in text
-    assert 'pytest_args+=(-n "$PYTEST_XDIST_WORKERS" --dist="${PYTEST_XDIST_DIST:-loadfile}")' in text
+    assert 'pytest_dist="${PYTEST_XDIST_DIST:-worksteal}"' in text
+    assert 'pytest_args+=(-n "$PYTEST_XDIST_WORKERS" --dist="${pytest_dist}")' in text
     assert "pytest_args=(-q)" in text
 
 

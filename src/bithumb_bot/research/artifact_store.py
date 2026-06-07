@@ -25,6 +25,12 @@ class ArtifactBudget:
         }
 
 
+@dataclass(frozen=True)
+class ArtifactWriteEvent:
+    path: str
+    bytes: int
+
+
 class ArtifactBudgetExceeded(RuntimeError):
     def __init__(self, *, reason: str, observed: int, limit: int, path: Path | None = None) -> None:
         self.reason = reason
@@ -72,11 +78,12 @@ class ArtifactStore:
     def audit_stream_bytes(self) -> int:
         return self._audit_stream_bytes
 
-    def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
+    def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> ArtifactWriteEvent:
         self._reserve_file(path)
         encoded = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
         self._observe_bytes(path=path, byte_count=len(encoded), audit_stream=False)
         write_json_atomic(path, payload)
+        return ArtifactWriteEvent(path=str(path.resolve()), bytes=len(encoded))
 
     def append_jsonl(self, path: Path, payload: dict[str, Any], *, audit_stream: bool = False) -> None:
         self._reserve_file(path)
@@ -177,9 +184,9 @@ class ResearchArtifactContext:
     def audit_stream_bytes(self) -> int:
         return self.store.audit_stream_bytes
 
-    def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
+    def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> ArtifactWriteEvent:
         self._ensure_in_research_run(path)
-        self.store.write_json_atomic(path, payload)
+        return self.store.write_json_atomic(path, payload)
 
     def append_jsonl(self, path: Path, payload: dict[str, Any], *, audit_stream: bool = False) -> None:
         self._ensure_in_research_run(path)
