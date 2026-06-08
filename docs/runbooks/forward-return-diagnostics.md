@@ -16,6 +16,30 @@ approved profile, runtime replay, and live execution boundaries.
 - A bucket method such as `quantile:10`.
 - An entry price mode: `next_open` or `signal_close`.
 
+## Entry price and MFE/MAE policy
+
+Use `next_open` when the diagnostic should be closest to an executable
+next-candle assumption. In this mode, the entry price is the next candle open
+and the MFE/MAE path starts with that entry candle, so the entry candle intrabar
+high and low are included in the path calculation.
+
+`signal_close` is a diagnostic convenience only. It uses the signal candle close
+as the entry price, but OHLC candles cannot reveal post-close intrabar movement
+inside the already-closed signal candle. For `signal_close`, MFE/MAE therefore
+starts from the next candle after the signal close:
+
+```text
+entry_price_mode=signal_close
+path_start_policy=next_candle_after_signal_close
+intrabar_included=false
+mfe_mae_basis=ohlc_future_candles_only
+```
+
+Do not read `signal_close` output as fill simulation, order lifecycle evidence,
+or proof that the signal candle high or low was reachable after the close.
+Prefer `next_open` for diagnostics that may later inform an execution-model
+hypothesis.
+
 ## Command
 
 ```bash
@@ -42,7 +66,9 @@ DATA_ROOT/<mode>/derived/research/<experiment_id>/forward_diagnostics/warnings.j
 
 The report has `artifact_type=forward_return_diagnostic_report`,
 `diagnostic_only=true`, and false promotion/readiness/capital allocation
-evidence flags.
+evidence flags. It also records a `calculation_policy` block containing
+`entry_price_mode`, `path_start_policy`, `intrabar_included`, and
+`mfe_mae_basis`; the metrics CSV outputs include the same policy columns.
 
 ## Diagnostic-only policy
 

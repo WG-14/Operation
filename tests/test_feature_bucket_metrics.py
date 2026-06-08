@@ -9,6 +9,10 @@ def _target(index: int, value: float, *, mfe: float = 0.05, mae: float = -0.02) 
     return ForwardTarget(
         horizon_label="1c",
         horizon_steps=1,
+        signal_index=index,
+        entry_price_index=index,
+        path_start_index=index + 1,
+        exit_index=index + 1,
         entry_ts=index,
         exit_ts=index + 1,
         entry_price=100.0,
@@ -17,6 +21,9 @@ def _target(index: int, value: float, *, mfe: float = 0.05, mae: float = -0.02) 
         mfe=mfe,
         mae=mae,
         entry_price_mode="next_open",
+        path_start_policy="entry_candle",
+        intrabar_included=True,
+        mfe_mae_basis="ohlc_entry_to_exit_candles",
     )
 
 
@@ -88,3 +95,12 @@ def test_high_mae_relative_to_mfe_warning() -> None:
     metric = compute_feature_bucket_metrics(observations=observations, bucket_method="quantile:1", min_bucket_count=1)[0]
 
     assert "high_mae_relative_to_mfe" in metric.warnings
+
+
+def test_bucket_metrics_preserve_mfe_mae_path_policy() -> None:
+    metric = compute_feature_bucket_metrics(observations=_obs([0.01]), bucket_method="quantile:1", min_bucket_count=1)[0]
+
+    assert metric.entry_price_mode == "next_open"
+    assert metric.path_start_policy == "entry_candle"
+    assert metric.intrabar_included is True
+    assert metric.mfe_mae_basis == "ohlc_entry_to_exit_candles"

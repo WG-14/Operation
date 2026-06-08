@@ -19,6 +19,7 @@ from bithumb_bot.research.feature_diagnostic_features import (
 from bithumb_bot.research.forward_targets import (
     ForwardTarget,
     compute_forward_targets,
+    forward_target_calculation_policy,
 )
 
 
@@ -30,6 +31,9 @@ class ForwardDiagnosticsResult:
     horizon_steps: tuple[int, ...]
     bucket_method: str
     entry_price_mode: str
+    path_start_policy: str
+    intrabar_included: bool
+    mfe_mae_basis: str
     sample_count: int
     target_count: int
     feature_bucket_metrics: tuple[FeatureBucketMetric, ...]
@@ -44,6 +48,12 @@ class ForwardDiagnosticsResult:
             "horizon_steps": list(self.horizon_steps),
             "bucket_method": self.bucket_method,
             "entry_price_mode": self.entry_price_mode,
+            "calculation_policy": {
+                "entry_price_mode": self.entry_price_mode,
+                "path_start_policy": self.path_start_policy,
+                "intrabar_included": self.intrabar_included,
+                "mfe_mae_basis": self.mfe_mae_basis,
+            },
             "sample_count": self.sample_count,
             "target_count": self.target_count,
             "feature_bucket_metrics": [metric.as_dict() for metric in self.feature_bucket_metrics],
@@ -133,13 +143,17 @@ def run_forward_diagnostics_on_snapshot(
         for metric in bucket_metrics
         if metric.warnings
     )
+    calculation_policy = forward_target_calculation_policy(entry_price_mode)
     return ForwardDiagnosticsResult(
         experiment_id=str(experiment_id or snapshot.snapshot_id),
         split_name=snapshot.split_name,
         feature_names=features,
         horizon_steps=horizons,
         bucket_method=bucket_method,
-        entry_price_mode=str(entry_price_mode),
+        entry_price_mode=str(calculation_policy["entry_price_mode"]),
+        path_start_policy=str(calculation_policy["path_start_policy"]),
+        intrabar_included=bool(calculation_policy["intrabar_included"]),
+        mfe_mae_basis=str(calculation_policy["mfe_mae_basis"]),
         sample_count=len(observations),
         target_count=target_count,
         feature_bucket_metrics=bucket_metrics,

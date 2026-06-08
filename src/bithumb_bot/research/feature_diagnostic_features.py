@@ -29,13 +29,18 @@ class FeatureProvider(Protocol):
         ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class AsOfCandleView:
-    candles: tuple[Candle, ...]
+    _candles: tuple[Candle, ...]
     index: int
 
+    def __init__(self, *, candles: tuple[Candle, ...], index: int) -> None:
+        object.__setattr__(self, "_candles", tuple(candles[: int(index) + 1]))
+        object.__setattr__(self, "index", int(index))
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        if self.index < 0 or self.index >= len(self.candles):
+        if self.index < 0 or self.index >= len(self._candles):
             raise IndexError("index out of range")
 
     def candle(self, offset: int = 0) -> Candle:
@@ -45,7 +50,7 @@ class AsOfCandleView:
         resolved = self.index + offset_int
         if resolved < 0:
             raise IndexError("offset before first candle")
-        return self.candles[resolved]
+        return self._candles[resolved]
 
     def history(self, length: int) -> tuple[Candle, ...] | None:
         n = int(length)
@@ -54,7 +59,13 @@ class AsOfCandleView:
         start = self.index - n + 1
         if start < 0:
             return None
-        return self.candles[start : self.index + 1]
+        return self._candles[start : self.index + 1]
+
+    def history_all(self) -> tuple[Candle, ...]:
+        return self._candles
+
+    def available_history(self) -> int:
+        return len(self._candles)
 
 
 def _feature(name: str, value: float | str | bool, value_type: str) -> FeatureValue:
@@ -182,7 +193,7 @@ class RegimeProvider:
     def compute(self, *, view: AsOfCandleView) -> FeatureValue | None:
         if view.index < 1:
             return None
-        candles = view.candles[: view.index + 1]
+        candles = view.history_all()
         closes = tuple(float(candle.close) for candle in candles)
         highs = tuple(float(candle.high) for candle in candles)
         lows = tuple(float(candle.low) for candle in candles)

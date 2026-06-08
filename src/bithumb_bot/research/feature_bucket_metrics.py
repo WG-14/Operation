@@ -14,6 +14,10 @@ class FeatureBucketMetric:
     bucket_id: str
     bucket_label: str
     horizon_label: str
+    entry_price_mode: str | None
+    path_start_policy: str | None
+    intrabar_included: bool | None
+    mfe_mae_basis: str | None
     count: int
     mean_forward_return: float | None
     median_forward_return: float | None
@@ -33,6 +37,10 @@ class FeatureBucketMetric:
             "bucket_id": self.bucket_id,
             "bucket_label": self.bucket_label,
             "horizon_label": self.horizon_label,
+            "entry_price_mode": self.entry_price_mode,
+            "path_start_policy": self.path_start_policy,
+            "intrabar_included": self.intrabar_included,
+            "mfe_mae_basis": self.mfe_mae_basis,
             "count": self.count,
             "mean_forward_return": self.mean_forward_return,
             "median_forward_return": self.median_forward_return,
@@ -133,12 +141,17 @@ def _metric_for_bucket(
     bucket_id = f"q{bucket_index:02d}"
     bucket_label = f"quantile {bucket_index + 1}/{bucket_count}"
     count = len(rows)
+    policy = _policy_for_rows(rows)
     if count == 0:
         return FeatureBucketMetric(
             feature_name=feature_name,
             bucket_id=bucket_id,
             bucket_label=bucket_label,
             horizon_label=horizon_label,
+            entry_price_mode=None,
+            path_start_policy=None,
+            intrabar_included=None,
+            mfe_mae_basis=None,
             count=0,
             mean_forward_return=None,
             median_forward_return=None,
@@ -168,11 +181,17 @@ def _metric_for_bucket(
         warnings.append("negative_median_positive_mean")
     if abs_mean_mae > max(mean_mfe, 0.0):
         warnings.append("high_mae_relative_to_mfe")
+    if not policy.consistent:
+        warnings.append("mixed_calculation_policy")
     return FeatureBucketMetric(
         feature_name=feature_name,
         bucket_id=bucket_id,
         bucket_label=bucket_label,
         horizon_label=horizon_label,
+        entry_price_mode=policy.entry_price_mode,
+        path_start_policy=policy.path_start_policy,
+        intrabar_included=policy.intrabar_included,
+        mfe_mae_basis=policy.mfe_mae_basis,
         count=count,
         mean_forward_return=mean_return,
         median_forward_return=median_return,
@@ -185,6 +204,46 @@ def _metric_for_bucket(
         median_mae=float(median(maes)),
         mfe_mae_ratio=(mean_mfe / abs_mean_mae) if abs_mean_mae > 0.0 else None,
         warnings=tuple(warnings),
+    )
+
+
+@dataclass(frozen=True)
+class _MetricPolicy:
+    entry_price_mode: str | None
+    path_start_policy: str | None
+    intrabar_included: bool | None
+    mfe_mae_basis: str | None
+    consistent: bool
+
+
+def _policy_for_rows(rows: list[FeatureObservation]) -> _MetricPolicy:
+    if not rows:
+        return _MetricPolicy(
+            entry_price_mode=None,
+            path_start_policy=None,
+            intrabar_included=None,
+            mfe_mae_basis=None,
+            consistent=True,
+        )
+    policies = {
+        (
+            row.target.entry_price_mode,
+            row.target.path_start_policy,
+            row.target.intrabar_included,
+            row.target.mfe_mae_basis,
+        )
+        for row in rows
+    }
+    entry_price_mode, path_start_policy, intrabar_included, mfe_mae_basis = sorted(
+        policies,
+        key=lambda item: (str(item[0]), str(item[1]), str(item[2]), str(item[3])),
+    )[0]
+    return _MetricPolicy(
+        entry_price_mode=str(entry_price_mode),
+        path_start_policy=str(path_start_policy),
+        intrabar_included=bool(intrabar_included),
+        mfe_mae_basis=str(mfe_mae_basis),
+        consistent=len(policies) == 1,
     )
 
 

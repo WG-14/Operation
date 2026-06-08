@@ -169,7 +169,15 @@ def _build_forward_diagnostics(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--features", required=True, type=_parse_csv_strings("--features"))
     parser.add_argument("--horizons", required=True, type=_parse_csv_ints("--horizons"))
     parser.add_argument("--bucket", required=True)
-    parser.add_argument("--entry-price", default="next_open", choices=("next_open", "signal_close"))
+    parser.add_argument(
+        "--entry-price",
+        default="next_open",
+        choices=("next_open", "signal_close"),
+        help=(
+            "forward target entry price mode; signal_close is diagnostic convenience only, "
+            "and OHLC MFE/MAE uses the next candle path because post-close intrabar movement is not observable"
+        ),
+    )
     parser.add_argument("--min-bucket-count", type=_positive_int_arg, default=30)
     parser.add_argument("--out")
     parser.add_argument("--json", action="store_true")

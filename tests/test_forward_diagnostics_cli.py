@@ -17,7 +17,7 @@ def test_research_forward_diagnostics_help_exposes_required_options(capsys: pyte
         parser.parse_args(["research-forward-diagnostics", "--help"])
 
     assert exc.value.code == 0
-    output = capsys.readouterr().out
+    output = " ".join(capsys.readouterr().out.split())
     for option in (
         "--manifest",
         "--split",
@@ -30,6 +30,19 @@ def test_research_forward_diagnostics_help_exposes_required_options(capsys: pyte
         "--json",
     ):
         assert option in output
+
+
+def test_research_forward_diagnostics_help_describes_signal_close_limit(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = _parser()
+
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["research-forward-diagnostics", "--help"])
+
+    assert exc.value.code == 0
+    output = " ".join(capsys.readouterr().out.split())
+    assert "signal_close is diagnostic convenience only" in output
+    assert "OHLC MFE/MAE uses the next candle path" in output
+    assert "intrabar" in output
 
 
 def test_research_forward_diagnostics_defaults_to_train_split() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from bithumb_bot.cli.registry import command_registry
+from bithumb_bot.research.forward_diagnostics_report import validate_forward_diagnostics_report_flags
 from bithumb_bot.research.strategy_registry import list_research_strategy_plugins
 
 
@@ -52,3 +53,21 @@ def test_forward_diagnostics_modules_live_under_research_namespace() -> None:
         "src/bithumb_bot/research/forward_diagnostics_report.py",
     ):
         assert (ROOT / relative).exists()
+
+
+def test_forward_diagnostics_report_remains_diagnostic_only_after_policy_fields_added() -> None:
+    payload = {
+        "diagnostic_only": True,
+        "promotion_evidence": False,
+        "approved_profile_evidence": False,
+        "live_readiness_evidence": False,
+        "capital_allocation_evidence": False,
+        "calculation_policy": {
+            "entry_price_mode": "signal_close",
+            "path_start_policy": "next_candle_after_signal_close",
+            "intrabar_included": False,
+            "mfe_mae_basis": "ohlc_future_candles_only",
+        },
+    }
+
+    validate_forward_diagnostics_report_flags(payload)

@@ -31,12 +31,23 @@ def _manifest():
     return SimpleNamespace(experiment_id="exp1", manifest_hash=lambda: "sha256:" + "1" * 64)
 
 
-def _metric(value: float) -> FeatureBucketMetric:
+def _metric(
+    value: float,
+    *,
+    entry_price_mode: str = "next_open",
+    path_start_policy: str = "entry_candle",
+    intrabar_included: bool = True,
+    mfe_mae_basis: str = "ohlc_entry_to_exit_candles",
+) -> FeatureBucketMetric:
     return FeatureBucketMetric(
         feature_name="sma_gap",
         bucket_id="q00",
         bucket_label="quantile 1/1",
         horizon_label="1c",
+        entry_price_mode=entry_price_mode,
+        path_start_policy=path_start_policy,
+        intrabar_included=intrabar_included,
+        mfe_mae_basis=mfe_mae_basis,
         count=1,
         mean_forward_return=value,
         median_forward_return=value,
@@ -52,18 +63,44 @@ def _metric(value: float) -> FeatureBucketMetric:
     )
 
 
-def _result(value: float = 0.01) -> ForwardDiagnosticsResult:
+def _result(
+    value: float = 0.01,
+    *,
+    entry_price_mode: str = "next_open",
+    path_start_policy: str = "entry_candle",
+    intrabar_included: bool = True,
+    mfe_mae_basis: str = "ohlc_entry_to_exit_candles",
+) -> ForwardDiagnosticsResult:
     return ForwardDiagnosticsResult(
         experiment_id="exp1",
         split_name="train",
         feature_names=("sma_gap",),
         horizon_steps=(1,),
         bucket_method="quantile:1",
-        entry_price_mode="next_open",
+        entry_price_mode=entry_price_mode,
+        path_start_policy=path_start_policy,
+        intrabar_included=intrabar_included,
+        mfe_mae_basis=mfe_mae_basis,
         sample_count=1,
         target_count=1,
-        feature_bucket_metrics=(_metric(value),),
-        feature_horizon_metrics=(_metric(value),),
+        feature_bucket_metrics=(
+            _metric(
+                value,
+                entry_price_mode=entry_price_mode,
+                path_start_policy=path_start_policy,
+                intrabar_included=intrabar_included,
+                mfe_mae_basis=mfe_mae_basis,
+            ),
+        ),
+        feature_horizon_metrics=(
+            _metric(
+                value,
+                entry_price_mode=entry_price_mode,
+                path_start_policy=path_start_policy,
+                intrabar_included=intrabar_included,
+                mfe_mae_basis=mfe_mae_basis,
+            ),
+        ),
         warnings=(),
     )
 
@@ -102,6 +139,58 @@ def test_forward_diagnostics_report_does_not_use_candidate_report_fields(tmp_pat
 def test_forward_diagnostics_report_content_hash_changes_when_metrics_change(tmp_path: Path) -> None:
     first = write_forward_diagnostics_report(manager=_manager(tmp_path / "a"), manifest=_manifest(), result=_result(0.01))
     second = write_forward_diagnostics_report(manager=_manager(tmp_path / "b"), manifest=_manifest(), result=_result(0.02))
+
+    assert first["content_hash"] != second["content_hash"]
+
+
+def test_forward_diagnostics_report_includes_path_policy(tmp_path: Path) -> None:
+    report = write_forward_diagnostics_report(
+        manager=_manager(tmp_path),
+        manifest=_manifest(),
+        result=_result(
+            entry_price_mode="signal_close",
+            path_start_policy="next_candle_after_signal_close",
+            intrabar_included=False,
+            mfe_mae_basis="ohlc_future_candles_only",
+        ),
+    )
+
+    assert report["calculation_policy"] == {
+        "entry_price_mode": "signal_close",
+        "path_start_policy": "next_candle_after_signal_close",
+        "intrabar_included": False,
+        "mfe_mae_basis": "ohlc_future_candles_only",
+    }
+
+
+def test_forward_diagnostics_metrics_csv_includes_path_policy_columns(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    write_forward_diagnostics_report(manager=manager, manifest=_manifest(), result=_result())
+    csv_text = (
+        manager.data_dir()
+        / "derived/research/exp1/forward_diagnostics/feature_bucket_metrics.csv"
+    ).read_text(encoding="utf-8")
+
+    header = csv_text.splitlines()[0].split(",")
+    assert "entry_price_mode" in header
+    assert "path_start_policy" in header
+    assert "intrabar_included" in header
+    assert "mfe_mae_basis" in header
+
+
+def test_report_content_hash_changes_when_path_policy_changes(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    first = write_forward_diagnostics_report(manager=manager, manifest=_manifest(), result=_result())
+    second = write_forward_diagnostics_report(
+        manager=manager,
+        manifest=_manifest(),
+        result=_result(
+            entry_price_mode="signal_close",
+            path_start_policy="next_candle_after_signal_close",
+            intrabar_included=False,
+            mfe_mae_basis="ohlc_future_candles_only",
+        ),
+    )
 
     assert first["content_hash"] != second["content_hash"]
 

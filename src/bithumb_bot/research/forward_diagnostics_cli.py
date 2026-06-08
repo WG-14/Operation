@@ -48,6 +48,9 @@ def cmd_research_forward_diagnostics(
             horizon_steps=tuple(int(item) for item in result_payload["horizon_steps"]),
             bucket_method=str(result_payload["bucket_method"]),
             entry_price_mode=str(result_payload["entry_price_mode"]),
+            path_start_policy=str(result_payload["calculation_policy"]["path_start_policy"]),
+            intrabar_included=bool(result_payload["calculation_policy"]["intrabar_included"]),
+            mfe_mae_basis=str(result_payload["calculation_policy"]["mfe_mae_basis"]),
             sample_count=int(result_payload["sample_count"]),
             target_count=int(result_payload["target_count"]),
             feature_bucket_metrics=tuple(_metric_from_payload(item) for item in result_payload["feature_bucket_metrics"]),
@@ -81,6 +84,10 @@ def _metric_from_payload(payload: Any):
         bucket_id=str(data["bucket_id"]),
         bucket_label=str(data["bucket_label"]),
         horizon_label=str(data["horizon_label"]),
+        entry_price_mode=_optional_str(data.get("entry_price_mode")),
+        path_start_policy=_optional_str(data.get("path_start_policy")),
+        intrabar_included=_optional_bool(data.get("intrabar_included")),
+        mfe_mae_basis=_optional_str(data.get("mfe_mae_basis")),
         count=int(data["count"]),
         mean_forward_return=_optional_float(data.get("mean_forward_return")),
         median_forward_return=_optional_float(data.get("median_forward_return")),
@@ -100,6 +107,18 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _normalize_split(split_name: str) -> str:

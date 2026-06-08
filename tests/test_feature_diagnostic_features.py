@@ -7,6 +7,7 @@ import pytest
 from bithumb_bot.research.dataset_snapshot import Candle
 from bithumb_bot.research.feature_diagnostic_features import (
     AsOfCandleView,
+    RegimeProvider,
     RollingReturnProvider,
     SmaGapProvider,
     VolumeRatioProvider,
@@ -38,6 +39,21 @@ def test_as_of_candle_view_rejects_positive_offset() -> None:
         view.candle(1)
 
 
+def test_as_of_candle_view_does_not_expose_future_candles_publicly() -> None:
+    view = AsOfCandleView(candles=_candles(), index=10)
+
+    assert not hasattr(view, "candles")
+
+
+def test_as_of_candle_view_history_all_returns_only_past_and_current() -> None:
+    view = AsOfCandleView(candles=_candles(), index=10)
+
+    history = view.history_all()
+
+    assert len(history) == 11
+    assert history[-1].ts == 10
+
+
 def test_sma_gap_uses_only_candles_at_or_before_index() -> None:
     candles = _candles()
     changed_future = list(candles)
@@ -60,6 +76,25 @@ def test_volume_ratio_uses_only_candles_at_or_before_index() -> None:
     future_changed = provider.compute(view=AsOfCandleView(candles=tuple(changed_future), index=10))
 
     assert baseline == future_changed
+
+
+def test_regime_provider_is_invariant_to_future_candle_changes() -> None:
+    candles = _candles()
+    changed_future = list(candles)
+    changed_future[25] = Candle(ts=25, open=1.0, high=5000.0, low=0.01, close=5000.0, volume=1_000_000.0)
+
+    provider = RegimeProvider(short_window=3, long_window=5)
+    baseline = provider.compute(view=AsOfCandleView(candles=candles, index=10))
+    future_changed = provider.compute(view=AsOfCandleView(candles=tuple(changed_future), index=10))
+
+    assert baseline == future_changed
+
+
+def test_fake_provider_cannot_access_future_candle_through_public_view() -> None:
+    view = AsOfCandleView(candles=_candles(), index=10)
+
+    with pytest.raises(AttributeError):
+        getattr(view, "candles")
 
 
 def test_rolling_return_returns_none_until_lookback_available() -> None:
