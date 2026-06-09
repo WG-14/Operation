@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import pytest
+
+from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
+from bithumb_bot.research.execution_timing import candle_close_ts
+from bithumb_bot.research.experiment_manifest import DateRange, ExecutionTimingPolicy, legacy_research_portfolio_policy
+from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin, strategy_runtime_capability_issues
+from bithumb_bot.research.strategy_spec import StrategySpecError
+from bithumb_bot.strategy_contract_testing import assert_research_only_contract
+from bithumb_bot.strategy_plugin_inventory import build_strategy_plugin_inventory
+from bithumb_bot.strategy_plugins.channel_breakout_research import (
+    CHANNEL_BREAKOUT_SPEC,
+    CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN,
+    build_channel_breakout_research_events,
+    decide_channel_breakout_snapshot,
+    materialize_channel_breakout_parameters,
+)
+
+
+def _dataset(candles: tuple[Candle, ...] | None = None) -> DatasetSnapshot:
+    return DatasetSnapshot(
+        snapshot_id="channel_breakout_unit",
+        source="unit",
+        market="KRW-BTC",
+        interval="1m",
+        split_name="validation",
+        date_range=DateRange("2026-01-01", "2026-01-02"),
+        candles=candles
+        or (
+            Candle(0, 100.0, 101.0, 99.0, 100.0, 100.0),
+            Candle(60_000, 101.0, 102.0, 100.0, 101.0, 100.0),
+            Candle(120_000, 102.0, 103.0, 101.0, 102.0, 100.0),
+            Candle(180_000, 103.0, 104.0, 102.0, 103.0, 100.0),
+            Candle(240_000, 104.0, 110.0, 103.0, 109.0, 160.0),
+        ),
+    )
+
+
+def _params(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "CHANNEL_BREAKOUT_LOOKBACK": 3,
+        "CHANNEL_BREAKOUT_RANGE_WINDOW": 3,
+        "CHANNEL_BREAKOUT_VOLUME_WINDOW": 3,
+        "CHANNEL_BREAKOUT_REGIME_FILTER_ENABLED": False,
+    }
+    values.update(overrides)
+    return values
+
+
+def _materialized(**overrides: object) -> dict[str, object]:
+    return materialize_channel_breakout_parameters(
+        plugin=CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN,
+        parameter_values=_params(**overrides),
+        fee_rate=0.001,
+        slippage_bps=0.0,
+    )
+
+
+def test_level_1_research_only_contract() -> None:
+    plugin = CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN
+
+    assert_research_only_contract(plugin)
+    assert plugin.runtime_replay_builder is None
+    assert plugin.runtime_parameter_adapter is None
+    assert plugin.runtime_decision_adapter_factory is None
+    assert plugin.policy_assembly_factory is None
+    assert plugin.runtime_capabilities.live_dry_run_allowed is False
+    assert plugin.runtime_capabilities.live_real_order_allowed is False
+    issues = strategy_runtime_capability_issues(
+        plugin.name,
+        live_dry_run=True,
+        live_real_order_armed=True,
+        require_promotion_runtime=True,
+        require_runtime_replay=True,
+        require_runtime_decision_adapter=True,
+    )
+    assert any(item.startswith("promotion_runtime_unsupported_for_strategy:channel_breakout_with_regime_filter") for item in issues)
+    assert any(item.startswith("runtime_replay_unsupported_for_strategy:channel_breakout_with_regime_filter") for item in issues)
+    assert any(item.startswith("runtime_decision_adapter_unsupported_for_strategy:channel_breakout_with_regime_filter") for item in issues)
+    assert any(item.startswith("live_dry_run_not_allowed_for_strategy:channel_breakout_with_regime_filter") for item in issues)
+    assert any(item.startswith("live_real_order_not_allowed_for_strategy:channel_breakout_with_regime_filter") for item in issues)
+
+
+def test_discovery_reports_candle_only_plugin() -> None:
+    plugin = resolve_research_strategy_plugin("channel_breakout_with_regime_filter")
+
+    assert plugin is CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN
+    assert plugin.required_data == ("candles",)
+    assert plugin.optional_data == ()
+    assert CHANNEL_BREAKOUT_SPEC.required_data == ("candles",)
+    assert CHANNEL_BREAKOUT_SPEC.optional_data == ()
+
+
+def test_inventory_reports_level_1_research_only_not_runtime_capable() -> None:
+    inventory = build_strategy_plugin_inventory()
+    item = next(
+        record
+        for record in inventory["strategies"]
+        if record["strategy_name"] == "channel_breakout_with_regime_filter"
+    )
+
+    assert item["authoring_level"] == "level_1_research_only"
+    assert item["capability_level"] == "research_only"
+    assert item["runtime_replay_supported"] is False
+    assert item["runtime_decision_supported"] is False
+    assert item["live_dry_run_allowed"] is False
+    assert item["live_real_order_allowed"] is False
+    assert item["approved_profile_required"] is False
+    assert item["runtime_data_requirements"]["required_data"] == ["candles"]
+    assert item["runtime_data_requirements"]["optional_data"] == []
+
+
+def test_buy_signal_uses_prior_rolling_high_and_order_intent() -> None:
+    dataset = _dataset()
+    params = _materialized(
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    decision = decide_channel_breakout_snapshot(
+        candle=dataset.candles[-1],
+        candle_index=len(dataset.candles) - 1,
+        dataset=dataset,
+        parameter_values=params,
+    )
+
+    assert decision["signal"] == "BUY"
+    assert decision["reason"] == "channel_breakout_confirmed"
+    assert decision["order_intent"]["side"] == "BUY"
+    assert decision["feature_snapshot"]["close"] > decision["feature_snapshot"]["rolling_high"]
+    assert decision["feature_snapshot"]["blocked_filters"] == ()
+
+
+def test_volume_ratio_block_holds() -> None:
+    dataset = _dataset()
+    params = _materialized(
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=100.0,
+    )
+
+    decision = decide_channel_breakout_snapshot(
+        candle=dataset.candles[-1],
+        candle_index=len(dataset.candles) - 1,
+        dataset=dataset,
+        parameter_values=params,
+    )
+
+    assert decision["signal"] == "HOLD"
+    assert decision["reason"] == "channel_breakout_blocked"
+    assert "volume_ratio_below_min" in decision["feature_snapshot"]["blocked_filters"]
+    assert "order_intent" not in decision
+
+
+def test_not_enough_lookback_holds() -> None:
+    dataset = _dataset()
+    params = _materialized()
+
+    decision = decide_channel_breakout_snapshot(
+        candle=dataset.candles[1],
+        candle_index=1,
+        dataset=dataset,
+        parameter_values=params,
+    )
+
+    assert decision["signal"] == "HOLD"
+    assert decision["reason"] == "not_enough_lookback"
+    assert decision["strategy_diagnostics"]["blocked_filters"] == ()
+    assert _REQUIRED_FEATURE_FIELDS <= set(decision["feature_snapshot"])
+
+
+def test_current_candle_high_is_not_in_rolling_high() -> None:
+    dataset = _dataset(
+        (
+            Candle(0, 100.0, 101.0, 99.0, 100.0, 100.0),
+            Candle(60_000, 100.0, 102.0, 99.0, 101.0, 100.0),
+            Candle(120_000, 101.0, 103.0, 100.0, 102.0, 100.0),
+            Candle(180_000, 102.0, 104.0, 101.0, 103.0, 100.0),
+            Candle(240_000, 103.0, 120.0, 100.0, 103.5, 200.0),
+        )
+    )
+    params = _materialized(
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    decision = decide_channel_breakout_snapshot(
+        candle=dataset.candles[-1],
+        candle_index=len(dataset.candles) - 1,
+        dataset=dataset,
+        parameter_values=params,
+    )
+
+    assert decision["feature_snapshot"]["rolling_high"] == 104.0
+    assert decision["feature_snapshot"]["rolling_high"] != 120.0
+    assert decision["signal"] == "HOLD"
+    assert "close_not_above_rolling_high" in decision["feature_snapshot"]["blocked_filters"]
+
+
+@pytest.mark.parametrize(
+    "bad_key",
+    [
+        "CHANNEL_BREAKOUT_LOOKBACK",
+        "CHANNEL_BREAKOUT_RANGE_WINDOW",
+        "CHANNEL_BREAKOUT_VOLUME_WINDOW",
+    ],
+)
+def test_parameter_materializer_rejects_windows_below_two(bad_key: str) -> None:
+    with pytest.raises(StrategySpecError, match=bad_key):
+        _materialized(**{bad_key: 1})
+
+
+def test_parameter_materializer_accepts_valid_values() -> None:
+    values = _materialized()
+
+    assert values["CHANNEL_BREAKOUT_LOOKBACK"] == 3
+    assert values["CHANNEL_BREAKOUT_RANGE_RATIO_MIN"] == 1.2
+    assert values["CHANNEL_BREAKOUT_VOLUME_RATIO_MIN"] == 1.1
+    assert values["CHANNEL_BREAKOUT_REGIME_FILTER_ENABLED"] is False
+    assert values["STRATEGY_EXIT_RULES"] == "stop_loss,max_holding_time"
+
+
+@pytest.mark.parametrize("raw_rules", ["trailing_stop", "custom_exit", "opposite_cross"])
+def test_exit_rule_regression_rejects_unsupported_rules(raw_rules: str) -> None:
+    with pytest.raises(StrategySpecError, match="unsupported rule"):
+        _materialized(STRATEGY_EXIT_RULES=raw_rules, STRATEGY_EXIT_STOP_LOSS_RATIO=0.0)
+
+
+def test_common_exit_rules_are_accepted() -> None:
+    values = _materialized(STRATEGY_EXIT_RULES="stop_loss,max_holding_time")
+
+    assert values["STRATEGY_EXIT_RULES"] == "stop_loss,max_holding_time"
+
+
+def test_event_builder_emits_required_event_fields() -> None:
+    dataset = _dataset()
+    params = _materialized(
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+    timing_policy = ExecutionTimingPolicy(decision_guard_ms=250)
+
+    events = build_channel_breakout_research_events(
+        dataset=dataset,
+        parameter_values=params,
+        fee_rate=0.001,
+        slippage_bps=0.0,
+        execution_timing_policy=timing_policy,
+        portfolio_policy=legacy_research_portfolio_policy(),
+    )
+    event = events[-1]
+
+    assert len(events) == len(dataset.candles)
+    assert event.decision_ts == candle_close_ts(dataset.candles[-1], interval=dataset.interval) + 250
+    assert event.strategy_name == "channel_breakout_with_regime_filter"
+    assert event.strategy_version == CHANNEL_BREAKOUT_SPEC.strategy_version
+    assert event.raw_signal == "BUY"
+    assert event.final_signal == "BUY"
+    assert event.entry_signal == "BUY"
+    assert event.exit_signal == "HOLD"
+    assert event.blocked_filters == ()
+    assert event.order_intent == {"side": "BUY", "sizing": "portfolio_policy_fractional_cash"}
+    assert event.exit_intent == {
+        "mode": "evaluate_exit_policy",
+        "base_signal": "HOLD",
+        "base_reason": "common_exit_policy_only",
+    }
+    assert event.extra_payload == {"strategy_family": "channel_breakout", "research_only": True}
+    assert _REQUIRED_FEATURE_FIELDS <= set(event.feature_snapshot)
+    assert event.strategy_diagnostics["schema_version"] == 1
+    assert event.strategy_diagnostics["blocked_filters"] == ()
+    assert event.strategy_diagnostics["regime_filter_enabled"] is False
+
+
+_REQUIRED_FEATURE_FIELDS = {
+    "schema_version",
+    "candle_index",
+    "close",
+    "rolling_high",
+    "breakout_distance",
+    "current_range",
+    "avg_range",
+    "range_ratio",
+    "volume",
+    "avg_volume",
+    "volume_ratio",
+    "price_regime",
+    "volatility_bucket",
+    "volume_bucket",
+    "liquidity_bucket",
+    "composite_regime",
+    "blocked_filters",
+}

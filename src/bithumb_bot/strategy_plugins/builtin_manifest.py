@@ -49,6 +49,10 @@ BUILTIN_STRATEGY_PLUGIN_EXPORTS: tuple[BuiltinStrategyPluginExport, ...] = (
         "bithumb_bot.strategy_plugins.threshold_research_only",
         "THRESHOLD_RESEARCH_ONLY_PLUGIN",
     ),
+    BuiltinStrategyPluginExport(
+        "bithumb_bot.strategy_plugins.channel_breakout_research",
+        "CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN",
+    ),
 )
 
 
