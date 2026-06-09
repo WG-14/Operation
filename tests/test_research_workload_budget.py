@@ -243,6 +243,12 @@ def test_research_raw_writer_policy_classifies_remaining_direct_storage_calls() 
         "forward_diagnostics_cli.py": {
             "write_json_atomic",
         },
+        "forward_diagnostics_failure_report.py": {
+            "write_json_atomic",
+        },
+        "forward_diagnostics_policy_denial.py": {
+            "write_json_atomic",
+        },
         "forward_diagnostics_report.py": {
             "write_json_atomic",
         },
@@ -274,6 +280,8 @@ def test_research_raw_writer_policy_classifies_remaining_direct_storage_calls() 
         "experiment_registry.py": "explicit append-only registry artifact budget exemption",
         "family_registry.py": "explicit append-only registry artifact budget exemption",
         "forward_diagnostics_cli.py": "operator-specified diagnostic report export validated outside repository",
+        "forward_diagnostics_failure_report.py": "diagnostic-only unavailable-status report artifact through PathManager data roots",
+        "forward_diagnostics_policy_denial.py": "diagnostic-only policy-denial report artifact through PathManager data roots",
         "forward_diagnostics_report.py": "diagnostic-only report and derived warning artifacts through PathManager data roots",
         "promotion_gate.py": "operator promotion report artifact with existing path policy",
         "report_writer.py": "accounted research report writes through ResearchArtifactContext",
