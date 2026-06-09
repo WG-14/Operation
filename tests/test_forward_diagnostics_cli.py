@@ -293,6 +293,121 @@ def test_cli_json_failure_does_not_prefix_human_readable_label(monkeypatch, caps
     json.loads(output)
 
 
+def _assert_generic_json_failure(output: str, *, code: int, error_type: str) -> dict[str, object]:
+    assert code == 1
+    assert not output.startswith("[RESEARCH-FORWARD-DIAGNOSTICS]")
+    payload = json.loads(output)
+    assert payload["artifact_type"] == "forward_return_diagnostic_failure"
+    assert payload["diagnostic_status"] == "unavailable"
+    assert payload["error_type"] == error_type
+    assert payload["fail_reasons"]
+    return payload
+
+
+def test_cli_json_value_error_outputs_parseable_json(capsys) -> None:
+    import bithumb_bot.research.forward_diagnostics_cli as cli
+
+    code = cli.cmd_research_forward_diagnostics(
+        manifest_path="manifest.json",
+        split_name="train",
+        features=(),
+        horizons=(1,),
+        bucket="quantile:1",
+        as_json=True,
+    )
+    output = capsys.readouterr().out
+    payload = _assert_generic_json_failure(output, code=code, error_type="ValueError")
+
+    assert payload["fail_reasons"] == ["value_error"]
+
+
+def test_cli_json_manifest_validation_error_outputs_parseable_json(monkeypatch, capsys) -> None:
+    import bithumb_bot.research.forward_diagnostics_cli as cli
+    from bithumb_bot.research.experiment_manifest import ManifestValidationError
+
+    monkeypatch.setattr(
+        cli,
+        "load_manifest",
+        lambda path: (_ for _ in ()).throw(ManifestValidationError("bad manifest")),
+    )
+
+    code = cli.cmd_research_forward_diagnostics(
+        manifest_path="manifest.json",
+        split_name="train",
+        features=("range_ratio",),
+        horizons=(1,),
+        bucket="quantile:1",
+        as_json=True,
+    )
+    output = capsys.readouterr().out
+    payload = _assert_generic_json_failure(output, code=code, error_type="ManifestValidationError")
+
+    assert payload["fail_reasons"] == ["manifest_validation_error"]
+
+
+def test_cli_json_os_error_outputs_parseable_json(monkeypatch, capsys) -> None:
+    import bithumb_bot.research.forward_diagnostics_cli as cli
+
+    monkeypatch.setattr(
+        cli,
+        "load_manifest",
+        lambda path: (_ for _ in ()).throw(OSError("cannot read manifest")),
+    )
+
+    code = cli.cmd_research_forward_diagnostics(
+        manifest_path="manifest.json",
+        split_name="train",
+        features=("range_ratio",),
+        horizons=(1,),
+        bucket="quantile:1",
+        as_json=True,
+    )
+    output = capsys.readouterr().out
+    payload = _assert_generic_json_failure(output, code=code, error_type="OSError")
+
+    assert payload["fail_reasons"] == ["os_error"]
+
+
+def test_cli_json_index_error_outputs_parseable_json(monkeypatch, capsys) -> None:
+    import bithumb_bot.research.forward_diagnostics_cli as cli
+
+    monkeypatch.setattr(cli, "load_manifest", lambda path: object())
+    monkeypatch.setattr(
+        cli,
+        "run_forward_diagnostics",
+        lambda **kwargs: (_ for _ in ()).throw(IndexError("empty feature matrix")),
+    )
+
+    code = cli.cmd_research_forward_diagnostics(
+        manifest_path="manifest.json",
+        split_name="train",
+        features=("range_ratio",),
+        horizons=(1,),
+        bucket="quantile:1",
+        as_json=True,
+    )
+    output = capsys.readouterr().out
+    payload = _assert_generic_json_failure(output, code=code, error_type="IndexError")
+
+    assert payload["fail_reasons"] == ["index_error"]
+
+
+def test_cli_json_generic_failure_does_not_prefix_human_readable_label(capsys) -> None:
+    import bithumb_bot.research.forward_diagnostics_cli as cli
+
+    code = cli.cmd_research_forward_diagnostics(
+        manifest_path="manifest.json",
+        split_name="train",
+        features=("range_ratio",),
+        horizons=(),
+        bucket="quantile:1",
+        as_json=True,
+    )
+    output = capsys.readouterr().out
+
+    _assert_generic_json_failure(output, code=code, error_type="ValueError")
+
+
 def test_forward_diagnostics_cli_does_not_rehydrate_result_from_dict() -> None:
     from pathlib import Path
 

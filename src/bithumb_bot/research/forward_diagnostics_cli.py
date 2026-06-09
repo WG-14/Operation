@@ -8,6 +8,7 @@ from bithumb_bot.config import PATH_MANAGER, settings
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, load_manifest
 from bithumb_bot.research.forward_diagnostics import ForwardDiagnosticsUnavailableError, run_forward_diagnostics
 from bithumb_bot.research.forward_diagnostics_failure_report import (
+    FAILURE_ARTIFACT_TYPE,
     write_forward_diagnostics_failure_artifact,
 )
 from bithumb_bot.research.forward_diagnostics_report import write_forward_diagnostics_report
@@ -98,7 +99,16 @@ def cmd_research_forward_diagnostics(
             print(f"[RESEARCH-FORWARD-DIAGNOSTICS] error={exc}")
         return 1
     except (ManifestValidationError, OSError, ValueError, IndexError) as exc:
-        print(f"[RESEARCH-FORWARD-DIAGNOSTICS] error={exc}")
+        if as_json:
+            failure_payload = _generic_failure_payload(
+                exc=exc,
+                split_name=split,
+                feature_names=feature_names,
+                horizon_steps=horizon_steps,
+            )
+            print(json.dumps(failure_payload, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            print(f"[RESEARCH-FORWARD-DIAGNOSTICS] error={exc}")
         return 1
 
 
@@ -140,3 +150,41 @@ def _write_explicit_json(path: Path, payload: dict[str, Any]) -> None:
     else:
         raise ValueError("--out must not point inside the repository")
     write_json_atomic(resolved, payload)
+
+
+def _generic_failure_payload(
+    *,
+    exc: ManifestValidationError | OSError | ValueError | IndexError,
+    split_name: str,
+    feature_names: tuple[str, ...],
+    horizon_steps: tuple[int, ...],
+) -> dict[str, Any]:
+    error_type = type(exc).__name__
+    return {
+        "schema_version": 1,
+        "artifact_type": FAILURE_ARTIFACT_TYPE,
+        "diagnostic_only": True,
+        "promotion_evidence": False,
+        "approved_profile_evidence": False,
+        "live_readiness_evidence": False,
+        "capital_allocation_evidence": False,
+        "diagnostic_status": "unavailable",
+        "fail_reasons": [_generic_failure_reason(exc)],
+        "error_type": error_type,
+        "error": str(exc),
+        "split_name": split_name,
+        "feature_names": list(feature_names),
+        "horizon_steps": list(horizon_steps),
+    }
+
+
+def _generic_failure_reason(exc: ManifestValidationError | OSError | ValueError | IndexError) -> str:
+    if isinstance(exc, ManifestValidationError):
+        return "manifest_validation_error"
+    if isinstance(exc, OSError):
+        return "os_error"
+    if isinstance(exc, IndexError):
+        return "index_error"
+    if isinstance(exc, ValueError):
+        return "value_error"
+    return "forward_diagnostics_error"
