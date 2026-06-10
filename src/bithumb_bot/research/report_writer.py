@@ -367,6 +367,28 @@ def summarize_candidate_result(candidate: Any, report_detail: str) -> Any:
     return summary
 
 
+def summarize_resource_usage_for_candidate_artifact(resource_usage: Any) -> Any:
+    if not isinstance(resource_usage, dict):
+        return resource_usage
+    summary: dict[str, Any] = {}
+    for key, value in resource_usage.items():
+        if key == "stage_trace":
+            if isinstance(value, (list, tuple)):
+                summary["stage_trace_count"] = len(value)
+            if "stage_trace_hash" not in resource_usage:
+                summary["stage_trace_hash"] = sha256_prefixed(value)
+            continue
+        if isinstance(value, dict):
+            summary[key] = summarize_resource_usage_for_candidate_artifact(value)
+            continue
+        if isinstance(value, (list, tuple)):
+            summary[f"{key}_count"] = len(value)
+            summary[f"{key}_hash"] = sha256_prefixed(list(value))
+            continue
+        summary[key] = value
+    return summary
+
+
 def _scenario_result_summary(scenario: Any) -> dict[str, Any]:
     if not isinstance(scenario, dict):
         return {"scenario_repr_hash": sha256_prefixed(report_content_hash_payload(scenario))}
@@ -424,6 +446,13 @@ def _scenario_result_summary(scenario: Any) -> dict[str, Any]:
         "final_holdout_audit_trace_index",
     )
     summary = {key: scenario[key] for key in summary_keys if key in scenario}
+    for key in (
+        "train_resource_usage",
+        "validation_resource_usage",
+        "final_holdout_resource_usage",
+    ):
+        if key in summary:
+            summary[key] = summarize_resource_usage_for_candidate_artifact(summary[key])
     summary["train_equity_curve"] = []
     summary["validation_equity_curve"] = []
     summary["final_holdout_equity_curve"] = []

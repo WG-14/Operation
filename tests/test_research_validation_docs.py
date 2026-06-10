@@ -21,6 +21,39 @@ def _parallel_research_safety_matrix_section() -> str:
     return doc[start:end]
 
 
+def _short_clean_revalidation_section() -> str:
+    doc = _research_validation_doc()
+    start = doc.index("### Short Clean 8 Candidates x 2 Scenarios Revalidation")
+    end = doc.index("Full-suite pytest validation should use:", start)
+    return doc[start:end]
+
+
+def test_short_clean_revalidation_runbook_mentions_required_checks() -> None:
+    section = _short_clean_revalidation_section()
+
+    for text in (
+        "8 candidates",
+        "2 scenarios",
+        "research_run.report_detail=summary",
+        "max_equity_points_retained=0",
+        "research-readiness",
+        "artifact_write_summary",
+        "ArtifactBudgetExceeded",
+        "work_unit_complete",
+        "max_artifact_bytes",
+        "EXPERIMENT_ID",
+        "jq -r '.experiment_id' \"$REPORT\"",
+        "DATA_ROOT/<mode>/reports/research/<experiment_id>/backtest_report.json",
+        "DATA_ROOT/<mode>/derived/research/<experiment_id>/backtest_candidates.json",
+        "DATA_ROOT/<mode>/derived/research/<experiment_id>/candidate_results/*.json",
+    ):
+        assert text in section
+
+    assert "Do not raise\n`max_artifact_bytes` as the default repair" in section
+    assert "test \"$(jq -r '.experiment_id' \"$REPORT\")\" = \"$EXPERIMENT_ID\"" in section
+    assert "events alone are not success evidence if report writing failed" in section
+
+
 def test_parallel_research_safety_matrix_records_measured_required_rows() -> None:
     section = _parallel_research_safety_matrix_section()
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from bithumb_bot.notifier import AlertSeverity
 from bithumb_bot.paths import PathManager
 from bithumb_bot.research import cli as research_cli
+from bithumb_bot.research.artifact_store import ArtifactBudgetExceeded
 from bithumb_bot.research.cli import _print_report_summary, _print_research_backtest_progress
 from bithumb_bot.research.experiment_registry import (
     EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE,
@@ -1353,3 +1354,98 @@ def test_research_backtest_progress_lines_are_operator_visible(capsys) -> None:
     assert "stage=evaluate" in output
     assert "stage=report_write" in output
     assert "stage=complete" in output
+
+
+def _budget_exception(path: Path) -> ArtifactBudgetExceeded:
+    return ArtifactBudgetExceeded(
+        reason="artifact_budget_max_artifact_bytes_exceeded",
+        observed=144,
+        limit=128,
+        path=path,
+        attempted_write_bytes=64,
+        prior_total_bytes=80,
+        next_total_bytes=144,
+        overwrite_existing_path=True,
+        known_file_count=3,
+    )
+
+
+def _assert_artifact_budget_failure_payload(
+    *,
+    manager: PathManager,
+    capsys,
+    command_label: str,
+) -> None:
+    output = capsys.readouterr().out
+    assert f"[{command_label}] artifact_budget_failure=" in output
+    failure_path = manager.data_dir() / "reports" / "research" / "cli_budget_failure" / "artifact_budget_failure.json"
+    assert failure_path.exists()
+    payload = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "ARTIFACT_BUDGET_EXCEEDED"
+    assert payload["reason"] == "artifact_budget_max_artifact_bytes_exceeded"
+    assert payload["attempted_write_bytes"] == 64
+    assert payload["prior_total_bytes"] == 80
+    assert payload["next_total_bytes"] == 144
+    assert payload["limit"] == 128
+    assert payload["path"].endswith("candidate_results/candidate_001.json")
+    assert payload["overwrite_existing_path"] is True
+    assert payload["known_file_count"] == 3
+    assert payload["failure_artifact_ref"] == "reports/research/cli_budget_failure/artifact_budget_failure.json"
+    assert payload["failure_artifact_path"] == str(failure_path.resolve())
+
+
+def test_research_backtest_writes_artifact_budget_failure_payload(tmp_path, monkeypatch, capsys) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempted_path = manager.data_dir() / "derived" / "research" / "cli_budget_failure" / "candidate_results" / "candidate_001.json"
+
+    monkeypatch.setattr(research_cli, "PATH_MANAGER", manager)
+    monkeypatch.setattr(
+        research_cli,
+        "load_manifest",
+        lambda _path: SimpleNamespace(experiment_id="cli_budget_failure", deployment_tier="research_only"),
+    )
+    monkeypatch.setattr(research_cli, "load_calibration_artifact", lambda _path: None)
+    monkeypatch.setattr(research_cli, "notify", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        research_cli,
+        "run_research_backtest",
+        lambda **_kwargs: (_ for _ in ()).throw(_budget_exception(attempted_path)),
+    )
+
+    rc = research_cli.cmd_research_backtest(manifest_path="manifest.json")
+
+    assert rc == 1
+    _assert_artifact_budget_failure_payload(
+        manager=manager,
+        capsys=capsys,
+        command_label="RESEARCH-BACKTEST",
+    )
+
+
+def test_research_walk_forward_writes_artifact_budget_failure_payload(tmp_path, monkeypatch, capsys) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempted_path = manager.data_dir() / "derived" / "research" / "cli_budget_failure" / "candidate_results" / "candidate_001.json"
+
+    monkeypatch.setattr(research_cli, "PATH_MANAGER", manager)
+    monkeypatch.setattr(
+        research_cli,
+        "load_manifest",
+        lambda _path: SimpleNamespace(experiment_id="cli_budget_failure", deployment_tier="research_only"),
+    )
+    monkeypatch.setattr(research_cli, "load_calibration_artifact", lambda _path: None)
+    monkeypatch.setattr(research_cli, "notify", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        research_cli,
+        "run_research_walk_forward",
+        lambda **_kwargs: (_ for _ in ()).throw(_budget_exception(attempted_path)),
+    )
+
+    rc = research_cli.cmd_research_walk_forward(manifest_path="manifest.json")
+
+    assert rc == 1
+    _assert_artifact_budget_failure_payload(
+        manager=manager,
+        capsys=capsys,
+        command_label="RESEARCH-WALK-FORWARD",
+    )

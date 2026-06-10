@@ -169,3 +169,102 @@ def test_candidate_result_summary_is_reference_first_bounded() -> None:
     assert "validation_execution_metadata" not in scenario
     assert scenario["behavior_hash"] == "sha256:scenario-behavior"
     assert scenario["equity_curve_hash"] == "sha256:equity"
+
+
+def test_candidate_result_summary_omits_resource_usage_stage_trace() -> None:
+    candidate = {
+        "parameter_candidate_id": "candidate_001",
+        "candidate_profile_hash": "sha256:profile",
+        "retained_detail_summary": {"report_detail": "summary"},
+        "scenario_results": [
+            {
+                "scenario_id": "scenario_001",
+                "behavior_hash": "sha256:scenario-behavior",
+                "equity_curve_hash": "sha256:equity",
+                "retained_detail_summary": {"retained_equity_point_count": 0},
+                "train_resource_usage": {
+                    "behavior_hash": "sha256:train-behavior",
+                    "equity_curve_hash": "sha256:train-equity",
+                    "stage_trace": [{"stage": "train", "bar_index": 1}],
+                    "stage_trace_hash": "sha256:train-stage-trace",
+                    "decision_count": 1,
+                    "memory_summary": {"peak_rss_mb": 128.0},
+                },
+                "validation_resource_usage": {
+                    "behavior_hash": "sha256:validation-behavior",
+                    "equity_curve_hash": "sha256:validation-equity",
+                    "stage_trace": [{"stage": "validation", "bar_index": 1}],
+                    "stage_trace_hash": "sha256:validation-stage-trace",
+                    "trade_count": 1,
+                },
+                "final_holdout_resource_usage": {
+                    "behavior_hash": "sha256:holdout-behavior",
+                    "equity_curve_hash": "sha256:holdout-equity",
+                    "stage_trace": [{"stage": "final_holdout", "bar_index": 1}],
+                    "stage_trace_hash": "sha256:holdout-stage-trace",
+                },
+            }
+        ],
+    }
+
+    summary = summarize_candidate_result(candidate, "summary")
+
+    assert summary["candidate_profile_hash"] == "sha256:profile"
+    assert summary["retained_detail_summary"] == {"report_detail": "summary"}
+    scenario = summary["scenario_results"][0]
+    assert scenario["retained_detail_summary"] == {"retained_equity_point_count": 0}
+    for key, expected_hash in (
+        ("train_resource_usage", "sha256:train-stage-trace"),
+        ("validation_resource_usage", "sha256:validation-stage-trace"),
+        ("final_holdout_resource_usage", "sha256:holdout-stage-trace"),
+    ):
+        usage = scenario[key]
+        assert "stage_trace" not in usage
+        assert usage["stage_trace_count"] == 1
+        assert usage["stage_trace_hash"] == expected_hash
+        assert usage["behavior_hash"].startswith("sha256:")
+        assert usage["equity_curve_hash"].startswith("sha256:")
+    assert scenario["train_resource_usage"]["decision_count"] == 1
+    assert scenario["train_resource_usage"]["memory_summary"] == {"peak_rss_mb": 128.0}
+    assert scenario["validation_resource_usage"]["trade_count"] == 1
+
+
+def test_summary_derived_candidate_resource_usage_is_bounded() -> None:
+    candidate = {
+        "parameter_candidate_id": "candidate_001",
+        "candidate_profile_hash": "sha256:profile",
+        "candidate_behavior_profile_hash": "sha256:behavior-profile",
+        "retained_detail_summary": {"report_detail": "summary"},
+        "scenario_results": [
+            {
+                "scenario_id": "scenario_001",
+                "train_resource_usage": {
+                    "behavior_hash": "sha256:train-behavior",
+                    "equity_curve_hash": "sha256:train-equity",
+                    "nested": {"stage_trace": [{"stage": "nested"}]},
+                    "stage_trace": [{"stage": "train"}],
+                    "stage_trace_hash": "sha256:stage-trace",
+                },
+                "validation_execution_metadata": [{"ts": 1, "fill": "large"}],
+                "validation_equity_curve": [{"ts": 1, "equity": 1.0}],
+                "equity_curve_hash": "sha256:equity",
+                "retained_detail_summary": {"retained_equity_point_count": 0},
+            }
+        ],
+    }
+
+    summary = summarize_derived_candidate(candidate, "summary")
+
+    assert summary["derived_detail_policy"] == "summary_bounded"
+    assert summary["candidate_profile_hash"] == "sha256:profile"
+    assert summary["candidate_behavior_profile_hash"] == "sha256:behavior-profile"
+    assert summary["retained_detail_summary"] == {"report_detail": "summary"}
+    scenario = summary["scenario_results"][0]
+    usage = scenario["train_resource_usage"]
+    assert "stage_trace" not in usage
+    assert "stage_trace" not in usage["nested"]
+    assert usage["stage_trace_hash"] == "sha256:stage-trace"
+    assert usage["nested"]["stage_trace_count"] == 1
+    assert scenario["validation_equity_curve"] == []
+    assert "validation_execution_metadata" not in scenario
+    assert scenario["retained_detail_summary"] == {"retained_equity_point_count": 0}

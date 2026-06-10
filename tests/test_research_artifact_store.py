@@ -54,7 +54,7 @@ def test_artifact_budget_exceeded_reports_overwrite_existing_path(tmp_path: Path
 
 def test_total_bytes_counts_repeated_writes_to_same_path(tmp_path: Path) -> None:
     store = ArtifactStore(root=tmp_path, budget=ArtifactBudget(max_artifact_bytes=10_000))
-    path = tmp_path / "backtest_candidates.json"
+    path = tmp_path / "candidate_results" / "candidate_001.json"
     first_payload = {"candidate": "first"}
     second_payload = {"candidate": "second", "extra": "x" * 20}
 
@@ -68,7 +68,7 @@ def test_total_bytes_counts_repeated_writes_to_same_path(tmp_path: Path) -> None
 
 def test_cumulative_budget_can_exceed_retained_file_size(tmp_path: Path) -> None:
     store = ArtifactStore(root=tmp_path, budget=ArtifactBudget(max_artifact_bytes=10_000))
-    path = tmp_path / "backtest_candidates.json"
+    path = tmp_path / "candidate_results" / "candidate_001.json"
     payloads = [
         {"candidate": "first", "padding": "x" * 20},
         {"candidate": "second", "padding": "y" * 20},

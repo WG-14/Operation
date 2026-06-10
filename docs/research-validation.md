@@ -453,50 +453,74 @@ Execution plans also expose `workload_estimate.estimated_artifact_bytes`,
 artifact-budget risk before report writing. Summary and full report-detail modes
 use distinct artifact estimates.
 
-### Short Clean 8-Worker Revalidation
+### Short Clean 8 Candidates x 2 Scenarios Revalidation
 
 Use this procedure to prove the short clean `8 candidates x 2 scenarios`
-workload completes report writing with the default artifact budget. Do not raise
+workload completes report writing with the default artifact budget. The manifest
+must define exactly 8 candidates and 2 execution scenarios, with
+`research_run.report_detail=summary` and
+`research_run.resource_limits.max_equity_points_retained=0`. Do not raise
 `max_artifact_bytes` as the default repair; a budget failure means artifact
 policy, retention, or accounting needs review.
 
 1. Regenerate the short clean manifest into a new path or a path with a unique
    `experiment_id`. Do not reuse an old report path as success evidence.
-2. Run readiness and stop unless it passes:
+2. Export the intended manifest and experiment id:
 
 ```bash
 MANIFEST="/absolute/path/to/short-clean-8x2.manifest.json"
+EXPERIMENT_ID="$(jq -r '.experiment_id' "$MANIFEST")"
+test -n "$EXPERIMENT_ID"
+test "$EXPERIMENT_ID" != "null"
+```
+
+3. Run readiness and stop unless it passes:
+
+```bash
 uv run bithumb-bot research-readiness --manifest "$MANIFEST"
 ```
 
-3. Run the 8-worker backtest only after readiness PASS:
+4. Run the 8 candidates x 2 scenarios backtest only after readiness PASS:
 
 ```bash
 /usr/bin/time -v uv run bithumb-bot research-backtest --manifest "$MANIFEST"
 ```
 
-4. Resolve the latest report after the command exits; do not inspect a cached
-   path from a prior run:
+5. Resolve the latest report after the command exits, then verify it belongs to
+   the intended experiment. Do not inspect a cached path from a prior run:
 
 ```bash
-REPORT="$(find ~/.local/state/bithumb-bot -path '*reports*research*' -name 'backtest_report.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+REPORT="$(find "$DATA_ROOT/paper/reports/research" -name 'backtest_report.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
 test -n "$REPORT"
 test -f "$REPORT"
+test "$(jq -r '.experiment_id' "$REPORT")" = "$EXPERIMENT_ID"
 ```
 
-5. Verify report write completion, failure status, and artifact accounting:
+6. Verify report write completion, failure status, execution observability, and
+   artifact accounting:
 
 ```bash
 jq '.failure_reason // null' "$REPORT"
 jq '.artifact_write_summary' "$REPORT"
 jq '.execution_observability | {parallel_executor_used, actual_parallel_task_count, requested_parallel_task_count}' "$REPORT"
+test ! -f "$DATA_ROOT/paper/reports/research/$EXPERIMENT_ID/artifact_budget_failure.json"
+test -f "$DATA_ROOT/paper/derived/research/$EXPERIMENT_ID/backtest_candidates.json"
+test -d "$DATA_ROOT/paper/derived/research/$EXPERIMENT_ID/candidate_results"
 ```
 
-Success requires a current `backtest_report.json`, no
-`ArtifactBudgetExceeded`, no `artifact_budget_failure.json` for the same
-experiment, and an `artifact_write_summary` whose `report_bytes` and
-`derived_candidates_bytes` match the current files. Work-unit completion alone
-is not success if report writing failed.
+Managed artifact paths for this check are:
+
+```text
+DATA_ROOT/<mode>/reports/research/<experiment_id>/backtest_report.json
+DATA_ROOT/<mode>/derived/research/<experiment_id>/backtest_candidates.json
+DATA_ROOT/<mode>/derived/research/<experiment_id>/candidate_results/*.json
+```
+
+Success requires a current `backtest_report.json` for the intended
+`experiment_id`, no `ArtifactBudgetExceeded`, no `artifact_budget_failure.json`
+for the same experiment, and an `artifact_write_summary` whose `report_bytes`
+and `derived_candidates_bytes` match the current files. `work_unit_complete`
+events alone are not success evidence if report writing failed.
 
 Full-suite pytest validation should use:
 
