@@ -244,10 +244,14 @@ def _reference_first_report_payload(
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     report_payload = dict(payload)
     candidates = list(report_payload.get("candidates", []))
-    derived_candidates_payload = {"candidates": candidates}
+    report_detail = _report_detail(report_payload)
+    derived_candidates_payload = {
+        "detail_policy": "summary_bounded" if report_detail == "summary" else "full",
+        "candidates": [summarize_derived_candidate(candidate, report_detail) for candidate in candidates],
+    }
     derived_candidates_hash = sha256_prefixed(report_content_hash_payload(derived_candidates_payload))
-    if _report_detail(report_payload) == "summary":
-        report_payload["candidates"] = [_candidate_summary(candidate) for candidate in candidates]
+    if report_detail == "summary":
+        report_payload["candidates"] = [summarize_report_candidate(candidate) for candidate in candidates]
         report_payload["derived_candidates_ref"] = _relative_artifact_ref(paths.derived_path, manager.data_dir().resolve())
         report_payload["derived_candidates_path"] = str(paths.derived_path.resolve())
     return report_payload, derived_candidates_payload, derived_candidates_hash
@@ -260,7 +264,7 @@ def _report_detail(payload: dict[str, Any]) -> str:
     return "full"
 
 
-def _candidate_summary(candidate: Any) -> dict[str, Any]:
+def summarize_report_candidate(candidate: Any) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         return {"candidate_repr_hash": sha256_prefixed(report_content_hash_payload(candidate))}
     summary_keys = (
@@ -288,6 +292,143 @@ def _candidate_summary(candidate: Any) -> dict[str, Any]:
     )
     summary = {key: candidate[key] for key in summary_keys if key in candidate}
     summary["candidate_payload_hash"] = sha256_prefixed(report_content_hash_payload(candidate))
+    return summary
+
+
+def summarize_derived_candidate(candidate: Any, report_detail: str) -> Any:
+    if report_detail != "summary":
+        return candidate
+    if not isinstance(candidate, dict):
+        return {"candidate_repr_hash": sha256_prefixed(report_content_hash_payload(candidate))}
+    summary = summarize_candidate_result(candidate, report_detail)
+    summary["derived_detail_policy"] = "summary_bounded"
+    return summary
+
+
+def summarize_candidate_result(candidate: Any, report_detail: str) -> Any:
+    if report_detail != "summary":
+        return candidate
+    if not isinstance(candidate, dict):
+        return {"candidate_repr_hash": sha256_prefixed(report_content_hash_payload(candidate))}
+    summary_keys = (
+        "experiment_id",
+        "manifest_hash",
+        "dataset_snapshot_id",
+        "dataset_content_hash",
+        "dataset_quality_hash",
+        "dataset_quality_gate_status",
+        "dataset_quality_gate_reasons",
+        "dataset_quality_report_hashes",
+        "top_of_book_quality_summary",
+        "strategy_name",
+        "parameter_candidate_id",
+        "candidate_id",
+        "parameter_values",
+        "effective_strategy_parameters_hash",
+        "candidate_behavior_profile_hash",
+        "candidate_profile_hash",
+        "acceptance_gate_result",
+        "acceptance_gate_status",
+        "gate_fail_reasons",
+        "warnings",
+        "failure_artifact_path",
+        "failure_artifact_ref",
+        "resource_guard",
+        "behavior_hash",
+        "decision_behavior_hash",
+        "trade_ledger_hash",
+        "equity_curve_hash",
+        "composite_behavior_hash",
+        "common_decision_behavior_hash",
+        "strategy_behavior_hash",
+        "composite_behavior_hash_v2",
+        "metrics_hash",
+        "validation_metrics",
+        "validation_metrics_v2",
+        "final_holdout_metrics",
+        "final_holdout_metrics_v2",
+        "walk_forward_metrics",
+        "production_calibration_policy_result",
+        "production_calibration_policy_reasons",
+        "execution_calibration_gate",
+        "execution_calibration_policy_source",
+        "execution_calibration_artifact_hash",
+        "execution_calibration_artifact_hashes",
+        "has_execution_calibration_warning",
+        "execution_calibration_warning_reasons",
+        "retained_detail_summary",
+    )
+    summary = {key: candidate[key] for key in summary_keys if key in candidate}
+    summary["scenario_results"] = [
+        _scenario_result_summary(scenario) for scenario in candidate.get("scenario_results") or []
+    ]
+    summary["candidate_payload_hash"] = sha256_prefixed(report_content_hash_payload(candidate))
+    summary["candidate_result_detail_policy"] = "summary_bounded"
+    return summary
+
+
+def _scenario_result_summary(scenario: Any) -> dict[str, Any]:
+    if not isinstance(scenario, dict):
+        return {"scenario_repr_hash": sha256_prefixed(report_content_hash_payload(scenario))}
+    summary_keys = (
+        "scenario_id",
+        "scenario_index",
+        "scenario_type",
+        "scenario_role",
+        "scenario_acceptance_gate_result",
+        "scenario_fail_reasons",
+        "validation_metrics",
+        "validation_metrics_v2",
+        "final_holdout_metrics",
+        "final_holdout_metrics_v2",
+        "train_metrics",
+        "train_metrics_v2",
+        "walk_forward_metrics",
+        "regime_gate_result",
+        "market_regime_bucket_performance",
+        "market_regime_coverage",
+        "execution_model_hash",
+        "model_params_hash",
+        "execution_contract_hash",
+        "execution_capability_contract_hash",
+        "execution_reality_summary",
+        "train_execution_event_summary",
+        "validation_execution_event_summary",
+        "final_holdout_execution_event_summary",
+        "behavior_hash",
+        "decision_behavior_hash",
+        "trade_ledger_hash",
+        "equity_curve_hash",
+        "composite_behavior_hash",
+        "common_decision_behavior_hash",
+        "strategy_behavior_hash",
+        "composite_behavior_hash_v2",
+        "train_behavior_hash",
+        "validation_behavior_hash",
+        "final_holdout_behavior_hash",
+        "candidate_failed",
+        "candidate_failed_before_complete_metrics",
+        "evaluation_status",
+        "metrics_status",
+        "metrics_v2_source",
+        "failure_reason",
+        "resource_guard",
+        "failure_artifact_ref",
+        "failure_artifact_path",
+        "retained_detail_summary",
+        "train_resource_usage",
+        "validation_resource_usage",
+        "final_holdout_resource_usage",
+        "train_audit_trace_index",
+        "validation_audit_trace_index",
+        "final_holdout_audit_trace_index",
+    )
+    summary = {key: scenario[key] for key in summary_keys if key in scenario}
+    summary["train_equity_curve"] = []
+    summary["validation_equity_curve"] = []
+    summary["final_holdout_equity_curve"] = []
+    summary["detail_artifact_ref"] = scenario.get("detail_artifact_ref")
+    summary["scenario_payload_hash"] = sha256_prefixed(report_content_hash_payload(scenario))
     return summary
 
 

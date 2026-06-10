@@ -6,7 +6,10 @@ from time import monotonic
 
 from bithumb_bot.config import PATH_MANAGER, settings
 from bithumb_bot.notifier import AlertSeverity, format_event, notify
+from bithumb_bot.paths import PathManager
+from bithumb_bot.storage_io import write_json_atomic
 
+from .artifact_store import ArtifactBudgetExceeded
 from .experiment_manifest import ManifestValidationError, load_manifest
 from .experiment_registry import (
     PROMOTION_PERMITTED_STATUSES,
@@ -63,6 +66,15 @@ def cmd_research_backtest(*, manifest_path: str, execution_calibration_path: str
                 },
                 progress_callback=_print_research_backtest_progress,
             )
+        except ArtifactBudgetExceeded as exc:
+            payload = _write_artifact_budget_failure_payload(
+                manager=PATH_MANAGER,
+                manifest_path=manifest_path,
+                exc=exc,
+            )
+            print(f"[RESEARCH-BACKTEST] artifact_budget_failure={json.dumps(payload, sort_keys=True)}")
+            rc = 1
+            return rc
         except (ManifestValidationError, ExecutionCalibrationError, ResearchValidationError, OSError, ValueError) as exc:
             print(f"[RESEARCH-BACKTEST] error={exc}")
             rc = 1
@@ -102,6 +114,15 @@ def cmd_research_walk_forward(*, manifest_path: str, execution_calibration_path:
                 },
                 progress_callback=_print_research_walk_forward_progress,
             )
+        except ArtifactBudgetExceeded as exc:
+            payload = _write_artifact_budget_failure_payload(
+                manager=PATH_MANAGER,
+                manifest_path=manifest_path,
+                exc=exc,
+            )
+            print(f"[RESEARCH-WALK-FORWARD] artifact_budget_failure={json.dumps(payload, sort_keys=True)}")
+            rc = 1
+            return rc
         except (ManifestValidationError, ExecutionCalibrationError, ResearchValidationError, OSError, ValueError) as exc:
             print(f"[RESEARCH-WALK-FORWARD] error={exc}")
             rc = 1
@@ -120,6 +141,29 @@ def cmd_research_walk_forward(*, manifest_path: str, execution_calibration_path:
             manifest=manifest_path,
             execution_calibration=execution_calibration_path,
         )
+
+
+def _write_artifact_budget_failure_payload(
+    *,
+    manager: PathManager,
+    manifest_path: str,
+    exc: ArtifactBudgetExceeded,
+) -> dict[str, object]:
+    try:
+        manifest = load_manifest(manifest_path)
+        experiment_id = manifest.experiment_id
+    except Exception:
+        experiment_id = "unknown"
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "status": "ARTIFACT_BUDGET_EXCEEDED",
+        **exc.as_dict(),
+    }
+    path = manager.data_dir() / "reports" / "research" / experiment_id / "artifact_budget_failure.json"
+    payload["failure_artifact_path"] = str(path.resolve())
+    payload["failure_artifact_ref"] = path.resolve().relative_to(manager.data_dir().resolve()).as_posix()
+    write_json_atomic(path, payload)
+    return payload
 
 
 def cmd_research_validate(

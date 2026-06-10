@@ -169,12 +169,27 @@ such as `max_decisions_retained` and `max_equity_points_retained` control report
 preview size only; they must not be treated as forensic audit retention.
 Summary reports use a reference-first candidate layout: full candidate payloads
 are written to the derived candidates artifact under
-`DATA_ROOT/<mode>/derived/research/<experiment_id>/`, while the report body under
+`DATA_ROOT/<mode>/derived/research/<experiment_id>/` only when
+`report_detail=full`. In `report_detail=summary`, the report candidates, derived
+`backtest_candidates.json`, and `candidate_results/*.json` use bounded
+summary/hash/reference policies and must not embed full per-bar decisions,
+execution metadata, or equity curves. The report body under
 `DATA_ROOT/<mode>/reports/research/<experiment_id>/` keeps compact candidate
 summaries, candidate counts, derived artifact refs, and `sha256:` bindings. The
 report content hash is bound to the derived candidates hash. Promotion or audit
 flows that require complete embedded candidate payloads must use an explicitly
 full-detail/evidence path rather than relying on summary report duplication.
+
+`research_run.resource_limits.max_artifact_bytes` is a cumulative write budget
+for the run-wide research artifact context. It counts every observed write,
+including repeated atomic overwrites to the same path. It is not a retained disk
+usage budget, so `artifact_total_bytes` and `ArtifactStore.total_bytes` may be
+larger than `du` or the final retained file sizes after overwrites. Completed
+reports expose `artifact_write_summary.derived_candidates_bytes` and
+`artifact_write_summary.report_bytes` as actual persisted file sizes, while
+`artifact_write_summary.artifact_total_bytes` is cumulative write accounting.
+Budget failures write a minimal `artifact_budget_failure.json` under the
+managed research reports path when the CLI catches `ArtifactBudgetExceeded`.
 
 Complete replay evidence is written as external candidate/scenario/split trace
 artifacts when `research_run.audit_trail.mode=complete_external` is enabled, or
@@ -432,6 +447,56 @@ reviewed suite budget changes. The gate compares
 events, audit stream rows, artifact write count, hash payload bytes, artifact
 bytes, and artifact file count. It compares estimate fields only; manifest
 resource-limit fields such as `max_artifact_bytes` are not observed workload.
+Execution plans also expose `workload_estimate.estimated_artifact_bytes`,
+`estimated_artifact_detail_policy`, `max_artifact_bytes`,
+`artifact_budget_status`, and `artifact_budget_reasons` so operators can see
+artifact-budget risk before report writing. Summary and full report-detail modes
+use distinct artifact estimates.
+
+### Short Clean 8-Worker Revalidation
+
+Use this procedure to prove the short clean `8 candidates x 2 scenarios`
+workload completes report writing with the default artifact budget. Do not raise
+`max_artifact_bytes` as the default repair; a budget failure means artifact
+policy, retention, or accounting needs review.
+
+1. Regenerate the short clean manifest into a new path or a path with a unique
+   `experiment_id`. Do not reuse an old report path as success evidence.
+2. Run readiness and stop unless it passes:
+
+```bash
+MANIFEST="/absolute/path/to/short-clean-8x2.manifest.json"
+uv run bithumb-bot research-readiness --manifest "$MANIFEST"
+```
+
+3. Run the 8-worker backtest only after readiness PASS:
+
+```bash
+/usr/bin/time -v uv run bithumb-bot research-backtest --manifest "$MANIFEST"
+```
+
+4. Resolve the latest report after the command exits; do not inspect a cached
+   path from a prior run:
+
+```bash
+REPORT="$(find ~/.local/state/bithumb-bot -path '*reports*research*' -name 'backtest_report.json' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+test -n "$REPORT"
+test -f "$REPORT"
+```
+
+5. Verify report write completion, failure status, and artifact accounting:
+
+```bash
+jq '.failure_reason // null' "$REPORT"
+jq '.artifact_write_summary' "$REPORT"
+jq '.execution_observability | {parallel_executor_used, actual_parallel_task_count, requested_parallel_task_count}' "$REPORT"
+```
+
+Success requires a current `backtest_report.json`, no
+`ArtifactBudgetExceeded`, no `artifact_budget_failure.json` for the same
+experiment, and an `artifact_write_summary` whose `report_bytes` and
+`derived_candidates_bytes` match the current files. Work-unit completion alone
+is not success if report writing failed.
 
 Full-suite pytest validation should use:
 

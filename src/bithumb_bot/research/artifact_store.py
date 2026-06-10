@@ -32,12 +32,39 @@ class ArtifactWriteEvent:
 
 
 class ArtifactBudgetExceeded(RuntimeError):
-    def __init__(self, *, reason: str, observed: int, limit: int, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        reason: str,
+        observed: int | None = None,
+        limit: int,
+        path: Path | None = None,
+        attempted_write_bytes: int | None = None,
+        prior_total_bytes: int | None = None,
+        next_total_bytes: int | None = None,
+        overwrite_existing_path: bool = False,
+        known_file_count: int | None = None,
+    ) -> None:
         self.reason = reason
-        self.observed = int(observed)
+        self.attempted_write_bytes = int(attempted_write_bytes or 0)
+        self.prior_total_bytes = int(prior_total_bytes or 0)
+        self.next_total_bytes = int(
+            next_total_bytes
+            if next_total_bytes is not None
+            else observed
+            if observed is not None
+            else self.prior_total_bytes + self.attempted_write_bytes
+        )
+        self.observed = int(observed if observed is not None else self.next_total_bytes)
         self.limit = int(limit)
         self.path = str(path.resolve()) if path is not None else None
-        message = f"{reason}: observed={self.observed} limit={self.limit}"
+        self.overwrite_existing_path = bool(overwrite_existing_path)
+        self.known_file_count = int(known_file_count) if known_file_count is not None else None
+        message = (
+            f"{reason}: observed={self.observed} attempted_write_bytes={self.attempted_write_bytes} "
+            f"prior_total_bytes={self.prior_total_bytes} next_total_bytes={self.next_total_bytes} "
+            f"limit={self.limit} overwrite_existing_path={self.overwrite_existing_path}"
+        )
         if self.path:
             message = f"{message} path={self.path}"
         super().__init__(message)
@@ -46,10 +73,16 @@ class ArtifactBudgetExceeded(RuntimeError):
         payload: dict[str, object] = {
             "reason": self.reason,
             "observed": self.observed,
+            "attempted_write_bytes": self.attempted_write_bytes,
+            "prior_total_bytes": self.prior_total_bytes,
+            "next_total_bytes": self.next_total_bytes,
             "limit": self.limit,
+            "overwrite_existing_path": self.overwrite_existing_path,
         }
         if self.path:
             payload["path"] = self.path
+        if self.known_file_count is not None:
+            payload["known_file_count"] = self.known_file_count
         return payload
 
 
@@ -79,9 +112,15 @@ class ArtifactStore:
         return self._audit_stream_bytes
 
     def write_json_atomic(self, path: Path, payload: dict[str, Any]) -> ArtifactWriteEvent:
+        overwrite_existing_path = path.resolve() in self._known_files
         self._reserve_file(path)
         encoded = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
-        self._observe_bytes(path=path, byte_count=len(encoded), audit_stream=False)
+        self._observe_bytes(
+            path=path,
+            byte_count=len(encoded),
+            audit_stream=False,
+            overwrite_existing_path=overwrite_existing_path,
+        )
         write_json_atomic(path, payload)
         return ArtifactWriteEvent(path=str(path.resolve()), bytes=len(encoded))
 
@@ -115,28 +154,48 @@ class ArtifactStore:
                     observed=next_count,
                     limit=limit,
                     path=path,
+                    known_file_count=len(self._known_files),
                 )
             self._known_files.add(resolved)
 
-    def _observe_bytes(self, *, path: Path, byte_count: int, audit_stream: bool) -> None:
+    def _observe_bytes(
+        self,
+        *,
+        path: Path,
+        byte_count: int,
+        audit_stream: bool,
+        overwrite_existing_path: bool = False,
+    ) -> None:
         total_limit = self.budget.max_artifact_bytes
-        next_total = self._total_bytes + int(byte_count)
+        attempted = int(byte_count)
+        prior_total = self._total_bytes
+        next_total = prior_total + attempted
         if total_limit is not None and next_total > total_limit:
             raise ArtifactBudgetExceeded(
                 reason="artifact_budget_max_artifact_bytes_exceeded",
                 observed=next_total,
                 limit=total_limit,
                 path=path,
+                attempted_write_bytes=attempted,
+                prior_total_bytes=prior_total,
+                next_total_bytes=next_total,
+                overwrite_existing_path=overwrite_existing_path,
+                known_file_count=len(self._known_files),
             )
         if audit_stream:
             stream_limit = self.budget.max_audit_stream_bytes
-            next_stream_bytes = self._audit_stream_bytes + int(byte_count)
+            next_stream_bytes = self._audit_stream_bytes + attempted
             if stream_limit is not None and next_stream_bytes > stream_limit:
                 raise ArtifactBudgetExceeded(
                     reason="artifact_budget_max_audit_stream_bytes_exceeded",
                     observed=next_stream_bytes,
                     limit=stream_limit,
                     path=path,
+                    attempted_write_bytes=attempted,
+                    prior_total_bytes=prior_total,
+                    next_total_bytes=next_total,
+                    overwrite_existing_path=overwrite_existing_path,
+                    known_file_count=len(self._known_files),
                 )
             self._audit_stream_bytes = next_stream_bytes
         self._total_bytes = next_total

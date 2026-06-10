@@ -6,6 +6,9 @@ from pathlib import Path
 from bithumb_bot.research.report_writer import (
     ResearchReportPaths,
     persist_final_research_report_observability,
+    summarize_candidate_result,
+    summarize_derived_candidate,
+    summarize_report_candidate,
 )
 
 
@@ -87,3 +90,82 @@ def test_persist_final_research_report_observability_updates_persisted_payload(t
     assert persisted["content_hash"] == content_hash
     assert persisted["artifact_write_summary"] == summary
     assert persisted["artifact_observability"]["report_write"] == summary
+
+
+def test_summary_report_uses_candidate_summary() -> None:
+    candidate = {
+        "candidate_id": "candidate_001",
+        "acceptance_gate_result": "PASS",
+        "validation_metrics_v2": {"total_return_pct": 1.0},
+        "decisions": [{"ts": 1}],
+        "equity_curve": [{"ts": 1, "equity": 1.0}],
+    }
+
+    summary = summarize_report_candidate(candidate)
+
+    assert summary["candidate_id"] == "candidate_001"
+    assert summary["acceptance_gate_result"] == "PASS"
+    assert summary["validation_metrics_v2"] == {"total_return_pct": 1.0}
+    assert summary["candidate_payload_hash"].startswith("sha256:")
+    assert "decisions" not in summary
+    assert "equity_curve" not in summary
+
+
+def test_summary_derived_candidates_are_bounded() -> None:
+    candidate = {
+        "parameter_candidate_id": "candidate_001",
+        "candidate_profile_hash": "sha256:profile",
+        "scenario_results": [
+            {
+                "scenario_id": "scenario_001",
+                "validation_equity_curve": [{"ts": 1, "equity": 1.0}],
+                "train_equity_curve": [{"ts": 1, "equity": 1.0}],
+                "final_holdout_equity_curve": [{"ts": 1, "equity": 1.0}],
+                "equity_curve_hash": "sha256:equity",
+                "retained_detail_summary": {"retained_equity_point_count": 0},
+            }
+        ],
+        "decisions": [{"ts": 1}],
+    }
+
+    summary = summarize_derived_candidate(candidate, "summary")
+
+    assert summary["derived_detail_policy"] == "summary_bounded"
+    assert summary["candidate_result_detail_policy"] == "summary_bounded"
+    assert summary["candidate_profile_hash"] == "sha256:profile"
+    assert "decisions" not in summary
+    scenario = summary["scenario_results"][0]
+    assert scenario["train_equity_curve"] == []
+    assert scenario["validation_equity_curve"] == []
+    assert scenario["final_holdout_equity_curve"] == []
+    assert scenario["equity_curve_hash"] == "sha256:equity"
+    assert scenario["retained_detail_summary"] == {"retained_equity_point_count": 0}
+
+
+def test_candidate_result_summary_is_reference_first_bounded() -> None:
+    candidate = {
+        "parameter_candidate_id": "candidate_001",
+        "candidate_profile_hash": "sha256:profile",
+        "behavior_hash": "sha256:behavior",
+        "scenario_results": [
+            {
+                "scenario_id": "scenario_001",
+                "validation_equity_curve": [{"ts": 1, "equity": 1.0}],
+                "validation_execution_metadata": [{"ts": 1, "fill": "large"}],
+                "behavior_hash": "sha256:scenario-behavior",
+                "equity_curve_hash": "sha256:equity",
+                "retained_detail_summary": {"retained_equity_point_count": 0},
+            }
+        ],
+    }
+
+    summary = summarize_candidate_result(candidate, "summary")
+
+    assert summary["candidate_result_detail_policy"] == "summary_bounded"
+    assert summary["candidate_profile_hash"] == "sha256:profile"
+    assert summary["behavior_hash"] == "sha256:behavior"
+    scenario = summary["scenario_results"][0]
+    assert scenario["validation_equity_curve"] == []
+    assert "validation_execution_metadata" not in scenario
+    assert scenario["behavior_hash"] == "sha256:scenario-behavior"
+    assert scenario["equity_curve_hash"] == "sha256:equity"

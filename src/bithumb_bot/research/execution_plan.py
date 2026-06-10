@@ -144,6 +144,23 @@ def build_research_execution_plan(
         scenario_count=len(manifest.execution_model.scenarios),
         split_count=split_count,
     )
+    estimated_artifact_bytes = _estimated_artifact_bytes(
+        candidate_count=len(candidates),
+        scenario_count=len(manifest.execution_model.scenarios),
+        split_count=split_count,
+        audit_mode=manifest.research_run.audit_trail.mode,
+        estimated_audit_stream_rows=estimated_audit_stream_rows,
+        estimated_artifact_write_count=estimated_artifact_write_count,
+        estimated_hash_payload_bytes=estimated_hash_payload_bytes,
+        full_decisions_external_jsonl=manifest.research_run.artifact_policy.full_decisions_external_jsonl,
+        report_detail=manifest.research_run.report_detail,
+    )
+    max_artifact_bytes = manifest.research_run.resource_limits.max_artifact_bytes
+    artifact_budget_reasons: list[str] = []
+    artifact_budget_status = "PASS"
+    if max_artifact_bytes is not None and estimated_artifact_bytes > int(max_artifact_bytes):
+        artifact_budget_status = "WARN"
+        artifact_budget_reasons.append("estimated_artifact_bytes_exceed_max_artifact_bytes")
     plan["workload_estimate"] = {
         "schema_version": 1,
         "candidate_count": plan["candidate_count"],
@@ -161,16 +178,15 @@ def build_research_execution_plan(
         "estimated_audit_stream_rows": estimated_audit_stream_rows,
         "estimated_artifact_write_count": estimated_artifact_write_count,
         "estimated_hash_payload_bytes": estimated_hash_payload_bytes,
-        "estimated_artifact_bytes": _estimated_artifact_bytes(
-            candidate_count=len(candidates),
-            scenario_count=len(manifest.execution_model.scenarios),
-            split_count=split_count,
-            audit_mode=manifest.research_run.audit_trail.mode,
-            estimated_audit_stream_rows=estimated_audit_stream_rows,
-            estimated_artifact_write_count=estimated_artifact_write_count,
-            estimated_hash_payload_bytes=estimated_hash_payload_bytes,
-            full_decisions_external_jsonl=manifest.research_run.artifact_policy.full_decisions_external_jsonl,
+        "estimated_artifact_bytes": estimated_artifact_bytes,
+        "estimated_artifact_detail_policy": (
+            "summary_bounded_candidate_artifacts"
+            if manifest.research_run.report_detail == "summary"
+            else "full_candidate_artifacts"
         ),
+        "max_artifact_bytes": max_artifact_bytes,
+        "artifact_budget_status": artifact_budget_status,
+        "artifact_budget_reasons": artifact_budget_reasons,
         "estimated_snapshot_hash_count": len(snapshots),
         "uses_production_evaluator": None,
         "uses_real_parallel_executor": None,
@@ -354,10 +370,12 @@ def _estimated_artifact_bytes(
     estimated_artifact_write_count: int,
     estimated_hash_payload_bytes: int,
     full_decisions_external_jsonl: bool,
+    report_detail: str = "full",
 ) -> int:
     work_unit_count = int(candidate_count) * int(scenario_count)
     report_bytes = 64 * 1024
-    candidate_json_bytes = max(1, work_unit_count) * 16 * 1024
+    per_candidate_scenario_bytes = 8 * 1024 if report_detail == "summary" else 64 * 1024
+    candidate_json_bytes = max(1, work_unit_count) * per_candidate_scenario_bytes
     candidate_journal_bytes = max(1, work_unit_count) * 2 * 1024
     hash_payload_bytes = int(estimated_hash_payload_bytes)
     audit_bytes = 0

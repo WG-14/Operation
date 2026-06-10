@@ -84,7 +84,11 @@ from .metrics_gate_policy import metrics_gate_policy_from_acceptance_gate, metri
 from .metrics_contract import METRICS_SCHEMA_VERSION
 from .parameter_space import candidate_id, iter_parameter_candidates
 from .promotion_gate import build_candidate_behavior_profile, build_candidate_profile
-from .report_writer import persist_final_research_report_observability, write_research_report
+from .report_writer import (
+    persist_final_research_report_observability,
+    summarize_candidate_result,
+    write_research_report,
+)
 from .statistical_selection import (
     PROMOTION_GRADE_GENERATION_UNAVAILABLE_WARNING,
     build_statistical_selection_evidence,
@@ -2012,7 +2016,7 @@ def _evaluate_candidates(
         )
         store.write_json_atomic(
             _candidate_result_path(manager, manifest.experiment_id, str(candidate_payload["parameter_candidate_id"])),
-            candidate_payload,
+            summarize_candidate_result(candidate_payload, manifest.research_run.report_detail),
         )
         _append_candidate_event(
             manager=manager,

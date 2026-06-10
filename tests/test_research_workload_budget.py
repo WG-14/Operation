@@ -17,6 +17,7 @@ from bithumb_bot.research.artifact_store import (
 )
 from bithumb_bot.research.audit_trail import AuditTraceScope, AuditTrailPolicy, write_trace_manifest
 from bithumb_bot.research.experiment_manifest import ResearchResourceLimits, parse_manifest
+from bithumb_bot.research.execution_plan import _estimated_artifact_bytes
 from bithumb_bot.research.experiment_registry import (
     EXPERIMENT_REGISTRY_BUDGET_POLICY,
     reserve_research_attempt,
@@ -70,6 +71,45 @@ def test_artifact_store_counts_and_rejects_budget_excess(tmp_path: Path) -> None
     with pytest.raises(ArtifactBudgetExceeded) as excinfo:
         store.append_jsonl(tmp_path / "decisions.jsonl", {"x": 2}, audit_stream=True)
     assert excinfo.value.reason == "artifact_budget_max_audit_stream_rows_exceeded"
+
+
+def test_artifact_store_reports_overwrite_existing_path_for_same_json_path(tmp_path: Path) -> None:
+    first_payload = {"x": "a"}
+    second_payload = {"x": "b" * 64}
+    store = ArtifactStore(
+        root=tmp_path,
+        budget=ArtifactBudget(max_artifact_bytes=40),
+    )
+    path = tmp_path / "candidate_results" / "candidate_001.json"
+
+    store.write_json_atomic(path, first_payload)
+    with pytest.raises(ArtifactBudgetExceeded) as excinfo:
+        store.write_json_atomic(path, second_payload)
+
+    payload = excinfo.value.as_dict()
+    assert payload["overwrite_existing_path"] is True
+    assert payload["attempted_write_bytes"] > 0
+    assert payload["prior_total_bytes"] > 0
+    assert payload["next_total_bytes"] > payload["prior_total_bytes"]
+
+
+def test_summary_artifact_estimate_uses_bounded_candidate_size() -> None:
+    common = {
+        "candidate_count": 8,
+        "scenario_count": 2,
+        "split_count": 3,
+        "audit_mode": "summary_only",
+        "estimated_audit_stream_rows": 0,
+        "estimated_artifact_write_count": 19,
+        "estimated_hash_payload_bytes": 8192,
+        "full_decisions_external_jsonl": False,
+    }
+
+    summary = _estimated_artifact_bytes(**common, report_detail="summary")
+    full = _estimated_artifact_bytes(**common, report_detail="full")
+
+    assert summary < full
+    assert summary > common["estimated_hash_payload_bytes"]
 
 
 def test_run_wide_artifact_context_accumulates_trace_scopes_and_reports(tmp_path: Path, monkeypatch) -> None:
@@ -228,6 +268,9 @@ def test_research_raw_writer_policy_classifies_remaining_direct_storage_calls() 
             "append_jsonl",
             "write_json_atomic",
         },
+        "cli.py": {
+            "write_json_atomic",
+        },
         "data_plane.py": {
             "write_json_atomic",
         },
@@ -275,6 +318,7 @@ def test_research_raw_writer_policy_classifies_remaining_direct_storage_calls() 
     classifications = {
         "artifact_store.py": "accounted research artifact adapter to storage_io",
         "audit_trail.py": "accounted audit trace writes through ArtifactStore or ResearchArtifactContext",
+        "cli.py": "untracked minimal artifact-budget failure report through managed research reports root",
         "data_plane.py": "operator-specified diagnostic report outputs validated outside repository",
         "execution_calibration.py": "accounted non-research execution-quality report artifact",
         "experiment_registry.py": "explicit append-only registry artifact budget exemption",

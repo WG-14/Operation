@@ -166,8 +166,9 @@ def test_summary_report_does_not_duplicate_full_candidate_payload(tmp_path, monk
 
     persisted = json.loads(result.paths.report_path.read_text(encoding="utf-8"))
     derived = json.loads(result.paths.derived_path.read_text(encoding="utf-8"))
-    assert "decisions" in derived["candidates"][0]
-    assert "equity_curve" in derived["candidates"][0]
+    assert derived["detail_policy"] == "summary_bounded"
+    assert "decisions" not in derived["candidates"][0]
+    assert "equity_curve" not in derived["candidates"][0]
     assert "decisions" not in persisted["candidates"][0]
     assert "equity_curve" not in persisted["candidates"][0]
     assert persisted["candidate_count"] == len(derived["candidates"])
@@ -1672,11 +1673,47 @@ def test_research_execution_plan_counts_multiple_candidates_and_scenarios(tmp_pa
     assert plan["workload_estimate"]["estimated_artifact_write_count"] == 7
     assert plan["workload_estimate"]["estimated_hash_payload_bytes"] > 0
     assert plan["workload_estimate"]["estimated_artifact_bytes"] > plan["workload_estimate"]["estimated_hash_payload_bytes"]
+    assert plan["workload_estimate"]["estimated_artifact_detail_policy"] == "summary_bounded_candidate_artifacts"
+    assert plan["workload_estimate"]["max_artifact_bytes"] == manifest.research_run.resource_limits.max_artifact_bytes
+    assert plan["workload_estimate"]["artifact_budget_status"] == "PASS"
+    assert plan["workload_estimate"]["artifact_budget_reasons"] == []
     assert plan["workload_estimate"]["estimated_snapshot_hash_count"] == 3
     assert plan["workload_estimate"]["uses_production_evaluator"] is None
     assert plan["workload_estimate"]["uses_real_parallel_executor"] is None
     assert plan["deterministic_merge_order"] == "scenario_index,candidate_index,split_name"
     assert plan["plan_hash"] == later_plan["plan_hash"]
+
+
+def test_research_execution_plan_warns_when_estimated_artifact_bytes_exceed_limit(tmp_path) -> None:
+    db_path = tmp_path / "candles.sqlite"
+    _create_db(db_path)
+    payload = _manifest()
+    payload["research_run"] = {
+        "report_detail": "summary",
+        "resource_limits": {"max_artifact_bytes": 1},
+    }
+    manifest = parse_manifest(payload)
+    snapshots = {
+        split_name: validation_protocol.load_dataset_split(db_path=db_path, manifest=manifest, split_name=split_name)
+        for split_name in ("train", "validation", "final_holdout")
+    }
+    quality_reports = validation_protocol._quality_reports(db_path=db_path, snapshots=snapshots)
+
+    plan = build_research_execution_plan(
+        manifest=manifest,
+        snapshots=snapshots,
+        quality_reports=quality_reports,
+        db_path=db_path,
+        repository_version="unit",
+        created_at="2026-05-03T00:00:00+00:00",
+    ).as_dict()
+
+    assert plan["workload_estimate"]["estimated_artifact_bytes"] > 1
+    assert plan["workload_estimate"]["max_artifact_bytes"] == 1
+    assert plan["workload_estimate"]["artifact_budget_status"] == "WARN"
+    assert plan["workload_estimate"]["artifact_budget_reasons"] == [
+        "estimated_artifact_bytes_exceed_max_artifact_bytes"
+    ]
 
 
 def test_report_workload_estimate_fallback_counts_candidate_and_scenario_growth(tmp_path) -> None:
@@ -4064,7 +4101,33 @@ def test_research_sweep_continues_after_guard_failure_and_writes_candidate_artif
     assert persisted["artifact_paths"] == report["artifact_paths"]
     root = manager.data_dir() / "derived" / "research" / "bounded_sweep"
     assert (root / "candidate_events.jsonl").exists()
-    assert list((root / "candidate_results").glob("candidate_*.json"))
+    candidate_result_paths = sorted((root / "candidate_results").glob("candidate_*.json"))
+    assert candidate_result_paths
+    derived_candidates = json.loads((root / "backtest_candidates.json").read_text(encoding="utf-8"))
+    assert derived_candidates["detail_policy"] == "summary_bounded"
+    assert (root / "backtest_candidates.json").stat().st_size < 32_000
+    for derived_candidate in derived_candidates["candidates"]:
+        assert derived_candidate["derived_detail_policy"] == "summary_bounded"
+        assert "decisions" not in derived_candidate
+        assert "equity_curve" not in derived_candidate
+        for scenario in derived_candidate["scenario_results"]:
+            assert scenario["train_equity_curve"] == []
+            assert scenario["validation_equity_curve"] == []
+            assert scenario["final_holdout_equity_curve"] == []
+            assert scenario.get("equity_curve_hash") or scenario.get("retained_detail_summary")
+    for candidate_result_path in candidate_result_paths:
+        candidate_result = json.loads(candidate_result_path.read_text(encoding="utf-8"))
+        assert candidate_result_path.stat().st_size < 32_000
+        assert candidate_result["candidate_result_detail_policy"] == "summary_bounded"
+        assert "decisions" not in candidate_result
+        assert "equity_curve" not in candidate_result
+        assert candidate_result.get("candidate_profile_hash")
+        for scenario in candidate_result["scenario_results"]:
+            assert scenario["train_equity_curve"] == []
+            assert scenario["validation_equity_curve"] == []
+            assert scenario["final_holdout_equity_curve"] == []
+            assert scenario.get("behavior_hash") or scenario.get("scenario_payload_hash")
+            assert scenario.get("equity_curve_hash") or scenario.get("retained_detail_summary")
     failures = list((root / "candidate_failures").glob("candidate_*.json"))
     assert failures
     failed = [candidate for candidate in persisted["candidates"] if candidate.get("failure_artifact_path")]
@@ -4516,6 +4579,48 @@ def test_research_backtest_audit_budget_overage_fails_fast_in_pipeline(tmp_path,
     assert failure["observed"] > 100
     assert failure["limit"] == 100
     assert failure["path"]
+    assert "attempted_write_bytes" in failure
+    assert "prior_total_bytes" in failure
+    assert "next_total_bytes" in failure
+
+
+def test_artifact_budget_failure_writes_minimal_failure_artifact(tmp_path, monkeypatch) -> None:
+    for key in ("ENV_ROOT", "RUN_ROOT", "DATA_ROOT", "LOG_ROOT", "BACKUP_ROOT", "ARCHIVE_ROOT"):
+        monkeypatch.setenv(key, str(tmp_path / f"{key.lower()}_root"))
+    monkeypatch.setenv("MODE", "paper")
+    manager = PathManager.from_env(Path.cwd())
+    manifest_payload = _manifest()
+    manifest_payload["experiment_id"] = "budget_failure_payload"
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    exc = ArtifactBudgetExceeded(
+        reason="artifact_budget_max_artifact_bytes_exceeded",
+        limit=100,
+        path=manager.data_dir() / "derived" / "research" / "budget_failure_payload" / "candidate_results" / "candidate_001.json",
+        attempted_write_bytes=64,
+        prior_total_bytes=80,
+        next_total_bytes=144,
+        overwrite_existing_path=False,
+    )
+
+    payload = research_cli._write_artifact_budget_failure_payload(
+        manager=manager,
+        manifest_path=str(manifest_path),
+        exc=exc,
+    )
+
+    failure_path = manager.data_dir() / "reports" / "research" / "budget_failure_payload" / "artifact_budget_failure.json"
+    persisted = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert payload == persisted
+    assert persisted["status"] == "ARTIFACT_BUDGET_EXCEEDED"
+    assert persisted["reason"] == "artifact_budget_max_artifact_bytes_exceeded"
+    assert persisted["path"].endswith("candidate_001.json")
+    assert persisted["attempted_write_bytes"] == 64
+    assert persisted["prior_total_bytes"] == 80
+    assert persisted["next_total_bytes"] == 144
+    assert persisted["limit"] == 100
+    assert Path(persisted["failure_artifact_path"]).resolve() == failure_path.resolve()
+    assert not PathManager._is_within(failure_path.resolve(), Path.cwd().resolve())
 
 
 @pytest.mark.audit_e2e
