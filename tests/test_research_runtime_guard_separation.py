@@ -6,7 +6,7 @@ from pathlib import Path
 from bithumb_bot.research.experiment_manifest import parse_manifest
 from bithumb_bot.research.executor import ResearchWorkResult
 from bithumb_bot.research.validation_protocol import EvaluationContext, run_research_backtest
-from tests.factories.research_reports import minimal_candidate_base_result
+from tests.factories.research_reports import assert_fast_research_workload, minimal_candidate_base_result
 from tests.test_research_backtest_reproducibility import _create_db, _manifest, _research_manager
 
 
@@ -62,13 +62,15 @@ def _run_runtime_limit_report(tmp_path, monkeypatch) -> dict[str, object]:
     payload = _manifest()
     payload["experiment_id"] = "runtime_guard_separation"
     payload["research_run"] = {"report_detail": "summary", "execution": {"mode": "serial"}}
-    return run_research_backtest(
+    report = run_research_backtest(
         manifest=parse_manifest(payload),
         db_path=db_path,
         manager=_research_manager(tmp_path, monkeypatch),
         generated_at="2026-05-03T00:00:00+00:00",
         candidate_evaluator=RuntimeLimitEvaluator(),
     )
+    assert_fast_research_workload(report)
+    return report
 
 
 def test_work_unit_runtime_guard_is_recorded_separately_from_candidate_profile_hash(tmp_path, monkeypatch) -> None:

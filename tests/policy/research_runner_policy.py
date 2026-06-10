@@ -54,6 +54,7 @@ RESEARCH_EXECUTION_ENTRYPOINTS = PRODUCTION_RESEARCH_ENTRYPOINTS | REAL_KERNEL_E
 APPROVED_CONTRACT_HELPERS = {
     "_run_contract_research_backtest",
     "_run_contract_research_walk_forward",
+    "_run_runtime_limit_report",
 }
 
 # These helpers are production-path wrappers for fast-tier runtime guard
