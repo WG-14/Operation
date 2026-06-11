@@ -286,6 +286,8 @@ class DecisionPayloadBuilder:
         slippage_model_hash = _context_hash(canonical_context, "slippage_model_hash")
         candidate_profile_hash = _context_hash(canonical_context, "candidate_profile_hash")
         parameter_values_hash = _context_hash(canonical_context, "parameter_values_hash")
+        fee_authority_hash = _context_hash(canonical_context, "fee_authority_hash")
+        order_rules_hash = _context_hash(canonical_context, "order_rules_hash")
         active_exit_policy_config_hash = _context_hash(
             canonical_context,
             "active_exit_policy_config_hash",
@@ -313,6 +315,8 @@ class DecisionPayloadBuilder:
             slippage_model_hash=slippage_model_hash,
             candidate_profile_hash=candidate_profile_hash,
             parameter_values_hash=parameter_values_hash,
+            fee_authority_hash=fee_authority_hash,
+            order_rules_hash=order_rules_hash,
             candle_ts=event.candle_ts,
             decision_ts=decision_boundary_ts,
             raw_signal=raw_signal,

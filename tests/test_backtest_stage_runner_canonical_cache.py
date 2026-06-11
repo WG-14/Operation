@@ -61,14 +61,56 @@ def test_full_canonical_reuses_invariant_hashes_outside_tick_loop(monkeypatch) -
     assert labels.count("invariant_slippage_model") == 1
     assert labels.count("invariant_parameter_values") == 1
     assert labels.count("invariant_candidate_profile") == 1
+    assert labels.count("invariant_order_rules") == 1
+    assert labels.count("invariant_fee_authority") == 1
     assert labels.count("full_payload_execution_timing_policy_fallback") == 0
     assert labels.count("full_payload_fee_model_fallback") == 0
     assert labels.count("full_payload_slippage_model_fallback") == 0
     assert labels.count("full_payload_parameter_values_fallback") == 0
     assert labels.count("full_payload_candidate_profile_fallback") == 0
+    assert labels.count("full_payload_order_rules_fallback") == 0
+    assert labels.count("full_payload_fee_authority_fallback") == 0
     assert isinstance(result.decisions[0]["strategy_spec"], dict)
     assert isinstance(result.decisions[0]["strategy_plugin_contract"], dict)
     assert result.decisions[0]["candidate_profile_hash"].startswith("sha256:")
+
+
+def test_full_canonical_reuses_order_rules_and_fee_authority_hashes_outside_tick_loop(monkeypatch) -> None:
+    from bithumb_bot.research import backtest_common, backtest_stage_runner
+
+    labels: list[str] = []
+    real_stage_hash = backtest_stage_runner.canonical_payload_hash
+    real_common_hash = backtest_common.canonical_payload_hash
+
+    def stage_spy(value, *, label="canonical_payload"):  # type: ignore[no-untyped-def]
+        labels.append(str(label))
+        return real_stage_hash(value, label=label)
+
+    def common_spy(value, *, label="canonical_payload"):  # type: ignore[no-untyped-def]
+        labels.append(str(label))
+        return real_common_hash(value, label=label)
+
+    monkeypatch.setattr(backtest_stage_runner, "canonical_payload_hash", stage_spy)
+    monkeypatch.setattr(backtest_common, "canonical_payload_hash", common_spy)
+
+    result = _run(context=BacktestRunContext(report_detail="full"), count=5)
+
+    assert result.resource_usage["canonical_evidence_policy"] == "full_tick_canonical"
+    assert labels.count("invariant_order_rules") == 1
+    assert labels.count("invariant_fee_authority") == 1
+    assert labels.count("full_payload_order_rules_fallback") == 0
+    assert labels.count("full_payload_fee_authority_fallback") == 0
+
+    decision = result.decisions[0]
+    position_authority = decision["position_authority"]
+
+    assert isinstance(decision["strategy_spec"], dict)
+    assert isinstance(decision["strategy_plugin_contract"], dict)
+    assert str(decision["order_rules_hash"]).startswith("sha256:")
+    assert str(decision["fee_authority_hash"]).startswith("sha256:")
+    assert isinstance(position_authority, dict)
+    assert position_authority["order_rules_hash"] == decision["order_rules_hash"]
+    assert position_authority["fee_authority_hash"] == decision["fee_authority_hash"]
 
 
 def test_full_canonical_keeps_tick_variant_hashes_per_tick(monkeypatch) -> None:

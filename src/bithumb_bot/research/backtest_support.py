@@ -743,6 +743,11 @@ def research_decision_payload(*args: Any, **kwargs: Any) -> dict[str, object]:
     return impl(*args, **kwargs)
 
 
+def research_order_rules_payload(*args: Any, **kwargs: Any) -> dict[str, object]:
+    from .backtest_common import research_order_rules_payload as impl
+    return impl(*args, **kwargs)
+
+
 def model_latency_ms(*args: Any, **kwargs: Any) -> int:
     from .backtest_common import model_latency_ms as impl
     return impl(*args, **kwargs)

@@ -68,6 +68,8 @@ class BacktestCanonicalContext:
     empty_fill_hash: str
     flat_position_state_hash: str
     empty_order_rules_hash: str
+    order_rules_hash: str
+    fee_authority_hash: str
     fee_model_hash: str
     slippage_model_hash: str
     candidate_profile_hash: str
@@ -708,6 +710,11 @@ def run_stage_owned_decision_event_backtest(
         ).ticks
 
     dataset_content_hash = dataset.content_hash()
+    order_rules_payload = support.research_order_rules_payload(
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        portfolio_policy=policy,
+    )
     canonical_context = BacktestCanonicalContext(
         dataset_content_hash=dataset_content_hash,
         strategy_spec_hash=strategy_spec.spec_hash(),
@@ -724,6 +731,11 @@ def run_stage_owned_decision_event_backtest(
             label="invariant_flat_position_state",
         ),
         empty_order_rules_hash=canonical_payload_hash({}, label="invariant_empty_order_rules"),
+        order_rules_hash=canonical_payload_hash(order_rules_payload, label="invariant_order_rules"),
+        fee_authority_hash=canonical_payload_hash(
+            {"source": "research_manifest", "fee_rate": float(fee_rate)},
+            label="invariant_fee_authority",
+        ),
         fee_model_hash=canonical_payload_hash({"fee_rate": float(fee_rate)}, label="invariant_fee_model"),
         slippage_model_hash=canonical_payload_hash(
             {"slippage_bps": float(slippage_bps)},

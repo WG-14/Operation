@@ -466,22 +466,24 @@ def _research_decision_payload(
     slippage_model_hash: str = "",
     candidate_profile_hash: str = "",
     parameter_values_hash: str = "",
+    fee_authority_hash: str = "",
+    order_rules_hash: str = "",
 ) -> dict[str, object]:
     from bithumb_bot.research.lot_native_simulation import lot_native_model_from_quantities
 
-    order_rules = {
-        "source": "research_execution_model",
-        "fee_rate": float(fee_rate),
-        "slippage_bps": float(slippage_bps),
-        "portfolio_policy_hash": portfolio_policy.policy_hash(),
-        "position_sizing": portfolio_policy.position_sizing.as_dict(),
-        "sizing": (
-            f"cash_fraction_{portfolio_policy.position_sizing.buy_fraction:g}"
-            "_or_full_sellable_qty"
-        ),
-    }
-    fee_authority_hash = canonical_payload_hash({"source": "research_manifest", "fee_rate": float(fee_rate)})
-    order_rules_hash = canonical_payload_hash(order_rules)
+    order_rules = research_order_rules_payload(
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        portfolio_policy=portfolio_policy,
+    )
+    fee_authority_hash = str(fee_authority_hash or "").strip() or canonical_payload_hash(
+        {"source": "research_manifest", "fee_rate": float(fee_rate)},
+        label="full_payload_fee_authority_fallback",
+    )
+    order_rules_hash = str(order_rules_hash or "").strip() or canonical_payload_hash(
+        order_rules,
+        label="full_payload_order_rules_fallback",
+    )
     fee_model_hash = str(fee_model_hash or "").strip() or canonical_payload_hash(
         {"fee_rate": float(fee_rate)},
         label="full_payload_fee_model_fallback",
@@ -628,6 +630,25 @@ def _research_decision_payload(
         legacy_authority.as_dict() if legacy_authority is not None else lot_native_authority.as_dict()
     )
     return payload
+
+
+def research_order_rules_payload(
+    *,
+    fee_rate: float,
+    slippage_bps: float,
+    portfolio_policy: PortfolioPolicy,
+) -> dict[str, object]:
+    return {
+        "source": "research_execution_model",
+        "fee_rate": float(fee_rate),
+        "slippage_bps": float(slippage_bps),
+        "portfolio_policy_hash": portfolio_policy.policy_hash(),
+        "position_sizing": portfolio_policy.position_sizing.as_dict(),
+        "sizing": (
+            f"cash_fraction_{portfolio_policy.position_sizing.buy_fraction:g}"
+            "_or_full_sellable_qty"
+        ),
+    }
 
 
 def _model_latency_ms(model: ExecutionModel) -> int:
