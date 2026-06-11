@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from types import SimpleNamespace
+
 import pytest
 
 from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
@@ -14,6 +17,7 @@ from bithumb_bot.strategy_plugins.channel_breakout_research import (
     CHANNEL_BREAKOUT_COMPLEXITY_METADATA,
     CHANNEL_BREAKOUT_SPEC,
     CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN,
+    _candle_utc_day_key,
     build_channel_breakout_research_events,
     decide_channel_breakout_snapshot,
     materialize_channel_breakout_parameters,
@@ -57,6 +61,54 @@ def _materialized(**overrides: object) -> dict[str, object]:
         parameter_values=_params(**overrides),
         fee_rate=0.001,
         slippage_bps=0.0,
+    )
+
+
+def _events(dataset: DatasetSnapshot, params: dict[str, object]):
+    return build_channel_breakout_research_events(
+        dataset=dataset,
+        parameter_values=params,
+        fee_rate=0.001,
+        slippage_bps=0.0,
+        execution_timing_policy=ExecutionTimingPolicy(decision_guard_ms=0),
+        portfolio_policy=legacy_research_portfolio_policy(),
+    )
+
+
+def _breakout_confirmation_dataset(
+    *,
+    confirmation_close: float = 108.0,
+    confirmation_low: float = 104.0,
+    extra_confirming_candle: bool = False,
+) -> DatasetSnapshot:
+    candles = (
+        Candle(0, 100.0, 101.0, 99.0, 100.0, 100.0),
+        Candle(60_000, 101.0, 102.0, 100.0, 101.0, 100.0),
+        Candle(120_000, 102.0, 103.0, 101.0, 102.0, 100.0),
+        Candle(180_000, 103.0, 104.0, 102.0, 103.0, 100.0),
+        Candle(240_000, 104.0, 110.0, 103.0, 109.0, 160.0),
+        Candle(300_000, 109.0, 109.5, confirmation_low, confirmation_close, 160.0),
+    )
+    if extra_confirming_candle:
+        candles = (
+            *candles,
+            Candle(360_000, 108.0, 109.5, 104.0, 108.5, 160.0),
+        )
+    return _dataset(candles)
+
+
+def _repeated_breakout_dataset(*, second_day: bool = False) -> DatasetSnapshot:
+    base_second_ts = 86_400_000 if second_day else 300_000
+    return _dataset(
+        (
+            Candle(0, 100.0, 101.0, 99.0, 100.0, 100.0),
+            Candle(60_000, 101.0, 102.0, 100.0, 101.0, 100.0),
+            Candle(120_000, 102.0, 103.0, 101.0, 102.0, 100.0),
+            Candle(180_000, 103.0, 104.0, 102.0, 103.0, 100.0),
+            Candle(240_000, 104.0, 109.0, 108.0, 109.0, 200.0),
+            Candle(base_second_ts, 109.0, 110.0, 109.0, 110.0, 200.0),
+            Candle(base_second_ts + 60_000, 110.0, 111.0, 110.0, 111.0, 200.0),
+        )
     )
 
 
@@ -162,7 +214,6 @@ def test_new_entry_mode_is_behavior_affecting_parameter() -> None:
     "entry_mode",
     [
         "pullback_after_breakout",
-        "delayed_confirmation",
         "contrarian_after_exhaustion",
     ],
 )
@@ -173,6 +224,17 @@ def test_channel_breakout_unsupported_entry_mode_fails_fast(entry_mode: str) -> 
             CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
             ENTRY_MODE=entry_mode,
         )
+
+
+def test_delayed_confirmation_entry_mode_is_supported() -> None:
+    values = _materialized(ENTRY_MODE="delayed_confirmation")
+
+    assert values["ENTRY_MODE"] == "delayed_confirmation"
+
+
+def test_unknown_entry_mode_fails_fast() -> None:
+    with pytest.raises(StrategySpecError):
+        _materialized(ENTRY_MODE="unknown_value")
 
 
 def test_channel_breakout_emits_diagnostic_count_defaults() -> None:
@@ -271,6 +333,182 @@ def test_current_candle_high_is_not_in_rolling_high() -> None:
     assert decision["feature_snapshot"]["rolling_high"] != 120.0
     assert decision["signal"] == "HOLD"
     assert "close_not_above_rolling_high" in decision["feature_snapshot"]["blocked_filters"]
+
+
+def test_delayed_confirmation_candidate_candle_holds() -> None:
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    events = _events(dataset, params)
+    candidate = events[4]
+
+    assert candidate.final_signal == "HOLD"
+    assert candidate.reason == "breakout_pending_confirmation"
+    assert candidate.order_intent is None
+    assert candidate.feature_snapshot["breakout_candidate"] is True
+    assert candidate.feature_snapshot["confirmation_status"] == "candidate"
+
+
+def test_delayed_confirmation_confirms_within_window_and_buys() -> None:
+    dataset = _breakout_confirmation_dataset(extra_confirming_candle=True)
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    events = _events(dataset, params)
+    confirmed = events[5]
+
+    assert confirmed.final_signal == "BUY"
+    assert confirmed.reason == "delayed_breakout_confirmed"
+    assert confirmed.order_intent == {"side": "BUY", "sizing": "portfolio_policy_fractional_cash"}
+    assert confirmed.feature_snapshot["entry_mode"] == "delayed_confirmation"
+    assert confirmed.feature_snapshot["confirmation_status"] == "confirmed"
+    assert events[6].final_signal == "HOLD"
+
+
+def test_delayed_confirmation_expires_without_buy() -> None:
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=0,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert events[4].final_signal == "HOLD"
+    assert events[5].final_signal == "HOLD"
+    assert events[5].reason == "breakout_confirmation_expired"
+    assert all(event.final_signal != "BUY" for event in events)
+
+
+def test_delayed_confirmation_deep_retest_fails_without_buy() -> None:
+    dataset = _breakout_confirmation_dataset(confirmation_close=108.0, confirmation_low=100.0)
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert events[5].final_signal == "HOLD"
+    assert events[5].reason == "breakout_confirmation_failed_deep_retest"
+    assert events[5].feature_snapshot["confirmation_status"] == "failed_deep_retest"
+    assert all(event.final_signal != "BUY" for event in events)
+
+
+def test_delayed_confirmation_pending_snapshot_contains_breakout_metadata() -> None:
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=2,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    event = _events(dataset, params)[4]
+
+    assert event.feature_snapshot["entry_mode"] == "delayed_confirmation"
+    assert event.feature_snapshot["breakout_level"] == 104.0
+    assert event.feature_snapshot["breakout_index"] == 4
+    assert event.feature_snapshot["confirmation_window_min"] == 2
+    assert event.feature_snapshot["pending_expires_at_index"] == 6
+    assert event.strategy_diagnostics["confirmation_status"] == "candidate"
+
+
+def test_delayed_confirmation_confirmed_reason_is_emitted() -> None:
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    assert _events(dataset, params)[5].reason == "delayed_breakout_confirmed"
+
+
+def test_delayed_confirmation_expired_reason_is_emitted() -> None:
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=0,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    assert _events(dataset, params)[5].reason == "breakout_confirmation_expired"
+
+
+def test_delayed_confirmation_deep_retest_failure_reason_is_emitted() -> None:
+    dataset = _breakout_confirmation_dataset(confirmation_close=108.0, confirmation_low=100.0)
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    assert _events(dataset, params)[5].reason == "breakout_confirmation_failed_deep_retest"
+
+
+def test_delayed_confirmation_regime_failure_reason_is_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    import bithumb_bot.strategy_plugins.channel_breakout_research as module
+
+    dataset = _breakout_confirmation_dataset()
+    params = _materialized(
+        ENTRY_MODE="delayed_confirmation",
+        CONFIRMATION_WINDOW_MIN=1,
+        PULLBACK_RATIO=0.02,
+        CHANNEL_BREAKOUT_REGIME_FILTER_ENABLED=True,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=1.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=1.0,
+    )
+
+    def fake_regime(*, index: int, **_: object):
+        price_regime = "downtrend" if index == 5 else "uptrend"
+        return SimpleNamespace(
+            price_regime=price_regime,
+            volatility_bucket="normal",
+            volume_bucket="normal",
+            liquidity_bucket="normal",
+            composite_regime=price_regime,
+            legacy_regime="trend",
+        )
+
+    monkeypatch.setattr(module, "classify_market_regime_from_arrays", fake_regime)
+
+    event = module.build_channel_breakout_research_events(
+        dataset=dataset,
+        parameter_values=params,
+        fee_rate=0.001,
+        slippage_bps=0.0,
+        execution_timing_policy=ExecutionTimingPolicy(decision_guard_ms=0),
+        portfolio_policy=legacy_research_portfolio_policy(),
+    )[5]
+
+    assert event.final_signal == "HOLD"
+    assert event.reason == "breakout_confirmation_failed_regime"
+    assert event.feature_snapshot["confirmation_status"] == "failed_regime"
 
 
 @pytest.mark.parametrize(
@@ -527,6 +765,85 @@ def test_event_builder_emits_required_event_fields() -> None:
     assert event.strategy_diagnostics["regime_filter_enabled"] is False
 
 
+def test_cooldown_blocks_buy_until_window_elapses() -> None:
+    dataset = _repeated_breakout_dataset()
+    params = _materialized(
+        COOLDOWN_MIN=2,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=0.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=0.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert events[4].final_signal == "BUY"
+    assert events[5].final_signal == "HOLD"
+    assert "cooldown_active" in events[5].blocked_filters
+    assert events[6].final_signal == "BUY"
+
+
+def test_zero_cooldown_preserves_existing_behavior() -> None:
+    dataset = _repeated_breakout_dataset()
+    params = _materialized(
+        COOLDOWN_MIN=0,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=0.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=0.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert [event.final_signal for event in events[4:7]] == ["BUY", "BUY", "BUY"]
+
+
+def test_max_trades_per_day_blocks_after_limit() -> None:
+    dataset = _repeated_breakout_dataset()
+    params = _materialized(
+        MAX_TRADES_PER_DAY=1,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=0.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=0.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert events[4].final_signal == "BUY"
+    assert events[5].final_signal == "HOLD"
+    assert "max_trades_per_day_reached" in events[5].blocked_filters
+    assert events[6].final_signal == "HOLD"
+    assert "max_trades_per_day_reached" in events[6].blocked_filters
+
+
+def test_zero_max_trades_per_day_preserves_existing_behavior() -> None:
+    dataset = _repeated_breakout_dataset()
+    params = _materialized(
+        MAX_TRADES_PER_DAY=0,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=0.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=0.0,
+    )
+
+    events = _events(dataset, params)
+
+    assert [event.final_signal for event in events[4:7]] == ["BUY", "BUY", "BUY"]
+
+
+def test_cooldown_state_resets_between_backtest_event_builder_calls() -> None:
+    dataset = _repeated_breakout_dataset()
+    params = _materialized(
+        COOLDOWN_MIN=10,
+        CHANNEL_BREAKOUT_RANGE_RATIO_MIN=0.0,
+        CHANNEL_BREAKOUT_VOLUME_RATIO_MIN=0.0,
+    )
+
+    first = _events(dataset, params)
+    second = _events(dataset, params)
+
+    assert first[4].final_signal == "BUY"
+    assert second[4].final_signal == "BUY"
+
+
+def test_candle_utc_day_key_uses_candle_timestamp_only() -> None:
+    assert _candle_utc_day_key(Candle(86_399_999, 1.0, 1.0, 1.0, 1.0, 1.0)) == "1970-01-01"
+    assert _candle_utc_day_key(Candle(86_400_000, 1.0, 1.0, 1.0, 1.0, 1.0)) == "1970-01-02"
+
+
 def test_decide_snapshot_accepts_precomputed_arrays() -> None:
     dataset = _dataset()
     params = _materialized(
@@ -639,6 +956,23 @@ def test_channel_breakout_declares_linear_complexity() -> None:
         getattr(CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN, "complexity_metadata")
         == CHANNEL_BREAKOUT_COMPLEXITY_METADATA
     )
+
+
+def test_channel_breakout_complexity_metadata_declares_precomputed_ohlcv() -> None:
+    assert CHANNEL_BREAKOUT_COMPLEXITY_METADATA["complexity_class"] == "linear_precomputed_ohlcv"
+    assert CHANNEL_BREAKOUT_COMPLEXITY_METADATA["precompute_path"] == "prepare_channel_breakout_context"
+
+
+def test_delayed_confirmation_uses_causal_pending_state_without_future_candle_access() -> None:
+    import bithumb_bot.strategy_plugins.channel_breakout_research as module
+
+    source = inspect.getsource(module.build_channel_breakout_research_events)
+
+    assert "prepare_channel_breakout_context(dataset)" in source
+    assert "BreakoutPendingState()" in source
+    assert "tuple(dataset.candles)" not in source
+    assert "list(dataset.candles)" not in source
+    assert "_apply_delayed_confirmation_state" in source
 
 
 _REQUIRED_FEATURE_FIELDS = {

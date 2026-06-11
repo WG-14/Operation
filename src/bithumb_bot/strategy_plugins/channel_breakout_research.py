@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from statistics import fmean
+from time import gmtime, strftime
 from typing import Any
 
 from bithumb_bot.market_regime import classify_market_regime_from_arrays
@@ -21,6 +23,7 @@ from bithumb_bot.strategy_authoring import research_plugin_from_event_builder
 
 
 CHANNEL_BREAKOUT_STRATEGY_NAME = "channel_breakout_with_regime_filter"
+_SUPPORTED_ENTRY_MODES = frozenset({"immediate_breakout", "delayed_confirmation"})
 
 CHANNEL_BREAKOUT_COMPLEXITY_METADATA = {
     "schema_version": 1,
@@ -152,6 +155,15 @@ CHANNEL_BREAKOUT_SPEC = StrategySpec(
 )
 
 
+@dataclass
+class BreakoutPendingState:
+    active: bool = False
+    breakout_index: int = -1
+    breakout_level: float = 0.0
+    breakout_close: float = 0.0
+    expires_at_index: int = -1
+
+
 def materialize_channel_breakout_parameters(
     *,
     plugin: ResearchStrategyPlugin,
@@ -196,16 +208,13 @@ def decide_channel_breakout_snapshot(
     lows: tuple[float, ...] | None = None,
     volumes: tuple[float, ...] | None = None,
 ) -> dict[str, Any]:
-    if candles is None:
-        candles = tuple(dataset.candles)
-    if closes is None:
-        closes = tuple(float(item.close) for item in candles)
-    if highs is None:
-        highs = tuple(float(item.high) for item in candles)
-    if lows is None:
-        lows = tuple(float(item.low) for item in candles)
-    if volumes is None:
-        volumes = tuple(float(item.volume) for item in candles)
+    if candles is None or closes is None or highs is None or lows is None or volumes is None:
+        prepared = prepare_channel_breakout_context(dataset)
+        candles = prepared.candles
+        closes = prepared.closes
+        highs = prepared.highs
+        lows = prepared.lows
+        volumes = prepared.volumes
     lookback = int(parameter_values["CHANNEL_BREAKOUT_LOOKBACK"])
     range_window = int(parameter_values["CHANNEL_BREAKOUT_RANGE_WINDOW"])
     volume_window = int(parameter_values["CHANNEL_BREAKOUT_VOLUME_WINDOW"])
@@ -292,10 +301,14 @@ def decide_channel_breakout_snapshot(
         if regime.legacy_regime == "chop" or regime.price_regime == "sideways":
             blocked_filters.append("chop_regime")
 
-    blocked = tuple(blocked_filters)
     entry_mode = _validate_supported_entry_mode(parameter_values.get("ENTRY_MODE"))
     blocked = tuple(blocked_filters)
-    signal = "BUY" if not blocked else "HOLD"
+    signal = "BUY" if entry_mode == "immediate_breakout" and not blocked else "HOLD"
+    confirmation_status = "not_applicable"
+    reason = "channel_breakout_confirmed" if signal == "BUY" else "channel_breakout_blocked"
+    if entry_mode == "delayed_confirmation":
+        confirmation_status = "candidate" if not blocked else "blocked"
+        reason = "breakout_pending_confirmation" if not blocked else "channel_breakout_blocked"
     feature_snapshot = {
         "schema_version": 1,
         "candle_index": int(candle_index),
@@ -315,15 +328,33 @@ def decide_channel_breakout_snapshot(
         "composite_regime": regime.composite_regime,
         "blocked_filters": blocked,
     }
+    if entry_mode == "delayed_confirmation":
+        feature_snapshot.update(
+            {
+                "entry_mode": "delayed_confirmation",
+                "breakout_candidate": not blocked,
+                "breakout_pending": not blocked,
+                "breakout_level": float(rolling_high) if not blocked else 0.0,
+                "breakout_index": int(candle_index) if not blocked else -1,
+                "confirmation_window_min": int(parameter_values["CONFIRMATION_WINDOW_MIN"]),
+                "pending_expires_at_index": (
+                    int(candle_index) + int(parameter_values["CONFIRMATION_WINDOW_MIN"])
+                    if not blocked
+                    else -1
+                ),
+                "confirmation_status": confirmation_status,
+            }
+        )
     decision = {
         "signal": signal,
-        "reason": "channel_breakout_confirmed" if signal == "BUY" else "channel_breakout_blocked",
+        "reason": reason,
         "feature_snapshot": feature_snapshot,
         "strategy_diagnostics": {
             "schema_version": 1,
             "blocked_filters": blocked,
             "regime_filter_enabled": regime_filter_enabled,
             "entry_mode": entry_mode,
+            "confirmation_status": confirmation_status,
         },
     }
     if signal == "BUY":
@@ -351,6 +382,10 @@ def build_channel_breakout_research_events(
     del fee_rate, slippage_bps, portfolio_policy, context
     prepared = prepare_channel_breakout_context(dataset)
     candles = prepared.candles
+    entry_mode = _validate_supported_entry_mode(parameter_values.get("ENTRY_MODE"))
+    pending = BreakoutPendingState()
+    last_buy_index: int | None = None
+    trade_count_by_day: dict[str, int] = {}
     events: list[ResearchDecisionEvent] = []
     for candle_index, candle in enumerate(candles):
         decision = decide_channel_breakout_snapshot(
@@ -363,6 +398,22 @@ def build_channel_breakout_research_events(
             highs=prepared.highs,
             lows=prepared.lows,
             volumes=prepared.volumes,
+        )
+        if entry_mode == "delayed_confirmation":
+            decision = _apply_delayed_confirmation_state(
+                decision=decision,
+                candle=candle,
+                candle_index=candle_index,
+                parameter_values=parameter_values,
+                pending=pending,
+            )
+        decision = _apply_buy_limits(
+            decision=decision,
+            candle=candle,
+            candle_index=candle_index,
+            parameter_values=parameter_values,
+            last_buy_index=last_buy_index,
+            trade_count_by_day=trade_count_by_day,
         )
         signal = str(decision.get("signal") or "HOLD").upper()
         feature_snapshot = dict(decision.get("feature_snapshot") or {})
@@ -397,6 +448,10 @@ def build_channel_breakout_research_events(
                 extra_payload={"strategy_family": "channel_breakout", "research_only": True},
             )
         )
+        if signal == "BUY":
+            last_buy_index = int(candle_index)
+            day_key = _candle_utc_day_key(candle)
+            trade_count_by_day[day_key] = trade_count_by_day.get(day_key, 0) + 1
     return tuple(events)
 
 
@@ -414,12 +469,187 @@ def _normalize_exit_rules(raw: object) -> tuple[str, ...]:
 
 def _validate_supported_entry_mode(raw: object) -> str:
     entry_mode = str(raw or "immediate_breakout").strip()
-    if entry_mode != "immediate_breakout":
+    if entry_mode not in _SUPPORTED_ENTRY_MODES:
         raise StrategySpecError(
             "ENTRY_MODE unsupported for channel_breakout_with_regime_filter: "
-            f"{entry_mode}; supported entry modes: immediate_breakout"
+            f"{entry_mode}; supported entry modes: {','.join(sorted(_SUPPORTED_ENTRY_MODES))}"
         )
     return entry_mode
+
+
+def _apply_delayed_confirmation_state(
+    *,
+    decision: dict[str, Any],
+    candle: Candle,
+    candle_index: int,
+    parameter_values: dict[str, Any],
+    pending: BreakoutPendingState,
+) -> dict[str, Any]:
+    if pending.active and int(candle_index) > pending.breakout_index:
+        return _evaluate_pending_confirmation(
+            decision=decision,
+            candle=candle,
+            candle_index=candle_index,
+            parameter_values=parameter_values,
+            pending=pending,
+        )
+    feature_snapshot = dict(decision.get("feature_snapshot") or {})
+    if bool(feature_snapshot.get("breakout_candidate")):
+        pending.active = True
+        pending.breakout_index = int(candle_index)
+        pending.breakout_level = float(feature_snapshot["breakout_level"])
+        pending.breakout_close = float(feature_snapshot["close"])
+        pending.expires_at_index = int(feature_snapshot["pending_expires_at_index"])
+    return decision
+
+
+def _evaluate_pending_confirmation(
+    *,
+    decision: dict[str, Any],
+    candle: Candle,
+    candle_index: int,
+    parameter_values: dict[str, Any],
+    pending: BreakoutPendingState,
+) -> dict[str, Any]:
+    if int(candle_index) > int(pending.expires_at_index):
+        return _delayed_confirmation_decision(
+            base_decision=decision,
+            pending=pending,
+            signal="HOLD",
+            reason="breakout_confirmation_expired",
+            confirmation_status="expired",
+            clear_pending=True,
+        )
+    close = float(candle.close)
+    low = float(candle.low)
+    pullback_ratio = float(parameter_values["PULLBACK_RATIO"])
+    if close <= pending.breakout_level:
+        return _delayed_confirmation_decision(
+            base_decision=decision,
+            pending=pending,
+            signal="HOLD",
+            reason="breakout_confirmation_failed_close_below_level",
+            confirmation_status="failed_close_below_level",
+            clear_pending=True,
+        )
+    if low < pending.breakout_level * (1.0 - pullback_ratio):
+        return _delayed_confirmation_decision(
+            base_decision=decision,
+            pending=pending,
+            signal="HOLD",
+            reason="breakout_confirmation_failed_deep_retest",
+            confirmation_status="failed_deep_retest",
+            clear_pending=True,
+        )
+    blocked_filters = tuple(str(item) for item in (decision.get("feature_snapshot") or {}).get("blocked_filters") or ())
+    if "downtrend_regime" in blocked_filters or "chop_regime" in blocked_filters:
+        return _delayed_confirmation_decision(
+            base_decision=decision,
+            pending=pending,
+            signal="HOLD",
+            reason="breakout_confirmation_failed_regime",
+            confirmation_status="failed_regime",
+            clear_pending=True,
+        )
+    return _delayed_confirmation_decision(
+        base_decision=decision,
+        pending=pending,
+        signal="BUY",
+        reason="delayed_breakout_confirmed",
+        confirmation_status="confirmed",
+        clear_pending=True,
+    )
+
+
+def _delayed_confirmation_decision(
+    *,
+    base_decision: dict[str, Any],
+    pending: BreakoutPendingState,
+    signal: str,
+    reason: str,
+    confirmation_status: str,
+    clear_pending: bool,
+) -> dict[str, Any]:
+    decision = dict(base_decision)
+    feature_snapshot = dict(decision.get("feature_snapshot") or {})
+    feature_snapshot.update(
+        {
+            "entry_mode": "delayed_confirmation",
+            "breakout_candidate": False,
+            "breakout_pending": pending.active and not clear_pending,
+            "breakout_level": float(pending.breakout_level),
+            "breakout_index": int(pending.breakout_index),
+            "confirmation_window_min": int(
+                feature_snapshot.get("confirmation_window_min")
+                if feature_snapshot.get("confirmation_window_min") is not None
+                else max(0, int(pending.expires_at_index) - int(pending.breakout_index))
+            ),
+            "pending_expires_at_index": int(pending.expires_at_index),
+            "confirmation_status": confirmation_status,
+        }
+    )
+    diagnostics = dict(decision.get("strategy_diagnostics") or {})
+    diagnostics["entry_mode"] = "delayed_confirmation"
+    diagnostics["confirmation_status"] = confirmation_status
+    decision["signal"] = signal
+    decision["reason"] = reason
+    decision["feature_snapshot"] = feature_snapshot
+    decision["strategy_diagnostics"] = diagnostics
+    if signal == "BUY":
+        decision["order_intent"] = {
+            "side": "BUY",
+            "sizing": "portfolio_policy_fractional_cash",
+        }
+    else:
+        decision.pop("order_intent", None)
+    if clear_pending:
+        pending.active = False
+        pending.breakout_index = -1
+        pending.breakout_level = 0.0
+        pending.breakout_close = 0.0
+        pending.expires_at_index = -1
+    return decision
+
+
+def _apply_buy_limits(
+    *,
+    decision: dict[str, Any],
+    candle: Candle,
+    candle_index: int,
+    parameter_values: dict[str, Any],
+    last_buy_index: int | None,
+    trade_count_by_day: dict[str, int],
+) -> dict[str, Any]:
+    if str(decision.get("signal") or "HOLD").upper() != "BUY":
+        return decision
+    cooldown_min = int(parameter_values["COOLDOWN_MIN"])
+    if last_buy_index is not None and cooldown_min > 0 and int(candle_index) - int(last_buy_index) < cooldown_min:
+        return _blocked_buy_limit_decision(decision=decision, reason="cooldown_active")
+    max_trades_per_day = int(parameter_values["MAX_TRADES_PER_DAY"])
+    day_key = _candle_utc_day_key(candle)
+    if max_trades_per_day > 0 and trade_count_by_day.get(day_key, 0) >= max_trades_per_day:
+        return _blocked_buy_limit_decision(decision=decision, reason="max_trades_per_day_reached")
+    return decision
+
+
+def _blocked_buy_limit_decision(*, decision: dict[str, Any], reason: str) -> dict[str, Any]:
+    blocked = tuple(str(item) for item in (decision.get("feature_snapshot") or {}).get("blocked_filters") or ())
+    blocked = (*blocked, reason)
+    limited = dict(decision)
+    feature_snapshot = dict(limited.get("feature_snapshot") or {})
+    feature_snapshot["blocked_filters"] = blocked
+    diagnostics = dict(limited.get("strategy_diagnostics") or {})
+    diagnostics["blocked_filters"] = blocked
+    limited["signal"] = "HOLD"
+    limited["reason"] = "channel_breakout_blocked"
+    limited["feature_snapshot"] = feature_snapshot
+    limited["strategy_diagnostics"] = diagnostics
+    limited.pop("order_intent", None)
+    return limited
+
+
+def _candle_utc_day_key(candle: Candle) -> str:
+    return strftime("%Y-%m-%d", gmtime(int(candle.ts) // 1000))
 
 
 CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN = research_plugin_from_event_builder(
