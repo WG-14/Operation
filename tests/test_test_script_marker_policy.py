@@ -189,6 +189,8 @@ def test_codex_default_pipeline_preserves_post_push_remote_verify_and_success_no
     notify_index = text.index('notify "bithumb-bot pipeline succeeded"', ssh_index)
 
     assert push_index < remote_index < ssh_index < notify_index
+    assert "remote_verify_exit=0" in text
+    assert "remote_verify_exit=$?" in text
     assert 'echo "[PIPELINE] success"' in text
     assert 'notify "bithumb-bot pipeline failed"' in text
     assert 'exit "${remote_verify_exit}"' in text
