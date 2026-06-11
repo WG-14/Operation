@@ -180,6 +180,20 @@ def test_codex_pipeline_preserves_failure_packet_flow() -> None:
     assert 'codex_input_file="$("${PACKET_SCRIPT}")"' in text
 
 
+def test_codex_default_pipeline_preserves_post_push_remote_verify_and_success_notify() -> None:
+    text = Path("scripts/run_codex_pipeline.sh").read_text(encoding="utf-8")
+
+    push_index = text.index('run_stage "git push" git push')
+    remote_index = text.index('stage="remote EC2 verification"', push_index)
+    ssh_index = text.index('"REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE} bash -s" < "${REMOTE_VERIFY_SCRIPT}"', remote_index)
+    notify_index = text.index('notify "bithumb-bot pipeline succeeded"', ssh_index)
+
+    assert push_index < remote_index < ssh_index < notify_index
+    assert 'echo "[PIPELINE] success"' in text
+    assert 'notify "bithumb-bot pipeline failed"' in text
+    assert 'exit "${remote_verify_exit}"' in text
+
+
 def test_codex_repair_prompt_uses_8_worker_worksteal_wrapper_command() -> None:
     text = Path("scripts/codex_pytest_repair_prompt.md").read_text(encoding="utf-8")
 
