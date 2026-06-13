@@ -1070,6 +1070,7 @@ def _risk_policy() -> dict[str, object]:
     }
 
 
+@pytest.mark.research_e2e
 def test_candidate_detail_notional_uses_manifest_starting_cash(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("BITHUMB_TEST_TIER", raising=False)
     db_path = tmp_path / "candles.sqlite"
@@ -1124,6 +1125,7 @@ def test_portfolio_policy_hash_chain_manifest_work_unit_detail_matches(tmp_path,
     assert base["executed_portfolio_policy_hash"] == report["portfolio_policy_hash"]
 
 
+@pytest.mark.research_e2e
 def test_legacy_missing_manifest_policy_keeps_legacy_990k_detail_evidence(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("BITHUMB_TEST_TIER", raising=False)
     db_path = tmp_path / "candles.sqlite"
@@ -1148,6 +1150,7 @@ def test_legacy_missing_manifest_policy_keeps_legacy_990k_detail_evidence(tmp_pa
     assert abs(float(trade["entry_notional"]) - 990_000.0) < 10_000.0
 
 
+@pytest.mark.research_e2e
 def test_summary_candidate_result_retains_portfolio_policy_evidence(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("BITHUMB_TEST_TIER", raising=False)
     db_path = tmp_path / "candles.sqlite"
@@ -1207,6 +1210,7 @@ class _MismatchedPortfolioPolicyEvaluator(DeterministicResearchEvaluator):
         )
 
 
+@pytest.mark.research_e2e
 def test_candidate_fails_when_executed_portfolio_policy_differs_from_manifest(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "candles.sqlite"
     _create_db(db_path, minutes_per_day=24)

@@ -900,8 +900,10 @@ def _portfolio_policy_evidence(policy: Any) -> dict[str, Any]:
 def _with_portfolio_policy_evidence(run: Any, *, policy: Any) -> Any:
     resource_usage = dict(run.resource_usage or {})
     resource_usage.update(_portfolio_policy_evidence(policy))
-    warnings = tuple(sorted(set(run.warnings) | set(policy.warning_codes())))
-    return replace(run, resource_usage=resource_usage, warnings=warnings)
+    warnings = set(run.warnings)
+    if run.decisions or run.trades or "not_enough_candles" not in warnings:
+        warnings.update(policy.warning_codes())
+    return replace(run, resource_usage=resource_usage, warnings=tuple(sorted(warnings)))
 
 
 def _build_decision_observability_payload(

@@ -718,14 +718,11 @@ def _derived_scenario_index_summary(scenario: Any, *, include_compact: bool = Tr
         "train_behavior_hash",
         "validation_behavior_hash",
         "final_holdout_behavior_hash",
-        "portfolio_policy",
         "portfolio_policy_hash",
         "work_unit_portfolio_policy_hash",
-        "executed_portfolio_policy",
         "executed_portfolio_policy_hash",
         "ledger_starting_cash_krw",
         "ledger_initial_position_qty",
-        "position_sizing_policy",
         "train_executed_portfolio_policy_hash",
         "validation_executed_portfolio_policy_hash",
         "final_holdout_executed_portfolio_policy_hash",
@@ -746,6 +743,7 @@ def _derived_scenario_index_summary(scenario: Any, *, include_compact: bool = Tr
     summary = {key: scenario[key] for key in summary_keys if key in scenario}
     if include_compact:
         _copy_compact_diagnostics(summary, scenario)
+        _drop_repeated_scenario_diagnostics(summary)
     if "resource_guard" in scenario:
         summary["resource_guard"] = _compact_resource_guard(scenario["resource_guard"])
     summary["train_equity_curve"] = []
@@ -1032,16 +1030,26 @@ def summarize_resource_usage_for_candidate_artifact(
         "applied_resource_limits_hash",
         "behavior_hash_material_retention_policy",
         "behavior_hash_material_sample_hash",
+        "behavior_hash_material_count",
+        "behavior_hash_material_sample_count",
         "common_decision_behavior_hash",
+        "common_behavior_hash_material_count",
         "composite_behavior_hash",
         "composite_behavior_hash_v2",
         "decision_behavior_hash",
         "decision_hash",
+        "decision_hash_material_count",
+        "experiment_id",
         "memory_sampling_policy_hash",
+        "report_detail",
         "resource_policy_hash",
         "scenario",
         "candidate_id",
+        "stage_trace_max_retained_traces",
         "stage_trace_mode",
+        "stage_trace_sample_count",
+        "stage_trace_sample_hash",
+        "strategy_behavior_hash_material_count",
         "strategy_behavior_hash",
         "strategy_diagnostics_hash",
         "trade_ledger_hash",
@@ -1068,6 +1076,18 @@ def summarize_resource_usage_for_candidate_artifact(
                     _bounded_collection_evidence(value),
                     label="stage_trace_bounded_evidence_hash",
                 )
+            continue
+        if key == "executed_portfolio_policy" and isinstance(value, dict):
+            summary["executed_portfolio_policy_hash"] = resource_usage.get(
+                "executed_portfolio_policy_hash"
+            ) or sha256_prefixed(value)
+            if value.get("source"):
+                summary["executed_portfolio_policy_source"] = value["source"]
+            continue
+        if key == "position_sizing_policy" and isinstance(value, dict):
+            summary["position_sizing_policy_hash"] = sha256_prefixed(value)
+            if value.get("type"):
+                summary["position_sizing_policy_type"] = value["type"]
             continue
         if isinstance(value, dict):
             summary[key] = summarize_resource_usage_for_candidate_artifact(
@@ -1124,14 +1144,11 @@ def _scenario_result_summary(
         "train_behavior_hash",
         "validation_behavior_hash",
         "final_holdout_behavior_hash",
-        "portfolio_policy",
         "portfolio_policy_hash",
         "work_unit_portfolio_policy_hash",
-        "executed_portfolio_policy",
         "executed_portfolio_policy_hash",
         "ledger_starting_cash_krw",
         "ledger_initial_position_qty",
-        "position_sizing_policy",
         "train_executed_portfolio_policy_hash",
         "validation_executed_portfolio_policy_hash",
         "final_holdout_executed_portfolio_policy_hash",
@@ -1155,8 +1172,6 @@ def _scenario_result_summary(
     )
     summary = {key: scenario[key] for key in summary_keys if key in scenario}
     _copy_compact_diagnostics(summary, scenario)
-    for key in ("train_strategy_diagnostics", "final_holdout_strategy_diagnostics"):
-        summary.pop(key, None)
     if include_closed_trade_summary:
         summary["validation_closed_trade_summary"] = _closed_trade_summary(
             scenario.get("validation_closed_trades")
@@ -1193,6 +1208,16 @@ def _copy_compact_diagnostics(target: dict[str, Any], source: dict[str, Any]) ->
             target[key] = _compact_strategy_diagnostics(source.get(key))
 
 
+def _drop_repeated_scenario_diagnostics(target: dict[str, Any]) -> None:
+    for key in (
+        "train_strategy_diagnostics",
+        "validation_strategy_diagnostics",
+        "final_holdout_strategy_diagnostics",
+        "strategy_diagnostics",
+    ):
+        target.pop(key, None)
+
+
 def _compact_strategy_diagnostics(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -1216,7 +1241,7 @@ def _compact_strategy_diagnostics(value: Any) -> dict[str, Any]:
         "worst_trade_mae_pct",
         "strategy_diagnostics_namespace",
     ):
-        if key in value:
+        if key in value and value[key] not in ({}, [], None):
             compact[key] = value[key]
     for key, raw in (
         ("blocked_filter_distribution", value.get("blocked_filter_distribution")),
