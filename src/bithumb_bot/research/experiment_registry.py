@@ -10,10 +10,12 @@ from typing import Any, Iterator
 from bithumb_bot.paths import PathManager
 from bithumb_bot.storage_io import append_jsonl
 
+from .deployment_policy import is_production_bound_target
 from .hashing import content_hash_payload, sha256_prefixed
 
 
 EXPERIMENT_REGISTRY_SCHEMA_VERSION = 1
+FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION = 2
 EMPTY_EXPERIMENT_REGISTRY_HASH = sha256_prefixed([])
 PROMOTION_PERMITTED_STATUSES = {"COMPLETED"}
 EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE = "pre_completion_evidence_hash"
@@ -68,6 +70,9 @@ def research_freedom_hash(payload: dict[str, Any]) -> str:
             "final_holdout_identity_hash": payload.get("final_holdout_identity_hash"),
             "final_holdout_content_hash": payload.get("final_holdout_content_hash"),
             "final_holdout_reuse_key_hash": payload.get("final_holdout_reuse_key_hash"),
+            "final_holdout_reuse_key_hash_v1": payload.get("final_holdout_reuse_key_hash_v1"),
+            "final_holdout_reuse_key_schema_version": payload.get("final_holdout_reuse_key_schema_version"),
+            "objective_metric": payload.get("objective_metric"),
             "parameter_space_hash": payload.get("parameter_space_hash"),
             "computed_attempt_index": payload.get("computed_attempt_index"),
             "computed_holdout_reuse_count": payload.get("computed_holdout_reuse_count"),
@@ -121,6 +126,46 @@ def final_holdout_identity_hash_from_parts(
     )
 
 
+def final_holdout_reuse_key_hash_v2_from_parts(
+    *,
+    strategy_name: str | None,
+    market: str | None,
+    interval: str | None,
+    final_holdout: dict[str, Any] | None,
+    objective_metric: str | None,
+    experiment_family_id: str | None = None,
+) -> str | None:
+    metric = str(objective_metric or "").strip()
+    if not metric:
+        return None
+    return sha256_prefixed(
+        {
+            "schema": "final_holdout_reuse_key_v2",
+            "schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+            "strategy_name": strategy_name,
+            "market": market,
+            "interval": interval,
+            "final_holdout_start": (final_holdout or {}).get("start"),
+            "final_holdout_end": (final_holdout or {}).get("end"),
+            "objective_metric": metric,
+            "experiment_family_id": experiment_family_id,
+        }
+    )
+
+
+def objective_metric_from_manifest(manifest: Any) -> str | None:
+    statistical_validation = getattr(manifest, "statistical_validation", None)
+    primary_metric = str(getattr(statistical_validation, "primary_metric", "") or "").strip()
+    if primary_metric:
+        return primary_metric
+    raw = getattr(manifest, "raw", {}) if isinstance(getattr(manifest, "raw", {}), dict) else {}
+    for key in ("objective_metric", "primary_metric"):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def final_holdout_content_hash_from_parts(
     *,
     dataset_snapshot_id: str | None,
@@ -146,11 +191,21 @@ def final_holdout_hashes_from_manifest(
     split = getattr(dataset, "split", None)
     final_holdout = getattr(split, "final_holdout", None)
     holdout_payload = final_holdout.as_dict() if final_holdout is not None else None
+    objective_metric = objective_metric_from_manifest(manifest)
+    identity = research_identity_from_manifest(manifest)
     identity_hash = final_holdout_identity_hash_from_parts(
         dataset_source=getattr(dataset, "source", None),
         market=getattr(manifest, "market", None),
         interval=getattr(manifest, "interval", None),
         final_holdout=holdout_payload,
+    )
+    reuse_key_hash = final_holdout_reuse_key_hash_v2_from_parts(
+        strategy_name=getattr(manifest, "strategy_name", None),
+        market=getattr(manifest, "market", None),
+        interval=getattr(manifest, "interval", None),
+        final_holdout=holdout_payload,
+        objective_metric=objective_metric,
+        experiment_family_id=None,
     )
     content_hash = final_holdout_content_hash_from_parts(
         dataset_snapshot_id=getattr(dataset, "snapshot_id", None),
@@ -160,7 +215,12 @@ def final_holdout_hashes_from_manifest(
     return {
         "final_holdout_identity_hash": identity_hash,
         "final_holdout_content_hash": content_hash,
-        "final_holdout_reuse_key_hash": identity_hash,
+        "final_holdout_reuse_key_hash_v1": identity_hash,
+        "final_holdout_reuse_key_hash": reuse_key_hash,
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash_v2": reuse_key_hash,
+        "objective_metric": objective_metric,
+        "experiment_family_id": identity["experiment_family_id"],
         "final_holdout_fingerprint": identity_hash,
     }
 
@@ -191,9 +251,8 @@ def compute_research_attempt_counters(
     hypothesis_id = str(base_payload.get("hypothesis_id") or "")
     reuse_key = str(
         base_payload.get("final_holdout_reuse_key_hash")
-        or base_payload.get("final_holdout_identity_hash")
-        or base_payload.get("final_holdout_fingerprint")
-        or ""
+        if _reuse_key_schema_version(base_payload) == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+        else ""
     )
     return {
         "computed_attempt_index": 1
@@ -209,13 +268,8 @@ def compute_research_attempt_counters(
             for row in rows
             if row.get("event_type") == "research_attempt_reserved"
             and reuse_key
-            and str(
-                row.get("final_holdout_reuse_key_hash")
-                or row.get("final_holdout_identity_hash")
-                or row.get("final_holdout_fingerprint")
-                or ""
-            )
-            == reuse_key
+            and _reuse_key_schema_version(row) == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+            and str(row.get("final_holdout_reuse_key_hash") or "") == reuse_key
         ),
     }
 
@@ -587,7 +641,11 @@ def _extend_registry_field_mismatch_reasons(
         "final_holdout_split_hash",
         "final_holdout_identity_hash",
         "final_holdout_content_hash",
+        "final_holdout_reuse_key_hash_v1",
         "final_holdout_reuse_key_hash",
+        "final_holdout_reuse_key_schema_version",
+        "final_holdout_reuse_key_hash_v2",
+        "objective_metric",
         "parameter_space_hash",
     ):
         expected = evidence.get(field)
@@ -618,8 +676,15 @@ def _extend_registry_field_mismatch_reasons(
     if content is not None and str(actual_content or "") != str(content or ""):
         reasons.append("experiment_registry_final_holdout_content_mismatch")
     reuse_key = evidence.get("final_holdout_reuse_key_hash") or report.get("final_holdout_reuse_key_hash") or promotion.get("final_holdout_reuse_key_hash")
-    if reuse_key is not None and str(row.get("final_holdout_reuse_key_hash") or row.get("final_holdout_identity_hash") or "") != str(reuse_key or ""):
+    if reuse_key is not None and str(row.get("final_holdout_reuse_key_hash") or "") != str(reuse_key or ""):
         reasons.append("experiment_registry_final_holdout_reuse_key_mismatch")
+    _extend_production_reuse_identity_reasons(
+        reasons,
+        row=row,
+        report=report,
+        evidence=evidence,
+        promotion=promotion,
+    )
     for field, code in (
         ("computed_attempt_index", "experiment_registry_attempt_index_mismatch"),
         ("computed_holdout_reuse_count", "experiment_registry_holdout_reuse_count_mismatch"),
@@ -747,9 +812,8 @@ def _compute_research_attempt_counters_from_rows(
     hypothesis_id = str(base_payload.get("hypothesis_id") or "")
     reuse_key = str(
         base_payload.get("final_holdout_reuse_key_hash")
-        or base_payload.get("final_holdout_identity_hash")
-        or base_payload.get("final_holdout_fingerprint")
-        or ""
+        if _reuse_key_schema_version(base_payload) == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+        else ""
     )
     return {
         "computed_attempt_index": 1
@@ -765,15 +829,44 @@ def _compute_research_attempt_counters_from_rows(
             for row in rows
             if row.get("event_type") == "research_attempt_reserved"
             and reuse_key
-            and str(
-                row.get("final_holdout_reuse_key_hash")
-                or row.get("final_holdout_identity_hash")
-                or row.get("final_holdout_fingerprint")
-                or ""
-            )
-            == reuse_key
+            and _reuse_key_schema_version(row) == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+            and str(row.get("final_holdout_reuse_key_hash") or "") == reuse_key
         ),
     }
+
+
+def _reuse_key_schema_version(payload: dict[str, Any]) -> int | None:
+    try:
+        return int(payload.get("final_holdout_reuse_key_schema_version"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _extend_production_reuse_identity_reasons(
+    reasons: list[str],
+    *,
+    row: dict[str, Any],
+    report: dict[str, Any],
+    evidence: dict[str, Any] | None,
+    promotion: dict[str, Any],
+) -> None:
+    source = {}
+    source.update(row)
+    source.update(report)
+    if isinstance(evidence, dict):
+        source.update(evidence)
+    source.update(promotion)
+    if not is_production_bound_target(source.get("deployment_tier")):
+        return
+    schema_version = _reuse_key_schema_version(source)
+    if schema_version != FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION:
+        reasons.append("final_holdout_reuse_key_schema_version_missing")
+    reuse_key = str(source.get("final_holdout_reuse_key_hash") or "").strip()
+    if not reuse_key.startswith("sha256:"):
+        reasons.append("final_holdout_reuse_key_hash_v2_missing")
+    objective_metric = str(source.get("objective_metric") or source.get("primary_metric") or "").strip()
+    if not objective_metric or objective_metric.lower() in {"unknown", "none", "null"}:
+        reasons.append("objective_metric_missing")
 
 
 def _checked_reservation_reasons(

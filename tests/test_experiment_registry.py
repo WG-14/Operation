@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from bithumb_bot.paths import PathManager
 from bithumb_bot.research.experiment_registry import (
     EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE,
+    FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
     PROMOTION_PERMITTED_STATUSES,
     append_attempt_aborted,
     append_attempt_completion,
@@ -51,7 +52,11 @@ def _payload(**overrides) -> dict[str, object]:
         "final_holdout_fingerprint": "sha256:holdout-fingerprint",
         "final_holdout_identity_hash": "sha256:holdout-identity",
         "final_holdout_content_hash": "sha256:holdout-content",
-        "final_holdout_reuse_key_hash": "sha256:holdout-identity",
+        "final_holdout_reuse_key_hash_v1": "sha256:holdout-identity",
+        "final_holdout_reuse_key_hash": "sha256:holdout-v2",
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash_v2": "sha256:holdout-v2",
+        "objective_metric": "net_excess_return",
         "parameter_space_hash": "sha256:space",
         "parameter_grid_size": 3,
         "candidate_count": None,
@@ -140,11 +145,42 @@ def test_different_holdout_date_range_does_not_count_as_reuse(tmp_path, monkeypa
             run_id="exp_002",
             final_holdout_fingerprint="sha256:other-identity",
             final_holdout_identity_hash="sha256:other-identity",
-            final_holdout_reuse_key_hash="sha256:other-identity",
+            final_holdout_reuse_key_hash_v1="sha256:other-identity",
+            final_holdout_reuse_key_hash="sha256:other-v2",
+            final_holdout_reuse_key_hash_v2="sha256:other-v2",
         ),
     )
 
     assert second["computed_holdout_reuse_count"] == 0
+
+
+def test_final_holdout_reuse_count_uses_v2_identity(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    first = reserve_research_attempt(manager=manager, base_payload=_payload())
+    second = reserve_research_attempt(
+        manager=manager,
+        base_payload=_payload(
+            experiment_id="exp_002",
+            run_id="exp_002",
+            final_holdout_reuse_key_hash_v1="sha256:holdout-identity",
+            final_holdout_reuse_key_hash="sha256:strategy-b-v2",
+            final_holdout_reuse_key_hash_v2="sha256:strategy-b-v2",
+        ),
+    )
+    third = reserve_research_attempt(
+        manager=manager,
+        base_payload=_payload(
+            experiment_id="exp_003",
+            run_id="exp_003",
+            final_holdout_reuse_key_hash_v1="sha256:different-legacy",
+            final_holdout_reuse_key_hash="sha256:holdout-v2",
+            final_holdout_reuse_key_hash_v2="sha256:holdout-v2",
+        ),
+    )
+
+    assert first["computed_holdout_reuse_count"] == 0
+    assert second["computed_holdout_reuse_count"] == 0
+    assert third["computed_holdout_reuse_count"] == 1
 
 
 def test_budget_and_declared_counter_mismatches_are_stable_reasons(tmp_path, monkeypatch) -> None:

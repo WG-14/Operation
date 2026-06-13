@@ -4,6 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from .deployment_policy import is_production_bound_target
+
 
 @dataclass(frozen=True)
 class ResearchRunSummary:
@@ -61,11 +63,19 @@ def build_research_run_summary(report: dict[str, object]) -> ResearchRunSummary:
         and final_selection_gate_value != "PASS"
     )
     promotion_eligibility_failed = report.get("promotion_eligibility_gate_result") == "FAIL"
+    production_bound = is_production_bound_target(report.get("deployment_tier"))
+    registry_gate_value = report.get("registry_gate_result")
+    registry_gate_failed = production_bound and (
+        registry_gate_value != "PASS"
+        or not str(report.get("experiment_registry_row_hash") or "").startswith("sha256:")
+        or bool(report.get("registry_gate_fail_reasons"))
+    )
     promotion_allowed = (
         bool(report.get("best_candidate_id"))
         and report.get("promotion_eligibility_gate_result", report.get("gate_result")) == "PASS"
         and not statistical_gate_failed
         and not final_selection_gate_failed
+        and not registry_gate_failed
         and not bool(report.get("diagnostic_only"))
         and str(report.get("diagnostic_mode") or "promotion_candidate") != "exploratory"
     )
@@ -116,6 +126,7 @@ def build_research_run_summary(report: dict[str, object]) -> ResearchRunSummary:
             statistical_gate_failed=statistical_gate_failed,
             final_selection_gate_failed=final_selection_gate_failed,
             promotion_eligibility_failed=promotion_eligibility_failed,
+            registry_gate_failed=registry_gate_failed,
             has_entry_exit_diagnostics=has_entry_exit_diagnostics,
         ),
     )
@@ -242,6 +253,7 @@ def _next_action(
     statistical_gate_failed: bool = False,
     final_selection_gate_failed: bool = False,
     promotion_eligibility_failed: bool = False,
+    registry_gate_failed: bool = False,
     has_entry_exit_diagnostics: bool = False,
 ) -> str:
     if promotion_allowed:
@@ -252,6 +264,8 @@ def _next_action(
         return "do_not_promote_review_final_selection_contract"
     if statistical_gate_failed:
         return "do_not_promote_review_statistical_selection"
+    if registry_gate_failed:
+        return "do_not_promote_review_experiment_registry"
     if promotion_eligibility_failed:
         return "do_not_promote_review_blocking_reasons"
     if not has_candidates:

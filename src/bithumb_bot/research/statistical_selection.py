@@ -341,7 +341,12 @@ def build_statistical_selection_evidence(
         "final_holdout_fingerprint": (experiment_registry or {}).get("final_holdout_fingerprint"),
         "final_holdout_identity_hash": (experiment_registry or {}).get("final_holdout_identity_hash"),
         "final_holdout_content_hash": (experiment_registry or {}).get("final_holdout_content_hash"),
+        "final_holdout_reuse_key_hash_v1": (experiment_registry or {}).get("final_holdout_reuse_key_hash_v1"),
         "final_holdout_reuse_key_hash": (experiment_registry or {}).get("final_holdout_reuse_key_hash"),
+        "final_holdout_reuse_key_schema_version": (experiment_registry or {}).get(
+            "final_holdout_reuse_key_schema_version"
+        ),
+        "final_holdout_reuse_key_hash_v2": (experiment_registry or {}).get("final_holdout_reuse_key_hash_v2"),
         "final_holdout_split_hash": (experiment_registry or {}).get("final_holdout_split_hash"),
         "research_freedom_hash": (experiment_registry or {}).get("research_freedom_hash"),
         "registry_gate_result": (experiment_registry or {}).get("registry_gate_result"),

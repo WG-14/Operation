@@ -78,9 +78,12 @@ from .family_registry import (
 )
 from .experiment_registry import (
     EXPERIMENT_REGISTRY_EVIDENCE_HASH_PHASE,
+    FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
     append_attempt_completion,
     final_holdout_identity_hash_from_parts,
+    final_holdout_reuse_key_hash_v2_from_parts,
     final_holdout_hashes_from_manifest,
+    objective_metric_from_manifest,
     reserve_research_attempt_checked,
     research_freedom_hash,
     research_identity_from_manifest,
@@ -627,10 +630,23 @@ def _reserve_experiment_attempt(
             interval=manifest.interval,
             final_holdout=holdout_payload,
         )
+        objective_metric = objective_metric_from_manifest(manifest)
+        reuse_key_hash = final_holdout_reuse_key_hash_v2_from_parts(
+            strategy_name=manifest.strategy_name,
+            market=manifest.market,
+            interval=manifest.interval,
+            final_holdout=holdout_payload,
+            objective_metric=objective_metric,
+            experiment_family_id=None,
+        )
         holdout_hashes = {
             "final_holdout_identity_hash": identity_hash,
             "final_holdout_content_hash": None,
-            "final_holdout_reuse_key_hash": identity_hash,
+            "final_holdout_reuse_key_hash_v1": identity_hash,
+            "final_holdout_reuse_key_hash": reuse_key_hash,
+            "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+            "final_holdout_reuse_key_hash_v2": reuse_key_hash,
+            "objective_metric": objective_metric,
             "final_holdout_fingerprint": identity_hash,
         }
     base_payload = {
@@ -4607,7 +4623,13 @@ def _report_payload(
                 if content_pending
                 else registry_row.get("final_holdout_content_hash")
             ),
+            "final_holdout_reuse_key_hash_v1": registry_row.get("final_holdout_reuse_key_hash_v1"),
             "final_holdout_reuse_key_hash": registry_row.get("final_holdout_reuse_key_hash"),
+            "final_holdout_reuse_key_schema_version": registry_row.get(
+                "final_holdout_reuse_key_schema_version"
+            ),
+            "final_holdout_reuse_key_hash_v2": registry_row.get("final_holdout_reuse_key_hash_v2"),
+            "objective_metric": registry_row.get("objective_metric"),
             "train_split_hash": registry_row.get("train_split_hash"),
             "validation_split_hash": registry_row.get("validation_split_hash"),
             "final_holdout_split_hash": (
@@ -5490,7 +5512,11 @@ def _attach_statistical_selection_to_candidates(
             "final_holdout_fingerprint",
             "final_holdout_identity_hash",
             "final_holdout_content_hash",
+            "final_holdout_reuse_key_hash_v1",
             "final_holdout_reuse_key_hash",
+            "final_holdout_reuse_key_schema_version",
+            "final_holdout_reuse_key_hash_v2",
+            "objective_metric",
             "final_holdout_split_hash",
             "computed_attempt_index",
             "computed_holdout_reuse_count",

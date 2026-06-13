@@ -52,7 +52,10 @@ from bithumb_bot.research.executor import (
     sort_work_results_deterministically,
 )
 from bithumb_bot.research.hashing import report_content_hash_payload, sha256_prefixed
-from bithumb_bot.research.experiment_registry import final_holdout_hashes_from_manifest
+from bithumb_bot.research.experiment_registry import (
+    FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+    final_holdout_hashes_from_manifest,
+)
 from bithumb_bot.research.strategy_spec import strategy_spec_for_name
 from bithumb_bot.research.audit_trail import (
     AuditTraceScope,
@@ -180,8 +183,13 @@ def test_summary_report_does_not_duplicate_full_candidate_payload(tmp_path, monk
 def test_final_holdout_reuse_key_hash_is_stable() -> None:
     final_holdout = {"start": "2026-01-01", "end": "2026-02-28"}
     manifest = SimpleNamespace(
+        experiment_id="exp_001",
+        hypothesis="hypothesis",
+        raw={"experiment_family_id": "family_001"},
+        strategy_name="sma_with_filter",
         market="KRW-BTC",
         interval="1m",
+        statistical_validation=SimpleNamespace(primary_metric="net_excess_return"),
         dataset=SimpleNamespace(
             source="sqlite_candles",
             snapshot_id="snapshot_a",
@@ -201,8 +209,13 @@ def test_final_holdout_reuse_key_hash_is_stable() -> None:
     )
     changed_market = final_holdout_hashes_from_manifest(
         manifest=SimpleNamespace(
+            experiment_id="exp_001",
+            hypothesis="hypothesis",
+            raw={"experiment_family_id": "family_001"},
+            strategy_name="sma_with_filter",
             market="KRW-ETH",
             interval="1m",
+            statistical_validation=SimpleNamespace(primary_metric="net_excess_return"),
             dataset=manifest.dataset,
         ),
         final_holdout_split_hash="sha256:split-a",
@@ -211,6 +224,69 @@ def test_final_holdout_reuse_key_hash_is_stable() -> None:
 
     assert first["final_holdout_reuse_key_hash"] == second["final_holdout_reuse_key_hash"]
     assert first["final_holdout_reuse_key_hash"] != changed_market["final_holdout_reuse_key_hash"]
+    assert first["final_holdout_reuse_key_hash_v1"] == first["final_holdout_identity_hash"]
+    assert first["final_holdout_reuse_key_schema_version"] == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+
+
+def _holdout_reuse_manifest(
+    *,
+    strategy_name: str = "sma_with_filter",
+    market: str = "KRW-BTC",
+    interval: str = "1m",
+    start: str = "2026-01-01",
+    end: str = "2026-02-28",
+    primary_metric: str = "net_excess_return",
+) -> SimpleNamespace:
+    final_holdout = {"start": start, "end": end}
+    return SimpleNamespace(
+        experiment_id="exp_001",
+        hypothesis="hypothesis",
+        raw={"experiment_family_id": "family_001"},
+        strategy_name=strategy_name,
+        market=market,
+        interval=interval,
+        statistical_validation=SimpleNamespace(primary_metric=primary_metric),
+        dataset=SimpleNamespace(
+            source="sqlite_candles",
+            snapshot_id="snapshot_a",
+            split=SimpleNamespace(final_holdout=SimpleNamespace(as_dict=lambda: dict(final_holdout))),
+        ),
+    )
+
+
+def _holdout_reuse_key(manifest: SimpleNamespace) -> str:
+    hashes = final_holdout_hashes_from_manifest(
+        manifest=manifest,
+        final_holdout_split_hash="sha256:split-a",
+        dataset_quality_hash="sha256:quality-a",
+    )
+    assert hashes["final_holdout_reuse_key_schema_version"] == FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION
+    key = hashes["final_holdout_reuse_key_hash"]
+    assert isinstance(key, str)
+    return key
+
+
+def test_final_holdout_reuse_key_hash_includes_strategy_name() -> None:
+    first = _holdout_reuse_key(_holdout_reuse_manifest(strategy_name="sma_with_filter"))
+    changed_strategy = _holdout_reuse_key(_holdout_reuse_manifest(strategy_name="mean_reversion"))
+
+    assert first != changed_strategy
+
+
+def test_final_holdout_reuse_key_hash_changes_when_primary_metric_changes() -> None:
+    first = _holdout_reuse_key(_holdout_reuse_manifest(primary_metric="net_excess_return"))
+    changed_metric = _holdout_reuse_key(_holdout_reuse_manifest(primary_metric="return_pct"))
+
+    assert first != changed_metric
+
+
+def test_final_holdout_reuse_key_hash_still_changes_when_market_interval_or_dates_change() -> None:
+    first = _holdout_reuse_key(_holdout_reuse_manifest())
+
+    assert first != _holdout_reuse_key(_holdout_reuse_manifest(market="KRW-ETH"))
+    assert first != _holdout_reuse_key(_holdout_reuse_manifest(interval="5m"))
+    assert first != _holdout_reuse_key(_holdout_reuse_manifest(start="2026-01-02"))
+    assert first != _holdout_reuse_key(_holdout_reuse_manifest(end="2026-03-01"))
 
 
 def test_research_only_holdout_reuse_is_warn_not_promotion_pass() -> None:
@@ -1393,7 +1469,11 @@ def _registry_payload_for_production_manifest(**overrides: object) -> dict[str, 
         "final_holdout_fingerprint": "sha256:holdout-identity",
         "final_holdout_identity_hash": "sha256:holdout-identity",
         "final_holdout_content_hash": None,
-        "final_holdout_reuse_key_hash": "sha256:holdout-identity",
+        "final_holdout_reuse_key_hash_v1": "sha256:holdout-identity",
+        "final_holdout_reuse_key_hash": "sha256:holdout-v2",
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash_v2": "sha256:holdout-v2",
+        "objective_metric": "net_excess_return",
         "final_holdout_content_pending_until_completion": True,
         "parameter_space_hash": "sha256:space",
         "parameter_grid_size": 1,

@@ -6,7 +6,12 @@ import json
 import pytest
 
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
-from bithumb_bot.research.experiment_registry import EMPTY_EXPERIMENT_REGISTRY_HASH, compute_row_hash, validate_experiment_registry_binding
+from bithumb_bot.research.experiment_registry import (
+    EMPTY_EXPERIMENT_REGISTRY_HASH,
+    FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+    compute_row_hash,
+    validate_experiment_registry_binding,
+)
 from bithumb_bot.research.final_selection import apply_final_selection_contract, validate_final_selection_report
 from bithumb_bot.research.hashing import sha256_prefixed
 from bithumb_bot.research.run_summary import build_research_run_summary
@@ -327,10 +332,15 @@ def test_final_holdout_reuse_blocks_promotion_grade_selection(tmp_path) -> None:
     registry_path = tmp_path / "experiment_registry.jsonl"
     row = {
         "event_type": "research_attempt_reserved",
+        "deployment_tier": "paper_candidate",
         "experiment_id": "exp_001",
         "experiment_family_id": "family_001",
         "hypothesis_id": "hypothesis_001",
-        "final_holdout_reuse_key_hash": "sha256:holdout",
+        "final_holdout_reuse_key_hash_v1": "sha256:holdout-v1",
+        "final_holdout_reuse_key_hash": "sha256:holdout-v2",
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash_v2": "sha256:holdout-v2",
+        "objective_metric": "net_excess_return",
         "computed_attempt_index": 1,
         "computed_holdout_reuse_count": 2,
         "prior_registry_hash": EMPTY_EXPERIMENT_REGISTRY_HASH,
@@ -347,7 +357,11 @@ def test_final_holdout_reuse_blocks_promotion_grade_selection(tmp_path) -> None:
         "experiment_registry_prior_hash": EMPTY_EXPERIMENT_REGISTRY_HASH,
         "computed_holdout_reuse_count": 2,
         "computed_attempt_index": 1,
-        "final_holdout_reuse_key_hash": "sha256:holdout",
+        "final_holdout_reuse_key_hash_v1": "sha256:holdout-v1",
+        "final_holdout_reuse_key_hash": "sha256:holdout-v2",
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash_v2": "sha256:holdout-v2",
+        "objective_metric": "net_excess_return",
         "statistical_validation_contract": {
             "gates": {
                 "max_holdout_reuse_count": 0,
@@ -360,6 +374,71 @@ def test_final_holdout_reuse_blocks_promotion_grade_selection(tmp_path) -> None:
 
     assert "holdout_reuse_budget_exceeded" in reasons
     assert "experiment_registry_budget_exceeded" in reasons
+
+    summary = build_research_run_summary(
+        {
+            **report,
+            "registry_gate_result": "FAIL",
+            "registry_gate_fail_reasons": reasons,
+            "best_candidate_id": "candidate_001",
+            "promotion_eligibility_gate_result": "PASS",
+        }
+    )
+    assert summary.promotion_allowed is False
+
+
+def test_final_holdout_reuse_missing_v2_identity_fails_production_binding(tmp_path) -> None:
+    registry_path = tmp_path / "experiment_registry.jsonl"
+    row = {
+        "event_type": "research_attempt_reserved",
+        "deployment_tier": "paper_candidate",
+        "experiment_id": "exp_001",
+        "experiment_family_id": "family_001",
+        "hypothesis_id": "hypothesis_001",
+        "final_holdout_reuse_key_hash_v1": "sha256:holdout-v1",
+        "final_holdout_reuse_key_hash": "sha256:holdout-v2",
+        "computed_attempt_index": 1,
+        "computed_holdout_reuse_count": 0,
+        "prior_registry_hash": EMPTY_EXPERIMENT_REGISTRY_HASH,
+    }
+    row["row_hash"] = compute_row_hash(row)
+    registry_path.write_text(json.dumps(row, sort_keys=True) + "\n", encoding="utf-8")
+    report = {
+        **row,
+        "deployment_tier": "paper_candidate",
+        "experiment_registry_path": str(registry_path),
+        "experiment_registry_row_hash": row["row_hash"],
+        "experiment_registry_prior_hash": EMPTY_EXPERIMENT_REGISTRY_HASH,
+    }
+
+    reasons = validate_experiment_registry_binding(report=report, require_complete=False)
+
+    assert "final_holdout_reuse_key_schema_version_missing" in reasons
+    assert "objective_metric_missing" in reasons
+
+    missing_key_report = {
+        **report,
+        "final_holdout_reuse_key_schema_version": FINAL_HOLDOUT_REUSE_KEY_SCHEMA_VERSION,
+        "final_holdout_reuse_key_hash": None,
+        "objective_metric": "net_excess_return",
+    }
+    reasons = validate_experiment_registry_binding(report=missing_key_report, require_complete=False)
+    assert "final_holdout_reuse_key_hash_v2_missing" in reasons
+
+
+def test_missing_registry_evidence_blocks_production_promotion_summary() -> None:
+    summary = build_research_run_summary(
+        {
+            "deployment_tier": "paper_candidate",
+            "best_candidate_id": "candidate_001",
+            "promotion_eligibility_gate_result": "PASS",
+            "registry_gate_result": "WARN",
+            "registry_gate_fail_reasons": ["experiment_registry_missing"],
+        }
+    )
+
+    assert summary.promotion_allowed is False
+    assert summary.next_action == "do_not_promote_review_experiment_registry"
 
 
 def test_selected_candidate_requires_validation_run_complete() -> None:
