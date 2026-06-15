@@ -244,6 +244,7 @@ class BacktestRunContext:
     candidate_regime_policy: dict[str, object] | None = None
     candidate_regime_policy_drives_research_execution: bool = False
     policy_materialization_mode: str = "research_exploratory"
+    participation_count_basis: str | None = None
     memory_sampler: MemorySampler = sample_process_memory
     started_at: float = field(default_factory=time.perf_counter)
 

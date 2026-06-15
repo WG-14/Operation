@@ -54,6 +54,8 @@ class DefaultStrategyEvaluator:
             "slippage_bps": slippage_bps,
             "active_exit_policy": active_exit_policy,
             "buy_fraction": buy_fraction,
+            "decision_records": tuple(strategy_context.get("decision_records") or ()),
+            "trade_records": tuple(strategy_context.get("trade_records") or ()),
         }
         if plugin.policy_assembly_factory is not None:
             policy_builder_kwargs.update(

@@ -25,11 +25,20 @@ from bithumb_bot.research.strategy_spec import (
 from bithumb_bot.strategy.daily_participation_policy import (
     DailyParticipationPolicyConfig,
     DailyParticipationStateSnapshot,
+    build_research_daily_count_snapshot,
+    build_runtime_daily_count_snapshot_from_sqlite,
     evaluate_daily_participation_policy,
+    require_runtime_comparable_daily_count_snapshot,
 )
 from bithumb_bot.strategy.exit_rules import ExitPolicyConfig
 from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
-from bithumb_bot.strategy_authoring import research_plugin_from_event_builder
+from bithumb_bot.strategy_authoring import (
+    ReplayCompatibleStrategyExtension,
+    build_replay_compatible_strategy_plugin,
+    research_plugin_from_event_builder,
+)
+from bithumb_bot.strategy_plugins.sma_with_filter_assembly import MaterializationMode
+from bithumb_bot.strategy_plugins.sma_with_filter_projector import SmaWithFilterSnapshotProjector
 from bithumb_bot.strategy_plugins.sma_with_filter_events import SmaWithFilterDecisionAdapter
 
 
@@ -173,7 +182,9 @@ def evaluate_daily_participation_sma_decision(
             "kst_day": participation.kst_day,
             "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
             "participation_policy_hash": participation.participation_policy_hash,
+            "participation_input_hash": participation.participation_input_hash,
             "participation_decision_hash": participation.participation_decision_hash,
+            "fail_closed_reason": participation.fail_closed_reason,
             "not_a_fill_guarantee": True,
             "execution_intent": execution_payload,
         }
@@ -216,6 +227,185 @@ def evaluate_daily_participation_sma_decision(
         policy_input_hash=policy_input_hash,
         policy_decision_hash=policy_decision_hash,
     )
+
+
+def research_policy_decision_builder(
+    *,
+    event: Any,
+    dataset: DatasetSnapshot,
+    candle_index: int,
+    position: PositionSnapshot,
+    parameter_values: dict[str, Any],
+    fee_rate: float,
+    slippage_bps: float,
+    active_exit_policy: dict[str, Any],
+    buy_fraction: float = 0.0,
+    materialization_mode: MaterializationMode | str = MaterializationMode.RESEARCH_EXPLORATORY,
+    candidate_regime_policy: dict[str, object] | None = None,
+    candidate_regime_policy_enforced: bool | None = None,
+    decision_records: tuple[dict[str, Any], ...] = (),
+    trade_records: tuple[dict[str, Any], ...] = (),
+) -> Any:
+    daily_values = materialize_strategy_parameters(
+        "daily_participation_sma",
+        dict(parameter_values),
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+    )
+    base_parameter_values = {
+        key: value
+        for key, value in dict(daily_values).items()
+        if key in SMA_WITH_FILTER_SPEC.accepted_parameter_names
+    }
+    projector = SmaWithFilterSnapshotProjector()
+    projected = projector.project_from_research_event(
+        event=event,
+        dataset=dataset,
+        candle_index=candle_index,
+        position=position,
+        parameter_values=base_parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+        active_exit_policy=active_exit_policy,
+        buy_fraction=buy_fraction,
+        materialization_mode=materialization_mode,
+        candidate_regime_policy=candidate_regime_policy,
+        candidate_regime_policy_enforced=candidate_regime_policy_enforced,
+    )
+    if projected is None:
+        return None
+    participation_config = daily_participation_config_from_parameters(dict(daily_values))
+    count_snapshot = build_research_daily_count_snapshot(
+        config=participation_config,
+        decision_ts=int(event.decision_ts),
+        decision_records=tuple(decision_records),
+        trade_records=tuple(trade_records),
+    )
+    mode = (
+        materialization_mode
+        if isinstance(materialization_mode, MaterializationMode)
+        else MaterializationMode(str(materialization_mode))
+    )
+    if mode.runtime_comparable:
+        require_runtime_comparable_daily_count_snapshot(count_snapshot)
+    participation_state = count_snapshot.state_snapshot(
+        decision_ts=int(event.decision_ts),
+        position_open=bool(position.in_position or position.has_executable_exposure),
+        entry_allowed=bool(position.entry_allowed),
+        market_open=True,
+    )
+    decision = evaluate_daily_participation_sma_decision(
+        market=projected.bundle.market,
+        position=position,
+        config=projected.bundle.config,
+        execution_context=projected.bundle.execution_constraints,
+        exit_policy_config=projected.bundle.exit_policy_config,
+        participation_config=participation_config,
+        participation_state=participation_state,
+        rule_sources=projected.rule_sources,
+    )
+    decision.trace["strategy_evaluation_provenance"] = {
+        "decision_boundary": "StrategyDecisionService.evaluate",
+        "snapshot_builder": "DailyParticipationSmaResearchPolicyDecisionBuilder",
+        "base_snapshot_builder": "SmaWithFilterSnapshotProjector",
+        "candle_ts": int(event.candle_ts),
+        "daily_count_snapshot_source": count_snapshot.source,
+    }
+    decision.trace["replay_fingerprint_hash"] = _stable_hash(
+        {
+            "base_replay_fingerprint": projected.replay_fingerprint,
+            "participation_input_hash": decision.trace.get("participation_input_hash"),
+            "participation_decision_hash": decision.trace.get("participation_decision_hash"),
+        }
+    )
+    decision.trace.update(projected.bundle.observability_payload())
+    decision.trace.update(
+        {
+            "parameter_sources": dict(projected.materialized.sources),
+            "runtime_comparable": bool(projected.materialized.runtime_comparable),
+            "materialization_mode": projected.materialized.mode.value,
+            "policy_materialization_mode": projected.materialized.mode.value,
+            "legacy_defaults_used": list(projected.materialized.legacy_defaults_used),
+            "daily_count_snapshot": count_snapshot.as_dict(),
+        }
+    )
+    return decision
+
+
+def build_runtime_replay_strategy(
+    profile: dict[str, Any],
+    candidate_regime_policy: dict[str, Any] | None = None,
+) -> Any:
+    from bithumb_bot.research.sma_with_filter_plugin import build_runtime_replay_strategy as build_base
+
+    return build_base(profile, candidate_regime_policy)
+
+
+def runtime_feature_snapshot_builder(*, conn: Any, request: Any, feature_snapshot: Any) -> Any:
+    strategy_name = str(getattr(request, "strategy_name", "") or "").strip().lower()
+    if strategy_name != "daily_participation_sma":
+        return feature_snapshot
+    profile_params = getattr(request, "strategy_parameters", None)
+    params = dict(profile_params) if isinstance(profile_params, dict) else {}
+    try:
+        config = daily_participation_config_from_parameters(materialize_strategy_parameters(
+            "daily_participation_sma",
+            params,
+            fee_rate=0.0,
+            slippage_bps=0.0,
+        ))
+    except Exception:
+        return None
+    through_ts = getattr(request, "through_ts_ms", None)
+    decision_ts = int(through_ts) if through_ts is not None else int(feature_snapshot.payload.get("decision_candle_ts") or 0)
+    count_snapshot = build_runtime_daily_count_snapshot_from_sqlite(
+        conn=conn,
+        config=config,
+        decision_ts=decision_ts,
+        pair=str(getattr(request, "pair", "") or feature_snapshot.payload.get("pair") or ""),
+    )
+    if count_snapshot.snapshot_hash == "sha256:missing":
+        return None
+    payload = feature_snapshot.as_dict()
+    feature_payload = dict(payload.get("feature_payload") or {})
+    feature_payload["daily_participation_count_snapshot"] = count_snapshot.as_dict()
+    feature_payload["daily_count_snapshot_hash"] = count_snapshot.snapshot_hash
+    feature_payload["count_basis"] = config.count_basis
+    feature_payload["kst_day"] = count_snapshot.kst_day
+    payload["feature_payload"] = feature_payload
+    payload["daily_count_snapshot_hash"] = count_snapshot.snapshot_hash
+    payload["daily_participation_count_snapshot"] = count_snapshot.as_dict()
+    payload["feature_snapshot_hash"] = _stable_hash(payload)
+    from bithumb_bot.runtime_data_provider import RuntimeFeatureSnapshot
+
+    return RuntimeFeatureSnapshot(payload)
+
+
+def exit_policy_materializer(strategy_name: str, parameter_values: dict[str, Any]) -> dict[str, object]:
+    if str(strategy_name or "").strip().lower() != "daily_participation_sma":
+        raise ValueError(f"daily_participation_sma_exit_policy_strategy_mismatch:{strategy_name}")
+    from bithumb_bot.strategy_plugins.sma_with_filter_assembly import SmaWithFilterPolicyAssembly
+
+    base_parameters = {
+        key: value
+        for key, value in dict(parameter_values).items()
+        if key in SMA_WITH_FILTER_SPEC.accepted_parameter_names
+    }
+    materialized = SmaWithFilterPolicyAssembly().materialize_exit_policy(
+        "sma_with_filter",
+        base_parameters,
+        materialization_mode=MaterializationMode.RESEARCH_PROMOTION.value,
+    )
+    policy = dict(materialized["exit_policy"])
+    config = dict(materialized["exit_policy_config"])
+    policy["strategy_name"] = "daily_participation_sma"
+    config["strategy_name"] = "daily_participation_sma"
+    return {
+        **materialized,
+        "exit_policy": policy,
+        "exit_policy_config": config,
+        "exit_policy_source": "daily_participation_sma_composed_sma_exit_policy_materializer",
+    }
 
 
 def build_daily_participation_sma_research_events(
@@ -276,9 +466,20 @@ _RESEARCH_PLUGIN = research_plugin_from_event_builder(
     research_parameter_materializer=materialize_daily_participation_sma_parameters,
 )
 
-
-DAILY_PARTICIPATION_SMA_PLUGIN = replace(
-    _RESEARCH_PLUGIN.to_research_strategy_plugin(),
-    runner=run_daily_participation_sma_backtest,
+_REPLAY_EXTENSION = ReplayCompatibleStrategyExtension(
+    runtime_replay_builder=build_runtime_replay_strategy,
+    research_policy_decision_builder=research_policy_decision_builder,
+    exit_policy_materializer=exit_policy_materializer,
+    parameter_materializer=materialize_daily_participation_sma_parameters,
+    fail_closed_reason="daily_participation_sma_live_runtime_not_enabled",
 )
 
+DAILY_PARTICIPATION_SMA_PLUGIN = replace(
+    build_replay_compatible_strategy_plugin(
+        research=_RESEARCH_PLUGIN,
+        extension=_REPLAY_EXTENSION,
+        runner=run_daily_participation_sma_backtest,
+    ).to_research_strategy_plugin(),
+    runner=run_daily_participation_sma_backtest,
+    runtime_feature_snapshot_builder=runtime_feature_snapshot_builder,
+)

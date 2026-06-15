@@ -4,6 +4,7 @@ import pytest
 
 from bithumb_bot.research.experiment_manifest import ManifestValidationError, parse_manifest
 from bithumb_bot.strategy_plugins.sma_with_filter_assembly import MaterializationMode
+from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 
 
 def _manifest() -> dict[str, object]:
@@ -82,3 +83,11 @@ def test_daily_participation_defaults_fail_closed_in_runtime_mode() -> None:
     assert MaterializationMode.RESEARCH_EXPLORATORY.runtime_comparable is False
     assert MaterializationMode.RUNTIME_REPLAY.runtime_comparable is True
 
+
+def test_daily_participation_runtime_replay_requires_count_snapshot_provider() -> None:
+    plugin = resolve_research_strategy_plugin("daily_participation_sma")
+
+    assert plugin.runtime_capabilities.runtime_replay_supported is True
+    assert plugin.runtime_feature_snapshot_builder is not None
+    assert plugin.runtime_capabilities.live_real_order_allowed is False
+    assert plugin.runtime_capabilities.fail_closed_reason == "daily_participation_sma_live_runtime_not_enabled"

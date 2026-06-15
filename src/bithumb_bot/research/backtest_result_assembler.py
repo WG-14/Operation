@@ -104,6 +104,7 @@ class BacktestResultAssembler:
             closed_trades=closed_trade_records,
             execution_records=execution_records,
             decision_records=tuple(decisions),
+            participation_count_basis=str(getattr(run_context, "participation_count_basis", None) or "filled"),
             **(
                 {}
                 if accumulator.retain_full_detail()

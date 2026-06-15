@@ -152,6 +152,8 @@ class DepthWalkExecutionModel:
             latency_reference_policy_warning=request.latency_reference_policy_warning,
             feature_snapshot=request.feature_snapshot,
             regime_snapshot=request.regime_snapshot,
+            entry_signal_source=request.entry_signal_source,
+            entry_sizing_source=request.entry_sizing_source,
             intra_candle_policy="depth_walk_l2_no_queue_no_impact",
         )
 
@@ -228,6 +230,8 @@ def _missing_depth_fill(
         latency_reference_policy_warning=request.latency_reference_policy_warning,
         feature_snapshot=request.feature_snapshot,
         regime_snapshot=request.regime_snapshot,
+        entry_signal_source=request.entry_signal_source,
+        entry_sizing_source=request.entry_sizing_source,
         intra_candle_policy="depth_walk_l2_no_queue_no_impact",
     )
 

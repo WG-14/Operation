@@ -191,6 +191,20 @@ class DecisionPayloadBuilder:
             payload["policy_contract_hash"] = policy_decision.policy_contract_hash
             payload["policy_input_hash"] = policy_decision.policy_input_hash
             payload["policy_decision_hash"] = policy_decision.policy_decision_hash
+            trace = policy_decision.as_trace()
+            for key in (
+                "entry_signal_source",
+                "entry_sizing_source",
+                "count_basis",
+                "kst_day",
+                "daily_count_snapshot_hash",
+                "participation_policy_hash",
+                "participation_input_hash",
+                "participation_decision_hash",
+                "not_a_fill_guarantee",
+            ):
+                if key in trace:
+                    payload[key] = trace[key]
         promotion_grade = bool(getattr(strategy_plugin, "is_promotion_grade", False))
         payload["promotion_grade"] = promotion_grade
         payload["promotion_extension_missing_reason"] = (
@@ -438,6 +452,15 @@ class DecisionPayloadBuilder:
                 "execution_constraints_hash",
                 "policy_config_hash",
                 "replay_fingerprint_hash",
+                "entry_signal_source",
+                "entry_sizing_source",
+                "count_basis",
+                "kst_day",
+                "daily_count_snapshot_hash",
+                "participation_policy_hash",
+                "participation_input_hash",
+                "participation_decision_hash",
+                "not_a_fill_guarantee",
             ):
                 if str(trace.get(key) or "").strip():
                     payload[key] = trace[key]

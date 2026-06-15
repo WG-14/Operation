@@ -133,6 +133,25 @@ def test_daily_fallback_sizing_is_in_policy_hash_material() -> None:
     assert first.policy_input_hash != altered.policy_input_hash
 
 
+def test_daily_fallback_sizing_reaches_execution_planner() -> None:
+    from bithumb_bot.research.execution_planning import _research_execution_plan_bundle
+
+    decision = _decision(_market(prev_s=100.0, prev_l=99.0, curr_s=101.0, curr_l=100.0))
+    bundle = _research_execution_plan_bundle(
+        side="BUY",
+        cash=1_000_000.0,
+        buy_fraction=0.99,
+        sellable_qty=0.0,
+        reference_price=100.0,
+        policy_decision=decision,
+        candle_ts=1_704_046_800_000,
+    )
+
+    assert bundle.submit_plan is not None
+    assert bundle.submit_plan.notional_krw == 10000.0
+    assert bundle.submit_plan.extra_payload["entry_signal_source"] == "daily_participation_fallback"
+
+
 def test_final_reason_string_is_not_used_as_source_authority() -> None:
     decision = _decision(_market(prev_s=100.0, prev_l=99.0, curr_s=101.0, curr_l=100.0))
 

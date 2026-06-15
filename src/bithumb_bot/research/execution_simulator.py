@@ -75,6 +75,8 @@ def execution_submit_plan_to_research_request(
         requested_qty=requested_qty,
         requested_notional=requested_notional,
         fee_rate=float(fee_rate),
+        entry_signal_source=str(payload.get("entry_signal_source") or "") or None,
+        entry_sizing_source=str(payload.get("entry_sizing_source") or "") or None,
         **context.execution_request_fields(),
     )
 

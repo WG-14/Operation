@@ -891,6 +891,7 @@ def _backtest_context(
         ),
         progress_callback=context_progress_callback,
         audit_trace=audit_trace,
+        participation_count_basis=manifest.acceptance_gate.participation_count_basis,
     )
 
 

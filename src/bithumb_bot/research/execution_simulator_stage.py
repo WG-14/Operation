@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import backtest_support as support
@@ -217,6 +217,7 @@ class DefaultExecutionSimulator:
                 requested_qty=_positive_float_or_none(submit_plan.qty),
                 requested_notional=_positive_float_or_none(submit_plan.notional_krw),
             )
+            fill = _fill_with_entry_source(fill, submit_plan=submit_plan)
         else:
             service_cls = _research_test_compat_attr("ResearchVirtualExecutionService", ResearchVirtualExecutionService)
             fill = execute_research_signal_request(
@@ -240,12 +241,14 @@ class DefaultExecutionSimulator:
                 )
         warnings = tuple(support.execution_reference_warnings(fill))
         if fill.fill_status == "failed" or fill.avg_fill_price is None or fill.filled_qty <= 0.0:
+            trade = support.trade_from_fill(fill, cash=ledger.cash, asset_qty=ledger.qty, pnl=None)
+            _annotate_entry_source(trade, fill)
             return ExecutionSimulationOutcome(
                 fill=fill,
                 plan_bundle=plan_bundle,
                 evidence=evidence,
                 warnings=warnings,
-                trade=support.trade_from_fill(fill, cash=ledger.cash, asset_qty=ledger.qty, pnl=None),
+                trade=trade,
             )
         if action == "BUY":
             exec_price = float(fill.avg_fill_price)
@@ -267,6 +270,7 @@ class DefaultExecutionSimulator:
             )
             trade = support.pending_trade_from_fill(fill, cash=ledger.cash, asset_qty=ledger.qty)
             trade["entry_decision_hash"] = decision_hash
+            _annotate_entry_source(trade, fill)
             return ExecutionSimulationOutcome(
                 fill=fill,
                 pending_fill=pending,
@@ -295,6 +299,7 @@ class DefaultExecutionSimulator:
             exit_regime_snapshot=regime_snapshot,
         )
         trade = support.pending_trade_from_fill(fill, cash=ledger.cash, asset_qty=ledger.qty)
+        _annotate_entry_source(trade, fill)
         trade.update(
             support.closed_trade_diagnostics(
                 entry_ts=ledger.entry_ts,
@@ -343,6 +348,26 @@ def _positive_float_or_none(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0.0 else None
+
+
+def _fill_with_entry_source(fill: Any, *, submit_plan: Any) -> Any:
+    extra = getattr(submit_plan, "extra_payload", {}) if submit_plan is not None else {}
+    if not isinstance(extra, dict):
+        return fill
+    return replace(
+        fill,
+        entry_signal_source=str(extra.get("entry_signal_source") or "") or None,
+        entry_sizing_source=str(extra.get("entry_sizing_source") or "") or None,
+    )
+
+
+def _annotate_entry_source(trade: dict[str, object], fill: Any) -> None:
+    source = str(getattr(fill, "entry_signal_source", "") or "")
+    sizing_source = str(getattr(fill, "entry_sizing_source", "") or "")
+    if source:
+        trade["entry_signal_source"] = source
+    if sizing_source:
+        trade["entry_sizing_source"] = sizing_source
 
 
 def _research_test_compat_attr(name: str, default: Any) -> Any:

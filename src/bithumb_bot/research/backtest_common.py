@@ -1268,6 +1268,15 @@ def _execution_record_from_trade(trade: dict[str, object]) -> ExecutionRecord:
         fee=float(execution.get("fee") or trade.get("fee") or 0.0),
         slippage=float(_trade_execution_slippage(trade)),
         quote_age_ms=int(execution["quote_age_ms"]) if execution.get("quote_age_ms") is not None else None,
+        ts=(
+            int(execution.get("fill_reference_ts"))
+            if execution.get("fill_reference_ts") is not None
+            else int(trade.get("fill_ts") or trade.get("portfolio_effective_ts") or trade.get("ts") or 0)
+        ),
+        entry_signal_source=(
+            str(trade.get("entry_signal_source") or execution.get("entry_signal_source") or "")
+            or None
+        ),
     )
 
 

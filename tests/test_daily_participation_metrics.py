@@ -3,6 +3,7 @@ from __future__ import annotations
 from bithumb_bot.research.metrics_contract import (
     ClosedTradeRecord,
     ExecutionRecord,
+    build_metrics_v2,
     build_participation_metrics,
 )
 
@@ -60,3 +61,38 @@ def test_participation_metrics_include_count_basis_breakdown() -> None:
     assert payload["days_with_filled_execution"] == 1
     assert payload["days_with_closed_trade"] == 1
 
+
+def test_fallback_filled_count_uses_entry_signal_source() -> None:
+    metrics = build_participation_metrics(
+        period_start_ts=1_704_031_200_000,
+        period_end_ts=1_704_031_200_000,
+        execution_records=(
+            ExecutionRecord(
+                "BUY",
+                "filled",
+                1.0,
+                100.0,
+                ts=1_704_031_200_000,
+                entry_signal_source="daily_participation_fallback",
+            ),
+            ExecutionRecord("BUY", "filled", 1.0, 100.0, ts=1_704_031_200_000),
+        ),
+    )
+
+    assert metrics.fallback_filled_count == 1
+
+
+def test_manifest_participation_count_basis_is_used_in_metrics_v2() -> None:
+    metrics = build_metrics_v2(
+        starting_cash=1_000_000.0,
+        final_cash=1_000_000.0,
+        final_asset_qty=0.0,
+        final_mark_price=100.0,
+        equity_curve=(),
+        position_intervals=(),
+        closed_trades=(),
+        execution_records=(),
+        participation_count_basis="intent",
+    )
+
+    assert metrics.as_dict()["participation"]["count_basis"] == "intent"

@@ -6,7 +6,7 @@ from bithumb_bot.research.experiment_manifest import ManifestValidationError, pa
 from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.research.strategy_spec import SMA_WITH_FILTER_SPEC, strategy_spec_for_name
 from bithumb_bot.strategy_plugins.builtin_manifest import iter_builtin_strategy_plugins_from_manifest
-from bithumb_bot.strategy_plugins.daily_participation_sma import DAILY_PARTICIPATION_SMA_SPEC
+from bithumb_bot.strategy_plugins.daily_participation_sma import DAILY_PARTICIPATION_SMA_PLUGIN, DAILY_PARTICIPATION_SMA_SPEC
 
 
 def _manifest(strategy_name: str = "daily_participation_sma") -> dict[str, object]:
@@ -68,6 +68,7 @@ def test_daily_participation_sma_starts_research_paper_candidate_only() -> None:
     assert plugin.runtime_capabilities.live_dry_run_allowed is False
     assert plugin.runtime_capabilities.live_real_order_allowed is False
     assert plugin.runtime_capabilities.promotion_runtime_decisions_supported is False
+    assert plugin.runtime_capabilities.runtime_replay_supported is True
 
 
 def test_base_sma_spec_is_not_mutated() -> None:
@@ -77,6 +78,19 @@ def test_base_sma_spec_is_not_mutated() -> None:
 def test_daily_participation_sma_accepts_daily_parameters() -> None:
     manifest = parse_manifest(_manifest())
     assert manifest.strategy_name == "daily_participation_sma"
+
+
+def test_daily_participation_sma_has_research_policy_decision_builder() -> None:
+    assert DAILY_PARTICIPATION_SMA_PLUGIN.research_policy_decision_builder is not None
+
+
+def test_daily_participation_sma_runtime_capability_matches_declared_scope() -> None:
+    plugin = resolve_research_strategy_plugin("daily_participation_sma")
+
+    assert plugin.runtime_capabilities.runtime_replay_supported is True
+    assert plugin.runtime_capabilities.live_dry_run_allowed is False
+    assert plugin.runtime_capabilities.live_real_order_allowed is False
+    assert plugin.runtime_capabilities.fail_closed_reason == "daily_participation_sma_live_runtime_not_enabled"
 
 
 def test_sma_with_filter_still_rejects_daily_parameters() -> None:

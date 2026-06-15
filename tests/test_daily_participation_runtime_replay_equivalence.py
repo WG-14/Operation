@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
+
+import pytest
+
 from bithumb_bot.strategy.daily_participation_policy import (
     DailyParticipationPolicyConfig,
     DailyParticipationStateSnapshot,
+    build_research_daily_count_snapshot,
+    build_runtime_daily_count_snapshot_from_sqlite,
     evaluate_daily_participation_policy,
+    require_runtime_comparable_daily_count_snapshot,
 )
 
 
@@ -38,6 +45,52 @@ def test_research_and_runtime_daily_participation_policy_hash_match() -> None:
 
     assert research.participation_input_hash == runtime.participation_input_hash
     assert research.participation_policy_hash == runtime.participation_policy_hash
+
+
+def test_research_and_runtime_daily_participation_policy_hash_match_with_real_adapters() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE fills (fill_ts INTEGER NOT NULL, qty REAL NOT NULL)")
+    conn.execute("INSERT INTO fills(fill_ts, qty) VALUES (?, ?)", (1_704_031_200_000, 1.0))
+    config = _config(count_basis="filled")
+    decision_ts = 1_704_046_800_000
+    research_snapshot = build_research_daily_count_snapshot(
+        config=config,
+        decision_ts=decision_ts,
+        trade_records=(
+            {
+                "side": "BUY",
+                "fill_ts": 1_704_031_200_000,
+                "is_execution_filled": True,
+            },
+        ),
+    )
+    runtime_snapshot = build_runtime_daily_count_snapshot_from_sqlite(
+        conn=conn,
+        config=config,
+        decision_ts=decision_ts,
+        pair="KRW-BTC",
+    )
+    research = evaluate_daily_participation_policy(
+        config=config,
+        state=research_snapshot.state_snapshot(decision_ts=decision_ts, position_open=False, entry_allowed=True),
+    )
+    runtime = evaluate_daily_participation_policy(
+        config=config,
+        state=runtime_snapshot.state_snapshot(decision_ts=decision_ts, position_open=False, entry_allowed=True),
+    )
+
+    assert research.count_basis == runtime.count_basis
+    assert research.kst_day == runtime.kst_day
+    assert research.daily_count_snapshot_hash != "sha256:missing"
+    assert runtime.daily_count_snapshot_hash != "sha256:missing"
+    assert research.participation_policy_hash == runtime.participation_policy_hash
+    assert research.participation_input_hash == runtime.participation_input_hash
+
+
+def test_daily_count_snapshot_hash_missing_fails_runtime_comparable_mode() -> None:
+    with pytest.raises(ValueError, match="daily_count_snapshot_hash_missing"):
+        require_runtime_comparable_daily_count_snapshot(_state(daily_count_snapshot_hash="sha256:missing"))
 
 
 def test_count_basis_mismatch_changes_policy_input_hash() -> None:

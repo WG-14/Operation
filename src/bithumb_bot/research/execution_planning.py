@@ -113,6 +113,7 @@ def _research_typed_buy_submit_plan_from_intent(
     reference_price: float,
     policy_decision: StrategyDecisionV2,
     fallback_buy_fraction: float,
+    candle_ts: int,
 ) -> ExecutionSubmitPlan | None:
     execution_intent = policy_decision.execution_intent
     intent_payload = (
@@ -143,7 +144,12 @@ def _research_typed_buy_submit_plan_from_intent(
         pre_submit_proof_status="not_required",
         block_reason="none" if submit_expected else "research_zero_buy_notional",
         idempotency_key=None,
-        extra_payload={"execution_engine": "research_virtual"},
+        extra_payload={
+            "execution_engine": "research_virtual",
+            "entry_signal_source": str(policy_decision.trace.get("entry_signal_source") or ""),
+            "entry_sizing_source": str(policy_decision.trace.get("entry_sizing_source") or ""),
+            "decision_ts": int(policy_decision.trace.get("decision_ts") or candle_ts),
+        },
     )
 
 
@@ -193,16 +199,13 @@ def _research_execution_plan_bundle(
             or summary.typed_residual_submit_plan()
             or summary.typed_buy_submit_plan()
         )
-        if (
-            str(policy_decision.final_signal or "").upper() == "BUY"
-            and bool(summary.submit_expected)
-            and not _positive_submit_notional(submit_plan)
-        ):
+        if str(policy_decision.final_signal or "").upper() == "BUY":
             intent_submit_plan = _research_typed_buy_submit_plan_from_intent(
                 cash=cash,
                 reference_price=reference_price,
                 policy_decision=policy_decision,
                 fallback_buy_fraction=buy_fraction,
+                candle_ts=candle_ts,
             )
             if intent_submit_plan is not None:
                 summary = replace(
@@ -217,6 +220,18 @@ def _research_execution_plan_bundle(
                     buy_submit_plan=intent_submit_plan,
                 )
                 submit_plan = intent_submit_plan
+        if submit_plan is not None and str(policy_decision.final_signal or "").upper() == "BUY":
+            submit_plan = _with_entry_source_metadata(
+                submit_plan,
+                policy_decision=policy_decision,
+                candle_ts=candle_ts,
+            )
+            if summary.buy_submit_plan is not None:
+                summary = replace(summary, buy_submit_plan=submit_plan)
+            elif summary.target_submit_plan is not None:
+                summary = replace(summary, target_submit_plan=submit_plan)
+            elif summary.residual_submit_plan is not None:
+                summary = replace(summary, residual_submit_plan=submit_plan)
         missing_typed_submit_plan = bool(summary.submit_expected and submit_plan is None)
         missing_typed_submit_reason = (
             summary.block_reason
@@ -307,6 +322,22 @@ def _research_execution_plan_bundle(
         promotion_grade=False,
         recommended_next_action="regenerate_research_decisions_with_typed_execution_submit_plan",
     )
+
+
+def _with_entry_source_metadata(
+    submit_plan: ExecutionSubmitPlan,
+    *,
+    policy_decision: StrategyDecisionV2,
+    candle_ts: int,
+) -> ExecutionSubmitPlan:
+    extra = dict(submit_plan.extra_payload)
+    trace = policy_decision.trace if isinstance(policy_decision.trace, dict) else {}
+    for key in ("entry_signal_source", "entry_sizing_source"):
+        value = str(trace.get(key) or "")
+        if value:
+            extra[key] = value
+    extra["decision_ts"] = int(trace.get("decision_ts") or candle_ts)
+    return replace(submit_plan, extra_payload=extra)
 
 
 def _execution_plan_evidence(plan_bundle: ResearchExecutionPlanBundle | None) -> dict[str, object]:

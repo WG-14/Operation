@@ -199,6 +199,8 @@ class BacktestEventProcessor:
                 "active_exit_policy": self.active_exit_policy,
                 "buy_fraction": self.buy_fraction,
                 "run_context": self.run_context,
+                "decision_records": tuple(self.decisions),
+                "trade_records": tuple(self.ledger.trade_ledger),
             },
         )
         strategy_decision_hash = canonical_payload_hash(

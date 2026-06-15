@@ -58,6 +58,8 @@ class ExecutionRequest:
     latency_reference_policy_warning: str | None = None
     feature_snapshot: dict[str, Any] | None = None
     regime_snapshot: dict[str, Any] | None = None
+    entry_signal_source: str | None = None
+    entry_sizing_source: str | None = None
     intra_candle_policy: str = "close_price_only_no_intracandle_path"
 
 
@@ -122,6 +124,8 @@ class ExecutionFill:
     latency_reference_policy_warning: str | None = None
     feature_snapshot: dict[str, Any] | None = None
     regime_snapshot: dict[str, Any] | None = None
+    entry_signal_source: str | None = None
+    entry_sizing_source: str | None = None
     intra_candle_policy: str = "close_price_only_no_intracandle_path"
     base_seed: int | None = None
     derived_seed_hash: str | None = None
@@ -184,6 +188,8 @@ class ExecutionFill:
             "latency_reference_policy_warning": self.latency_reference_policy_warning,
             "feature_snapshot": self.feature_snapshot,
             "regime_snapshot": self.regime_snapshot,
+            "entry_signal_source": self.entry_signal_source,
+            "entry_sizing_source": self.entry_sizing_source,
             "intra_candle_policy": self.intra_candle_policy,
             "base_seed": self.base_seed,
             "derived_seed_hash": self.derived_seed_hash,

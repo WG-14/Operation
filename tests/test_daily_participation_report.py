@@ -48,3 +48,13 @@ def test_zero_filled_days_visible_in_candidate_summary() -> None:
     assert summary["participation_summary"]["zero_filled_days"] == 2
     assert summary["participation_metric_hash"].startswith("sha256:")
 
+
+def test_report_summary_can_feed_operator_daily_participation_event() -> None:
+    summary = summarize_report_candidate(_candidate())
+
+    event = summary["operator_events"][0]
+    assert event["event_type"] == "daily_participation_status"
+    assert event["count_basis"] == "filled"
+    assert event["days_with_intent"] == 3
+    assert event["zero_filled_days"] == 2
+    assert event["not_a_fill_guarantee"] is True

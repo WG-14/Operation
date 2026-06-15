@@ -96,6 +96,8 @@ class FixedBpsExecutionModel:
             latency_reference_policy_warning=request.latency_reference_policy_warning,
             feature_snapshot=request.feature_snapshot,
             regime_snapshot=request.regime_snapshot,
+            entry_signal_source=request.entry_signal_source,
+            entry_sizing_source=request.entry_sizing_source,
             intra_candle_policy=request.intra_candle_policy,
             base_seed=None,
             derived_seed_hash=None,
