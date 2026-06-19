@@ -7243,24 +7243,36 @@ class _FlattenBrokerSuccess:
 
 
 def _stub_flatten_submit_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    rules = order_rules.DerivedOrderConstraints(
-        market_id="KRW-BTC",
-        bid_min_total_krw=5000.0,
-        ask_min_total_krw=5000.0,
-        bid_price_unit=1.0,
-        ask_price_unit=1.0,
-        order_types=("limit", "price", "market"),
-        bid_types=("price",),
-        ask_types=("limit", "market"),
-        order_sides=("bid", "ask"),
-        min_qty=0.0001,
-        qty_step=0.0001,
-        min_notional_krw=5000.0,
-        max_qty_decimals=8,
-    )
+    def _resolution(_pair: str) -> object:
+        rules = order_rules.DerivedOrderConstraints(
+            market_id="KRW-BTC",
+            bid_min_total_krw=float(settings.MIN_ORDER_NOTIONAL_KRW or 5000.0),
+            ask_min_total_krw=float(settings.MIN_ORDER_NOTIONAL_KRW or 5000.0),
+            bid_price_unit=1.0,
+            ask_price_unit=1.0,
+            order_types=("limit", "price", "market"),
+            bid_types=("price",),
+            ask_types=("limit", "market"),
+            order_sides=("bid", "ask"),
+            min_qty=float(settings.LIVE_MIN_ORDER_QTY or 0.0001),
+            qty_step=float(settings.LIVE_ORDER_QTY_STEP or 0.00000001),
+            min_notional_krw=float(settings.MIN_ORDER_NOTIONAL_KRW or 5000.0),
+            max_qty_decimals=int(settings.LIVE_ORDER_MAX_QTY_DECIMALS or 8),
+        )
+        return order_rules.RuleResolution(
+            rules=rules,
+            source={
+                "min_qty": "exchange",
+                "min_notional_krw": "exchange",
+                "max_qty_decimals": "exchange",
+                "qty_step": "exchange",
+            },
+            source_mode="exchange",
+        )
+
     monkeypatch.setattr(
         "bithumb_bot.broker.order_rules.get_effective_order_rules",
-        lambda _pair: SimpleNamespace(rules=rules),
+        _resolution,
     )
 
 
@@ -7770,8 +7782,14 @@ def test_flatten_position_submits_sell_when_position_exists(monkeypatch, tmp_pat
     object.__setattr__(settings, "MODE", "live")
     prev_step = settings.LIVE_ORDER_QTY_STEP
     prev_max_decimals = settings.LIVE_ORDER_MAX_QTY_DECIMALS
+    prev_live_dry_run = settings.LIVE_DRY_RUN
+    prev_live_real_order_armed = settings.LIVE_REAL_ORDER_ARMED
+    prev_kill_switch = settings.KILL_SWITCH
     object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", 0.00000001)
     object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", 8)
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    object.__setattr__(settings, "KILL_SWITCH", False)
     monkeypatch.setattr("bithumb_bot.operator_commands.validate_live_mode_preflight", lambda _cfg: None)
 
     conn = ensure_db()
@@ -7868,6 +7886,9 @@ def test_flatten_position_submits_sell_when_position_exists(monkeypatch, tmp_pat
     finally:
         object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", prev_step)
         object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", prev_max_decimals)
+        object.__setattr__(settings, "LIVE_DRY_RUN", prev_live_dry_run)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", prev_live_real_order_armed)
+        object.__setattr__(settings, "KILL_SWITCH", prev_kill_switch)
 
 
 @pytest.mark.lot_native_regression_gate
@@ -8030,6 +8051,12 @@ def test_flatten_position_submit_failure_persisted(monkeypatch, tmp_path, capsys
     _stub_flatten_submit_rules(monkeypatch)
     monkeypatch.setenv("MODE", "live")
     object.__setattr__(settings, "MODE", "live")
+    prev_live_dry_run = settings.LIVE_DRY_RUN
+    prev_live_real_order_armed = settings.LIVE_REAL_ORDER_ARMED
+    prev_kill_switch = settings.KILL_SWITCH
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    object.__setattr__(settings, "KILL_SWITCH", False)
     monkeypatch.setattr("bithumb_bot.operator_commands.validate_live_mode_preflight", lambda _cfg: None)
 
     conn = ensure_db()
@@ -8064,7 +8091,16 @@ def test_flatten_position_submit_failure_persisted(monkeypatch, tmp_path, capsys
 
     class _FailBroker:
         def get_balance(self) -> BrokerBalance:
-            return BrokerBalance(cash_available=0.0, cash_locked=0.0, asset_available=10.0, asset_locked=0.0)
+            return BrokerBalance(cash_available=0.0, cash_locked=0.0, asset_available=0.01, asset_locked=0.0)
+
+        def get_recent_orders_for_recovery(
+            self,
+            *,
+            limit: int = 100,
+            market: str | None = None,
+            page_size: int | None = None,
+        ):
+            return []
 
         def place_order(
             self,
@@ -8085,40 +8121,45 @@ def test_flatten_position_submit_failure_persisted(monkeypatch, tmp_path, capsys
         lambda _pair: BestQuote(market="KRW-BTC", bid_price=100_000_000.0, ask_price=100_010_000.0),
     )
 
-    with pytest.raises(SystemExit) as exc:
-        cmd_flatten_position(dry_run=False)
-
-    assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "failed" in out
-    state = runtime_state.snapshot()
-    assert state.last_flatten_position_status == "failed"
-    assert state.last_flatten_position_summary is not None
-    assert "submit boom" in state.last_flatten_position_summary
-    conn = ensure_db()
     try:
-        flatten_order = conn.execute(
-            """
-            SELECT client_order_id, status, side, last_error
-            FROM orders
-            WHERE client_order_id LIKE 'flatten_%'
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        assert flatten_order is not None
-        assert flatten_order["status"] == "SUBMIT_UNKNOWN"
-        assert flatten_order["side"] == "SELL"
-        assert "operator flatten submit outcome unknown" in str(flatten_order["last_error"])
-        event_types = {
-            str(row["event_type"])
-            for row in conn.execute(
-                "SELECT event_type FROM order_events WHERE client_order_id=?",
-                (flatten_order["client_order_id"],),
-            ).fetchall()
-        }
+        with pytest.raises(SystemExit) as exc:
+            cmd_flatten_position(dry_run=False)
+
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "failed" in out
+        state = runtime_state.snapshot()
+        assert state.last_flatten_position_status == "failed"
+        assert state.last_flatten_position_summary is not None
+        assert "submit boom" in state.last_flatten_position_summary
+        conn = ensure_db()
+        try:
+            flatten_order = conn.execute(
+                """
+                SELECT client_order_id, status, side, last_error
+                FROM orders
+                WHERE client_order_id LIKE 'flatten_%'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            assert flatten_order is not None
+            assert flatten_order["status"] == "SUBMIT_UNKNOWN"
+            assert flatten_order["side"] == "SELL"
+            assert "operator flatten submit outcome unknown" in str(flatten_order["last_error"])
+            event_types = {
+                str(row["event_type"])
+                for row in conn.execute(
+                    "SELECT event_type FROM order_events WHERE client_order_id=?",
+                    (flatten_order["client_order_id"],),
+                ).fetchall()
+            }
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        object.__setattr__(settings, "LIVE_DRY_RUN", prev_live_dry_run)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", prev_live_real_order_armed)
+        object.__setattr__(settings, "KILL_SWITCH", prev_kill_switch)
     assert {"intent_created", "submit_started", "submit_attempt_preflight", "status_transition", "submit_timeout"} <= event_types
 
 
@@ -8126,6 +8167,12 @@ def test_flatten_position_validation_failure_blocks_submission(monkeypatch, tmp_
     _set_tmp_db(tmp_path, monkeypatch)
     monkeypatch.setenv("MODE", "live")
     object.__setattr__(settings, "MODE", "live")
+    prev_live_dry_run = settings.LIVE_DRY_RUN
+    prev_live_real_order_armed = settings.LIVE_REAL_ORDER_ARMED
+    prev_kill_switch = settings.KILL_SWITCH
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    object.__setattr__(settings, "KILL_SWITCH", False)
     monkeypatch.setattr("bithumb_bot.operator_commands.validate_live_mode_preflight", lambda _cfg: None)
 
     conn = ensure_db()
@@ -8165,6 +8212,15 @@ def test_flatten_position_validation_failure_blocks_submission(monkeypatch, tmp_
         def get_balance(self) -> BrokerBalance:
             return BrokerBalance(cash_available=0.0, cash_locked=0.0, asset_available=0.0, asset_locked=0.0)
 
+        def get_recent_orders_for_recovery(
+            self,
+            *,
+            limit: int = 100,
+            market: str | None = None,
+            page_size: int | None = None,
+        ):
+            return []
+
         def place_order(
             self,
             *,
@@ -8186,13 +8242,22 @@ def test_flatten_position_validation_failure_blocks_submission(monkeypatch, tmp_
         lambda _pair: BestQuote(market="KRW-BTC", bid_price=100_000_000.0, ask_price=100_010_000.0),
     )
 
-    with pytest.raises(SystemExit) as exc:
-        cmd_flatten_position(dry_run=False)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            cmd_flatten_position(dry_run=False)
 
-    assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "failed: ValueError: insufficient available asset" in out
-    assert broker.place_order_calls == 0
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "blocked reason=broker_residual_does_not_match_local_evidence" in out
+        state = runtime_state.snapshot()
+        assert state.last_flatten_position_status == "blocked"
+        assert state.last_flatten_position_summary is not None
+        assert '"reason": "broker_residual_does_not_match_local_evidence"' in state.last_flatten_position_summary
+        assert broker.place_order_calls == 0
+    finally:
+        object.__setattr__(settings, "LIVE_DRY_RUN", prev_live_dry_run)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", prev_live_real_order_armed)
+        object.__setattr__(settings, "KILL_SWITCH", prev_kill_switch)
 
 
 def test_flatten_position_blocks_on_invalid_best_quote(monkeypatch, tmp_path, capsys):

@@ -239,20 +239,30 @@ def evaluate_clean_account_gate(
     reference_price: float | None = None,
 ) -> CleanAccountGateResult:
     normalized = readiness_snapshot.position_state.normalized_exposure
-    effective_flat = bool(readiness_snapshot.effective_flat)
+    effective_flat = bool(
+        getattr(readiness_snapshot, "effective_flat", getattr(normalized, "effective_flat", False))
+    )
+    residual_inventory_state = str(getattr(readiness_snapshot, "residual_inventory_state", "") or "")
+    if residual_inventory_state in {"NON_EXECUTABLE_RESIDUAL_HOLDINGS", "RESIDUAL_INVENTORY_TRACKED"}:
+        return CleanAccountGateResult(
+            allowed=True,
+            reason_code="clean_account_gate_deferred_to_residual_inventory_policy",
+            reason="residual inventory policy is the active authority for this non-executable residual state",
+        )
     raw_qty = max(
         0.0,
         float(getattr(normalized, "raw_total_asset_qty", 0.0) or 0.0),
-        float(readiness_snapshot.total_effective_exposure_qty or 0.0),
+        float(getattr(readiness_snapshot, "total_effective_exposure_qty", 0.0) or 0.0),
     )
     price = float(reference_price or 0.0)
-    if price <= 0 and readiness_snapshot.residual_inventory.residual_notional_krw is not None:
-        residual_qty = float(readiness_snapshot.residual_inventory.residual_qty or 0.0)
+    residual_inventory = getattr(readiness_snapshot, "residual_inventory", None)
+    if price <= 0 and residual_inventory is not None and residual_inventory.residual_notional_krw is not None:
+        residual_qty = float(residual_inventory.residual_qty or 0.0)
         if residual_qty > 0:
-            price = float(readiness_snapshot.residual_inventory.residual_notional_krw) / residual_qty
+            price = float(residual_inventory.residual_notional_krw) / residual_qty
     notional = raw_qty * price if price > 0 else 0.0
     min_notional = float(settings.MIN_ORDER_NOTIONAL_KRW or 0.0)
-    exchange_sellable = bool(readiness_snapshot.residual_inventory.exchange_sellable) or (
+    exchange_sellable = bool(getattr(residual_inventory, "exchange_sellable", False)) or (
         min_notional > 0 and notional + 1e-12 >= min_notional
     )
     if effective_flat and raw_qty > 1e-12 and exchange_sellable:

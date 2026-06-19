@@ -352,10 +352,13 @@ def _assert_no_broker_open_orders(broker) -> int:
 
 
 def _is_residual_closeout_state(*, terminal_state: str, canonical_exposure) -> bool:
-    if str(terminal_state) == "dust_only":
-        return True
+    raw_total_asset_qty = max(0.0, float(getattr(canonical_exposure, "raw_total_asset_qty", 0.0) or 0.0))
+    tracked_dust_qty = max(0.0, float(getattr(canonical_exposure, "dust_tracking_qty", 0.0) or 0.0))
+    if raw_total_asset_qty <= _QTY_EPS and tracked_dust_qty <= _QTY_EPS:
+        return False
     return bool(
-        getattr(canonical_exposure, "has_dust_only_remainder", False)
+        str(terminal_state) == "dust_only"
+        and getattr(canonical_exposure, "has_dust_only_remainder", False)
         and getattr(canonical_exposure, "effective_flat", False)
     )
 
@@ -953,7 +956,14 @@ def flatten_btc_position(*, broker, dry_run: bool = False, trigger: str = "opera
 
         raw_total_asset_qty = float(canonical_exposure.raw_total_asset_qty)
         tracked_dust_qty = float(canonical_exposure.dust_tracking_qty)
-        if trigger == "operator" and (raw_total_asset_qty > 0.0 or tracked_dust_qty > 0.0):
+        min_qty = max(0.0, float(settings.LIVE_MIN_ORDER_QTY or 0.0))
+        should_report_operator_block = (
+            trigger == "operator"
+            and (raw_total_asset_qty > 0.0 or tracked_dust_qty > 0.0)
+            and (terminal_state != "dust_only" or raw_total_asset_qty + _QTY_EPS >= min_qty)
+            and min_qty > 0.0
+        )
+        if should_report_operator_block:
             summary = _operator_blocked_json_summary(
                 reason=str(exit_block_reason),
                 dry_run=dry_run,
