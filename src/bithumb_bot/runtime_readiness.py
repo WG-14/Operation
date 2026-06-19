@@ -211,6 +211,69 @@ class RuntimeReadinessSnapshot:
         }
 
 
+@dataclass(frozen=True)
+class CleanAccountGateResult:
+    allowed: bool
+    reason_code: str
+    reason: str
+    recommended_action: str | None = None
+    recommended_command: str | None = None
+    sellable_residual_qty: float = 0.0
+    sellable_residual_notional_krw: float = 0.0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "allowed": bool(self.allowed),
+            "reason_code": self.reason_code,
+            "reason": self.reason,
+            "recommended_action": self.recommended_action,
+            "recommended_command": self.recommended_command,
+            "sellable_residual_qty": float(self.sellable_residual_qty),
+            "sellable_residual_notional_krw": float(self.sellable_residual_notional_krw),
+        }
+
+
+def evaluate_clean_account_gate(
+    readiness_snapshot: RuntimeReadinessSnapshot,
+    *,
+    reference_price: float | None = None,
+) -> CleanAccountGateResult:
+    normalized = readiness_snapshot.position_state.normalized_exposure
+    effective_flat = bool(readiness_snapshot.effective_flat)
+    raw_qty = max(
+        0.0,
+        float(getattr(normalized, "raw_total_asset_qty", 0.0) or 0.0),
+        float(readiness_snapshot.total_effective_exposure_qty or 0.0),
+    )
+    price = float(reference_price or 0.0)
+    if price <= 0 and readiness_snapshot.residual_inventory.residual_notional_krw is not None:
+        residual_qty = float(readiness_snapshot.residual_inventory.residual_qty or 0.0)
+        if residual_qty > 0:
+            price = float(readiness_snapshot.residual_inventory.residual_notional_krw) / residual_qty
+    notional = raw_qty * price if price > 0 else 0.0
+    min_notional = float(settings.MIN_ORDER_NOTIONAL_KRW or 0.0)
+    exchange_sellable = bool(readiness_snapshot.residual_inventory.exchange_sellable) or (
+        min_notional > 0 and notional + 1e-12 >= min_notional
+    )
+    if effective_flat and raw_qty > 1e-12 and exchange_sellable:
+        return CleanAccountGateResult(
+            allowed=False,
+            reason_code="sellable_residual_clean_account_required",
+            reason="effective_flat is not a clean account proof; sellable residual remains",
+            recommended_action="run flatten-position dry-run JSON proof before automated trading",
+            recommended_command="uv run bithumb-bot flatten-position --dry-run --json",
+            sellable_residual_qty=raw_qty,
+            sellable_residual_notional_krw=notional,
+        )
+    return CleanAccountGateResult(
+        allowed=True,
+        reason_code="clean_account_gate_pass",
+        reason="no sellable residual requiring operator closeout",
+        sellable_residual_qty=raw_qty if effective_flat else 0.0,
+        sellable_residual_notional_krw=notional if effective_flat else 0.0,
+    )
+
+
 def _make_structured_blocker(
     *,
     code: str,

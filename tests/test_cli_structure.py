@@ -172,6 +172,7 @@ def test_command_registration_contains_expected_major_groups() -> None:
         ("research-forward-diagnostics", ["--manifest", "--split", "--features", "--horizons", "--bucket", "--entry-price", "--min-bucket-count", "--out", "--json"]),
         ("profile-promote", ["--profile", "--mode", "--out", "--paper-validation-evidence", "--live-readiness-evidence"]),
         ("backfill-candles", ["--market", "--interval", "--start", "--end", "--batch-size", "--dry-run"]),
+        ("flatten-position", ["--dry-run", "--json"]),
     ],
 )
 def test_important_command_help_exposes_owned_options(
@@ -213,6 +214,18 @@ def test_selected_commands_parse_with_real_options() -> None:
     assert args.cmd == "strategy-sweep"
     assert args.short == (5, 7)
     assert args.json is True
+
+
+def test_flatten_position_supports_json_dry_run() -> None:
+    registry = command_registry()
+    parser = build_parser(registry)
+
+    args = parser.parse_args(["flatten-position", "--dry-run", "--json"])
+
+    assert args.cmd == "flatten-position"
+    assert args.dry_run is True
+    assert args.json is True
+    assert registry["flatten-position"].json_output_supported is True
 
 
 def test_dispatch_uses_spec_handler_with_context() -> None:

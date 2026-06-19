@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from bithumb_bot.broker import order_rules
 from bithumb_bot.broker.base import BrokerRejectError
 from bithumb_bot import config as config_module
 from bithumb_bot.config import settings
 from bithumb_bot.execution_order_rules import ExecutionOrderRules, resolve_execution_order_rules
+from bithumb_bot.quantity_contract import ExchangeQuantityContract
 from bithumb_bot.db_core import (
     ensure_db,
     fetch_latest_order_rule_snapshot,
@@ -1439,3 +1441,87 @@ def test_auth_failed_fallback_snapshot_source_json_is_quarantined(tmp_path) -> N
     assert source_json["eligible_for_live_order_authority"] is False
     assert source_json["operator_action"] == "restore_private_api_or_review_fallback_before_live"
     assert trusted is None
+
+
+def test_quantity_contract_marks_qty_step_local_fallback() -> None:
+    rules = order_rules.DerivedOrderConstraints(
+        market_id="KRW-BTC",
+        min_qty=0.0001,
+        qty_step=0.0001,
+        min_notional_krw=5000.0,
+        max_qty_decimals=8,
+    )
+    resolution = SimpleNamespace(
+        rules=rules,
+        source={
+            "min_qty": "local_fallback",
+            "qty_step": "local_fallback",
+            "min_notional_krw": "local_fallback",
+            "max_qty_decimals": "local_fallback",
+        },
+        source_mode="merged",
+        snapshot_persisted=False,
+    )
+
+    contract = ExchangeQuantityContract.from_rule_resolution(resolution, market="KRW-BTC")
+
+    assert contract.configured_qty_step == pytest.approx(0.0001)
+    assert contract.configured_qty_step_source == "local_fallback"
+    assert contract.exchange_qty_step is None
+    assert contract.exchange_qty_step_source == "missing"
+    assert contract.qty_step_authority_level == "local_fallback"
+
+
+def test_quantity_contract_separates_exchange_min_total_from_local_qty_step() -> None:
+    rules = order_rules.DerivedOrderConstraints(
+        market_id="KRW-BTC",
+        ask_min_total_krw=5000.0,
+        min_qty=0.0001,
+        qty_step=0.0001,
+        min_notional_krw=5000.0,
+        max_qty_decimals=8,
+    )
+    resolution = SimpleNamespace(
+        rules=rules,
+        source={
+            "ask_min_total_krw": "chance_doc",
+            "min_qty": "local_fallback",
+            "qty_step": "local_fallback",
+            "min_notional_krw": "local_fallback",
+            "max_qty_decimals": "local_fallback",
+        },
+        source_mode="merged",
+        snapshot_persisted=False,
+    )
+
+    contract = ExchangeQuantityContract.from_rule_resolution(resolution, market="KRW-BTC")
+
+    assert contract.min_notional_source == "local_fallback"
+    assert contract.qty_step_authority_level == "local_fallback"
+    assert contract.as_dict()["quantity_rule_source_mode"] == "local_fallback"
+
+
+def test_qty_step_authority_level_is_visible_in_rule_resolution() -> None:
+    rules = order_rules.DerivedOrderConstraints(
+        market_id="KRW-BTC",
+        min_qty=0.0001,
+        qty_step=0.0001,
+        min_notional_krw=5000.0,
+        max_qty_decimals=8,
+    )
+    resolution = SimpleNamespace(
+        rules=rules,
+        source={
+            "min_qty": "chance_doc",
+            "qty_step": "chance_doc",
+            "min_notional_krw": "chance_doc",
+            "max_qty_decimals": "chance_doc",
+        },
+        source_mode="exchange",
+        snapshot_persisted=False,
+    )
+
+    contract = ExchangeQuantityContract.from_rule_resolution(resolution, market="KRW-BTC")
+
+    assert contract.as_dict()["qty_step_authority_level"] == "exchange_hard"
+    assert contract.exchange_qty_step_source == "chance_doc"

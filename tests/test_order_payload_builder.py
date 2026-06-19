@@ -138,3 +138,45 @@ def test_build_order_payload_from_submit_plan_uses_planned_fields() -> None:
         "price": "80000",
         "client_order_id": "cid-plan-payload",
     }
+
+
+def test_market_sell_payload_accepts_eight_decimal_volume() -> None:
+    rules = order_rules.DerivedOrderConstraints(
+        order_types=("limit", "price", "market"),
+        bid_types=("price",),
+        ask_types=("limit", "market"),
+        order_sides=("bid", "ask"),
+        bid_min_total_krw=5000.0,
+        ask_min_total_krw=5000.0,
+        min_notional_krw=5000.0,
+        min_qty=0.0001,
+        qty_step=0.0001,
+        max_qty_decimals=8,
+        bid_price_unit=1.0,
+        ask_price_unit=1.0,
+    )
+    intent = OrderIntent(
+        client_order_id="cid-sell-8dp",
+        market="KRW-BTC",
+        side="SELL",
+        normalized_side="ask",
+        qty=0.00049913,
+        price=None,
+        created_ts=1_700_000_000_000,
+        market_price_hint=94_480_000.0,
+    )
+    plan = build_submit_plan(
+        intent=intent,
+        rules=rules,
+        fetch_order_rules=lambda _market: type("Resolution", (), {"rules": rules})(),
+        fetch_top_of_book=lambda _market: None,
+        resolve_best_ask=lambda _quote, _market: 94_480_000.0,
+        truncate_volume=lambda qty: qty,
+        skip_qty_revalidation=True,
+    )
+
+    payload_plan = build_order_payload_from_plan(plan=plan)
+
+    assert plan.requested_qty == pytest.approx(0.00049913)
+    assert plan.submitted_qty == pytest.approx(0.00049913)
+    assert payload_plan.payload["volume"] == "0.00049913"

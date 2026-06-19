@@ -34,6 +34,14 @@ from bithumb_bot.execution_service import (
 )
 from bithumb_bot.marketdata import _get_with_retry
 from bithumb_bot.public_api_orderbook import BestQuote
+from bithumb_bot.broker import order_rules
+from bithumb_bot.broker.order_submit import plan_place_order
+from bithumb_bot.operator_closeout import (
+    build_operator_clean_closeout_contract,
+    validate_clean_closeout_contract_for_submit,
+)
+from bithumb_bot.runtime_readiness import evaluate_clean_account_gate
+from bithumb_bot.quantity_contract import ExchangeQuantityContract
 from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 from bithumb_bot.target_position import TargetPositionState
 
@@ -218,6 +226,173 @@ def _submit_plan_payload(plan: object | None) -> dict[str, object]:
     payload = as_dict()
     assert isinstance(payload, dict)
     return payload
+
+
+class _CloseoutBroker:
+    def get_balance(self) -> BrokerBalance:
+        return BrokerBalance(cash_available=0.0, cash_locked=0.0, asset_available=0.00049913, asset_locked=0.0)
+
+
+def _closeout_rules(*, qty_step: float = 0.0001) -> order_rules.DerivedOrderConstraints:
+    return order_rules.DerivedOrderConstraints(
+        market_id="KRW-BTC",
+        bid_min_total_krw=5000.0,
+        ask_min_total_krw=5000.0,
+        bid_price_unit=1.0,
+        ask_price_unit=1.0,
+        order_types=("limit", "price", "market"),
+        bid_types=("price",),
+        ask_types=("limit", "market"),
+        order_sides=("bid", "ask"),
+        min_qty=0.0001,
+        qty_step=qty_step,
+        min_notional_krw=5000.0,
+        max_qty_decimals=8,
+    )
+
+
+def test_operator_clean_closeout_does_not_treat_local_fallback_step_as_exchange_hard_rule() -> None:
+    contract = build_operator_clean_closeout_contract(
+        broker=_CloseoutBroker(),
+        market="KRW-BTC",
+        raw_total_asset_qty=0.00049913,
+        broker_asset_available=0.00049913,
+        market_price=94_480_000.0,
+        quantity_contract=ExchangeQuantityContract.local_fallback(
+            market="KRW-BTC",
+            min_qty=0.0001,
+            min_notional_krw=5000.0,
+            max_qty_decimals=8,
+            configured_qty_step=0.0001,
+        ),
+        dry_run=True,
+        plan_place_order_fn=plan_place_order,
+        rules=_closeout_rules(),
+        client_order_id="closeout-local",
+    )
+
+    assert contract.closeout_allowed is True
+    assert contract.clean_account_after_sell is True
+    assert contract.planned_sell_qty == pytest.approx(0.00049913)
+    assert contract.submit_payload_preview["payload_volume"] == "0.00049913"
+    assert contract.quantity_authority["qty_step_authority_level"] == "local_fallback"
+
+
+def test_exchange_hard_qty_step_blocks_non_step_exact_qty() -> None:
+    quantity_contract = ExchangeQuantityContract.from_rule_resolution(
+        SimpleNamespace(
+            rules=_closeout_rules(),
+            source={
+                "min_qty": "chance_doc",
+                "qty_step": "chance_doc",
+                "min_notional_krw": "chance_doc",
+                "max_qty_decimals": "chance_doc",
+            },
+            source_mode="exchange",
+            snapshot_persisted=False,
+        ),
+        market="KRW-BTC",
+    )
+
+    contract = build_operator_clean_closeout_contract(
+        broker=_CloseoutBroker(),
+        market="KRW-BTC",
+        raw_total_asset_qty=0.00049913,
+        broker_asset_available=0.00049913,
+        market_price=94_480_000.0,
+        quantity_contract=quantity_contract,
+        dry_run=True,
+        plan_place_order_fn=plan_place_order,
+        rules=_closeout_rules(),
+        client_order_id="closeout-hard",
+    )
+
+    assert contract.closeout_allowed is False
+    assert contract.clean_account_after_sell is False
+    assert contract.planned_sell_qty == pytest.approx(0.0004)
+    assert contract.block_reason == "full_closeout_would_leave_residual"
+    assert contract.quantity_authority["qty_step_authority_level"] == "exchange_hard"
+
+
+def test_local_fallback_qty_step_does_not_silently_floor_clean_closeout() -> None:
+    contract = build_operator_clean_closeout_contract(
+        broker=_CloseoutBroker(),
+        market="KRW-BTC",
+        raw_total_asset_qty=0.00049913,
+        broker_asset_available=0.00049913,
+        market_price=94_480_000.0,
+        quantity_contract=ExchangeQuantityContract.local_fallback(
+            market="KRW-BTC",
+            min_qty=0.0001,
+            min_notional_krw=5000.0,
+            max_qty_decimals=8,
+            configured_qty_step=0.0001,
+        ),
+        dry_run=True,
+        plan_place_order_fn=plan_place_order,
+        rules=_closeout_rules(),
+        client_order_id="closeout-no-floor",
+    )
+
+    assert not (contract.closeout_allowed and contract.planned_sell_qty == pytest.approx(0.0004))
+    assert contract.planned_sell_qty == pytest.approx(contract.raw_total_asset_qty)
+
+
+def test_real_flatten_refuses_when_clean_closeout_contract_blocked() -> None:
+    blocked = build_operator_clean_closeout_contract(
+        broker=_CloseoutBroker(),
+        market="KRW-BTC",
+        raw_total_asset_qty=0.00049913,
+        broker_asset_available=0.00049913,
+        market_price=94_480_000.0,
+        quantity_contract=ExchangeQuantityContract.from_rule_resolution(
+            SimpleNamespace(
+                rules=_closeout_rules(),
+                source={
+                    "min_qty": "chance_doc",
+                    "qty_step": "chance_doc",
+                    "min_notional_krw": "chance_doc",
+                    "max_qty_decimals": "chance_doc",
+                },
+                source_mode="exchange",
+                snapshot_persisted=False,
+            ),
+            market="KRW-BTC",
+        ),
+        dry_run=False,
+        plan_place_order_fn=plan_place_order,
+        rules=_closeout_rules(),
+        client_order_id="closeout-blocked",
+    )
+
+    with pytest.raises(ValueError, match="blocked"):
+        validate_clean_closeout_contract_for_submit(
+            blocked,
+            submitted_qty=blocked.planned_sell_qty,
+            broker_asset_available=0.00049913,
+        )
+
+
+def test_clean_account_gate_blocks_effective_flat_but_sellable_broker_balance() -> None:
+    readiness = SimpleNamespace(
+        effective_flat=True,
+        position_state=SimpleNamespace(
+            normalized_exposure=SimpleNamespace(raw_total_asset_qty=0.00049913)
+        ),
+        total_effective_exposure_qty=0.0,
+        residual_inventory=SimpleNamespace(
+            exchange_sellable=True,
+            residual_qty=0.00049913,
+            residual_notional_krw=0.00049913 * 94_480_000.0,
+        ),
+    )
+
+    result = evaluate_clean_account_gate(readiness)
+
+    assert result.allowed is False
+    assert result.reason_code == "sellable_residual_clean_account_required"
+    assert result.recommended_command == "uv run bithumb-bot flatten-position --dry-run --json"
+    assert result.sellable_residual_qty == pytest.approx(0.00049913)
 
 
 def _persist_execution_plan_for_submit_plan(plan: ExecutionSubmitPlan) -> None:

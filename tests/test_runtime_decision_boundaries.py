@@ -56,6 +56,18 @@ from bithumb_bot.strategy.base import PositionContext
 from bithumb_bot.strategy.sma import create_sma_with_filter_strategy
 
 
+def test_operator_clean_closeout_unavailable_to_strategy_decision() -> None:
+    source = Path("src/bithumb_bot/flatten.py").read_text(encoding="utf-8")
+
+    operator_gate = source.index('if trigger == "operator" and _is_residual_closeout_state(')
+    closeout_builder = source.index("build_operator_clean_closeout_contract(")
+    strategy_authority = source.index("sellable_executable_lot_count")
+
+    assert operator_gate < closeout_builder
+    assert strategy_authority < closeout_builder
+    assert 'trigger == "operator"' in source[operator_gate:closeout_builder]
+
+
 class CountingConnection(sqlite3.Connection):
     commit_count: int
 

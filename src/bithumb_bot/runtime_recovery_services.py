@@ -18,7 +18,7 @@ from .external_position_repair import build_external_position_accounting_repair_
 from .oms import collect_risky_order_state
 from .observability import format_log_kv
 from .risk import RISK_STATE_MISMATCH
-from .runtime_readiness import compute_runtime_readiness_snapshot
+from .runtime_readiness import compute_runtime_readiness_snapshot, evaluate_clean_account_gate
 from .strategy_performance import evaluate_strategy_performance_gate
 
 
@@ -133,6 +133,15 @@ class StartupSafetyGateService:
             portfolio_conn.close()
 
         normalized_position = readiness_snapshot.position_state.normalized_exposure
+        clean_account_gate = evaluate_clean_account_gate(readiness_snapshot)
+        if not clean_account_gate.allowed:
+            reasons.append(
+                "clean_account_gate="
+                f"{clean_account_gate.reason_code}"
+                f"(sellable_residual_qty={clean_account_gate.sellable_residual_qty:.12f},"
+                f"sellable_residual_notional_krw={clean_account_gate.sellable_residual_notional_krw:.2f},"
+                f"recommended_command={clean_account_gate.recommended_command})"
+            )
         if readiness_snapshot.recovery_stage == "AUTHORITY_RESIDUAL_NORMALIZATION_PENDING":
             assessment = readiness_snapshot.position_authority_assessment
             reasons.append(

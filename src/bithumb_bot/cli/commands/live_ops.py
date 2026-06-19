@@ -43,7 +43,7 @@ def _resume(args: argparse.Namespace, _context) -> None:
 def _flatten(args: argparse.Namespace, _context) -> None:
     from bithumb_bot.operator_commands import cmd_flatten_position
 
-    cmd_flatten_position(dry_run=bool(args.dry_run))
+    cmd_flatten_position(dry_run=bool(args.dry_run), json_output=bool(args.json))
 
 
 def _smoke_buy(args: argparse.Namespace, _context) -> None:
@@ -173,13 +173,17 @@ def command_specs() -> list[CommandSpec]:
             handler=_flatten,
             help="emergency flatten open position",
             description="Flatten current position for emergency exposure reduction.",
-            build=lambda p: p.add_argument("--dry-run", action="store_true"),
+            build=lambda p: (
+                p.add_argument("--dry-run", action="store_true"),
+                p.add_argument("--json", action="store_true"),
+            ),
             read_only=False,
             mutating=True,
             requires_live=True,
             guard_policy="operator_risk_reduction",
             writes_db=True,
             uses_broker=True,
+            json_output_supported=True,
         ),
         make_spec(
             "cancel-open-orders",
