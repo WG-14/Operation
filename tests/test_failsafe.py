@@ -979,6 +979,79 @@ def test_clean_account_gate_blocks_effective_flat_but_sellable_broker_balance() 
     assert result.sellable_residual_qty == pytest.approx(0.00049913)
 
 
+def test_clean_account_gate_recommends_projection_repair_when_broker_and_portfolio_flat() -> None:
+    readiness = SimpleNamespace(
+        effective_flat=True,
+        position_state=SimpleNamespace(
+            normalized_exposure=SimpleNamespace(raw_total_asset_qty=0.00049913)
+        ),
+        total_effective_exposure_qty=0.00049913,
+        residual_inventory=SimpleNamespace(
+            exchange_sellable=True,
+            residual_qty=0.00049913,
+            residual_notional_krw=0.00049913 * 94_480_000.0,
+        ),
+        projection_convergence={
+            "portfolio_qty": 0.0,
+            "projected_total_qty": 0.00049913,
+            "converged": False,
+            "reason": "portfolio_projection_qty_mismatch",
+        },
+        authority_truth_model={
+            "portfolio_asset_qty": 0.0,
+            "projected_total_qty": 0.00049913,
+        },
+        broker_position_evidence={
+            "broker_qty_known": True,
+            "broker_qty": 0.0,
+        },
+    )
+
+    result = evaluate_clean_account_gate(readiness)
+
+    assert result.allowed is False
+    assert result.reason_code == "position_authority_projection_rebuild_required"
+    assert result.recommended_command == "uv run python bot.py rebuild-position-authority"
+    assert "flatten-position" not in str(result.recommended_command)
+    assert result.sellable_residual_qty == pytest.approx(0.0)
+
+
+def test_clean_account_gate_recommends_flatten_when_broker_has_sellable_residual() -> None:
+    readiness = SimpleNamespace(
+        effective_flat=True,
+        position_state=SimpleNamespace(
+            normalized_exposure=SimpleNamespace(raw_total_asset_qty=0.00049913)
+        ),
+        total_effective_exposure_qty=0.0,
+        residual_inventory=SimpleNamespace(
+            exchange_sellable=True,
+            residual_qty=0.00049913,
+            residual_notional_krw=0.00049913 * 94_480_000.0,
+        ),
+        projection_convergence={
+            "portfolio_qty": 0.0,
+            "projected_total_qty": 0.0,
+            "converged": True,
+            "reason": "none",
+        },
+        authority_truth_model={
+            "portfolio_asset_qty": 0.0,
+            "projected_total_qty": 0.0,
+        },
+        broker_position_evidence={
+            "broker_qty_known": True,
+            "broker_qty": 0.00049913,
+        },
+    )
+
+    result = evaluate_clean_account_gate(readiness)
+
+    assert result.allowed is False
+    assert result.reason_code == "sellable_residual_clean_account_required"
+    assert result.recommended_command == "uv run bithumb-bot flatten-position --dry-run --json"
+    assert result.sellable_residual_qty == pytest.approx(0.00049913)
+
+
 def _persist_execution_plan_for_submit_plan(plan: ExecutionSubmitPlan) -> None:
     submit_hash = plan.content_hash()
     payload = _submit_plan_payload(plan)

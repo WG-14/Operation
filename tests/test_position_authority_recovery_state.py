@@ -3555,6 +3555,130 @@ def test_flat_stale_lot_projection_apply_clears_projection_and_records_audit(rec
     assert basis["post_repair_projection_convergence"]["converged"] is True
 
 
+def test_ec2_00049913_full_closeout_projection_converges_after_rebuild(recovery_db):
+    conn = ensure_db(str(recovery_db))
+    try:
+        _apply_filled_order(
+            conn,
+            client_order_id="ec2_00049913_buy",
+            side="BUY",
+            qty=0.00049913,
+            ts_ms=1_781_881_170_000,
+            fill_id="ec2-00049913-buy-fill",
+            price=95_499_969.9497125,
+            fee=0.0,
+        )
+        _apply_filled_order(
+            conn,
+            client_order_id="flatten_1781881180147",
+            side="SELL",
+            qty=0.00049913,
+            ts_ms=1_781_881_180_147,
+            fill_id="C0101000003112013506:aggregate:1",
+            price=95_499_969.9497125,
+            fee=19.06,
+        )
+        conn.execute(
+            """
+            UPDATE orders
+            SET exchange_order_id=?, decision_reason_code='target_delta_rebalance', final_submitted_qty=?
+            WHERE client_order_id='flatten_1781881180147'
+            """,
+            ("C0101000003112013506", 0.00049913),
+        )
+        _insert_target_delta_terminal_flat_evidence(
+            conn,
+            client_order_id="flatten_1781881180147",
+            ts_ms=1_781_881_180_147,
+            submitted_qty=0.00049913,
+            open_exposure_qty=0.0,
+            dust_tracking_qty=0.00049913,
+        )
+        buy_trade = conn.execute(
+            "SELECT id, ts FROM trades WHERE client_order_id='ec2_00049913_buy'"
+        ).fetchone()
+        assert buy_trade is not None
+        conn.execute("DELETE FROM open_position_lots WHERE pair=?", (settings.PAIR,))
+        conn.execute(
+            """
+            INSERT INTO open_position_lots(
+                pair, entry_trade_id, entry_client_order_id, entry_fill_id, entry_ts, entry_price,
+                qty_open, executable_lot_count, dust_tracking_lot_count, lot_semantic_version,
+                internal_lot_size, lot_min_qty, lot_qty_step, lot_min_notional_krw,
+                lot_max_qty_decimals, lot_rule_source_mode, position_semantic_basis,
+                position_state, entry_fee_total
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                settings.PAIR,
+                int(buy_trade["id"]),
+                "ec2_00049913_buy",
+                "ec2-00049913-buy-fill",
+                int(buy_trade["ts"]),
+                95_499_969.9497125,
+                0.00049913,
+                0,
+                1,
+                1,
+                0.00049913,
+                0.0001,
+                0.0001,
+                5000.0,
+                8,
+                "ledger",
+                "lot-native",
+                "dust_tracking",
+                0.0,
+            ),
+        )
+        set_portfolio_breakdown(
+            conn,
+            cash_available=100000.0 + (0.00049913 * 95_499_969.9497125) - 19.06,
+            cash_locked=0.0,
+            asset_available=0.0,
+            asset_locked=0.0,
+        )
+        conn.commit()
+        runtime_state.record_reconcile_result(
+            success=True,
+            reason_code="RECENT_FILL_APPLIED",
+            metadata={
+                "balance_source": "accounts_v1_rest_snapshot",
+                "balance_observed_ts_ms": 1_781_881_182_000,
+                "balance_asset_ts_ms": 1_781_881_182_000,
+                "broker_asset_qty": 0.0,
+                "broker_asset_available": 0.0,
+                "broker_asset_locked": 0.0,
+                "broker_cash_available": 100000.0 + (0.00049913 * 95_499_969.9497125) - 19.06,
+                "broker_cash_locked": 0.0,
+                "base_currency": "BTC",
+                "quote_currency": "KRW",
+                "missing_base_full_closeout_allowed": 1,
+                "missing_base_full_closeout_reason": "full_closeout_reconcile_evidence",
+            },
+            now_epoch_sec=1.0,
+        )
+        before = build_lot_projection_convergence(conn, pair=settings.PAIR)
+        preview = build_flat_stale_lot_projection_repair_preview(conn)
+        result = apply_flat_stale_lot_projection_repair(conn, note="ec2 0.00049913 regression")
+        conn.commit()
+        after = build_lot_projection_convergence(conn, pair=settings.PAIR)
+    finally:
+        conn.close()
+
+    assert before["projected_total_qty"] == pytest.approx(0.00049913)
+    assert before["portfolio_qty"] == pytest.approx(0.0)
+    assert before["converged"] is False
+    assert preview["latest_sell_client_order_id"] == "flatten_1781881180147"
+    assert preview["latest_sell_exchange_order_id"] == "C0101000003112013506"
+    assert preview["latest_sell_qty"] == pytest.approx(0.00049913)
+    assert preview["safe_to_apply"] is True
+    assert result["projection_publication"]["created"] is True
+    assert after["projected_total_qty"] == pytest.approx(0.0)
+    assert after["portfolio_qty"] == pytest.approx(0.0)
+    assert after["converged"] is True
+
+
 def test_flat_stale_lot_projection_recovery_report_clears_position_authority_blocker(recovery_db):
     conn = ensure_db(str(recovery_db))
     try:

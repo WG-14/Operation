@@ -249,10 +249,37 @@ def evaluate_clean_account_gate(
             reason_code="clean_account_gate_deferred_to_residual_inventory_policy",
             reason="residual inventory policy is the active authority for this non-executable residual state",
         )
-    raw_qty = max(
-        0.0,
-        float(getattr(normalized, "raw_total_asset_qty", 0.0) or 0.0),
-        float(getattr(readiness_snapshot, "total_effective_exposure_qty", 0.0) or 0.0),
+    projection_convergence = dict(getattr(readiness_snapshot, "projection_convergence", {}) or {})
+    authority_truth_model = dict(getattr(readiness_snapshot, "authority_truth_model", {}) or {})
+    broker_position_evidence = dict(getattr(readiness_snapshot, "broker_position_evidence", {}) or {})
+    projected_total_qty = float(
+        projection_convergence.get("projected_total_qty")
+        or authority_truth_model.get("projected_total_qty")
+        or 0.0
+    )
+    portfolio_qty = float(
+        projection_convergence.get("portfolio_qty")
+        or authority_truth_model.get("portfolio_asset_qty")
+        or 0.0
+    )
+    broker_qty_known = bool(
+        broker_position_evidence.get("broker_qty_known")
+        or "broker_qty" in broker_position_evidence
+    )
+    broker_qty = float(broker_position_evidence.get("broker_qty") or 0.0)
+    evidence_scoped_qty_available = bool(
+        broker_qty_known
+        or "portfolio_qty" in projection_convergence
+        or "portfolio_asset_qty" in authority_truth_model
+    )
+    raw_qty = (
+        max(0.0, broker_qty, portfolio_qty)
+        if evidence_scoped_qty_available
+        else max(
+            0.0,
+            float(getattr(normalized, "raw_total_asset_qty", 0.0) or 0.0),
+            float(getattr(readiness_snapshot, "total_effective_exposure_qty", 0.0) or 0.0),
+        )
     )
     price = float(reference_price or 0.0)
     residual_inventory = getattr(readiness_snapshot, "residual_inventory", None)
@@ -265,6 +292,22 @@ def evaluate_clean_account_gate(
     exchange_sellable = bool(getattr(residual_inventory, "exchange_sellable", False)) or (
         min_notional > 0 and notional + 1e-12 >= min_notional
     )
+    if (
+        effective_flat
+        and evidence_scoped_qty_available
+        and broker_qty <= 1e-12
+        and portfolio_qty <= 1e-12
+        and projected_total_qty > 1e-12
+    ):
+        return CleanAccountGateResult(
+            allowed=False,
+            reason_code="position_authority_projection_rebuild_required",
+            reason="broker and portfolio are flat, but open_position_lots projection is stale",
+            recommended_action="rebuild or repair position authority projection before automated trading",
+            recommended_command="uv run python bot.py rebuild-position-authority",
+            sellable_residual_qty=0.0,
+            sellable_residual_notional_krw=0.0,
+        )
     if effective_flat and raw_qty > 1e-12 and exchange_sellable:
         return CleanAccountGateResult(
             allowed=False,
