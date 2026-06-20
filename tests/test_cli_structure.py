@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from bithumb_bot import config
 from bithumb_bot.cli.context import AppContext
 from bithumb_bot.cli.dispatch import dispatch
 from bithumb_bot.cli.parser import build_parser
 from bithumb_bot.cli.registry import CommandSpec, command_registry
+from bithumb_bot import runtime_strategy_set
 
 
 EXPECTED_COMMANDS = {
@@ -325,10 +327,96 @@ def test_live_ops_commands_have_intent_specific_guard_policies() -> None:
 
     assert registry["run"].guard_policy == "live_run_loop"
     assert registry["live-dry-run"].guard_policy == "live_dry_run_loop"
+    assert registry["reconcile"].guard_policy == "operator_recovery"
     assert registry["smoke-buy"].guard_policy == "operator_execution_smoke"
     assert registry["flatten-position"].guard_policy == "operator_risk_reduction"
     assert registry["broker-diagnose"].guard_policy == "read_only_broker_diagnostic"
     assert registry["recover-order"].guard_policy == "operator_recovery"
+    assert registry["rebuild-position-authority"].guard_policy == "operator_recovery"
+
+
+def test_operator_recovery_guard_uses_basic_guard_not_strategy_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    handler_called = False
+
+    def _handler(_args: argparse.Namespace, _context: AppContext) -> int:
+        nonlocal handler_called
+        handler_called = True
+        calls.append("handler")
+        return 0
+
+    def _forbidden(name: str):
+        def _inner(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} must not run for operator_recovery")
+
+        return _inner
+
+    monkeypatch.setattr(config, "validate_live_run_startup_contract", _forbidden("live_run_startup"))
+    monkeypatch.setattr(config, "validate_runtime_profile_bindings_for_live_startup", _forbidden("profile_bindings"))
+    monkeypatch.setattr(config, "validate_live_strategy_selection", _forbidden("live_strategy_selection"))
+    monkeypatch.setattr(config, "validate_runtime_strategy_set_selection", _forbidden("strategy_set_selection"))
+    monkeypatch.setattr(runtime_strategy_set, "load_approved_profile", _forbidden("load_approved_profile"))
+    monkeypatch.setattr(
+        runtime_strategy_set.RuntimeDecisionRequestBuilder,
+        "materialize_instance",
+        _forbidden("materialize_instance"),
+    )
+    monkeypatch.setattr(
+        "bithumb_bot.operator_smoke_preflight.validate_live_operator_basic_guard",
+        lambda _settings: calls.append("basic_guard"),
+    )
+
+    spec = CommandSpec(
+        name="rebuild-position-authority",
+        domain="repairs",
+        handler=_handler,
+        register_parser=lambda subparsers: subparsers.add_parser("rebuild-position-authority"),
+        guard_policy="operator_recovery",
+    )
+
+    rc = dispatch(
+        argparse.Namespace(cmd="rebuild-position-authority"),
+        AppContext(settings=SimpleNamespace(MODE="live")),
+        {"rebuild-position-authority": spec},
+    )
+
+    assert rc == 0
+    assert calls == ["basic_guard", "handler"]
+    assert handler_called is True
+
+
+@pytest.mark.parametrize("command", ["reconcile", "rebuild-position-authority"])
+def test_operator_recovery_basic_guard_failure_blocks_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    from bithumb_bot.config import LiveModeValidationError
+
+    def _blocked(_settings):
+        raise LiveModeValidationError("live operator command guard validation failed: DB_PATH required")
+
+    def _handler(_args: argparse.Namespace, _context: AppContext) -> int:
+        raise AssertionError("handler bypassed operator recovery guard")
+
+    monkeypatch.setattr("bithumb_bot.operator_smoke_preflight.validate_live_operator_basic_guard", _blocked)
+
+    spec = CommandSpec(
+        name=command,
+        domain="live_ops" if command == "reconcile" else "repairs",
+        handler=_handler,
+        register_parser=lambda subparsers: subparsers.add_parser(command),
+        guard_policy="operator_recovery",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        dispatch(
+            argparse.Namespace(cmd=command, apply=True, yes=True),
+            AppContext(settings=SimpleNamespace(MODE="live"), printer=lambda _message: None),
+            {command: spec},
+        )
+
+    assert exc.value.code == 1
 
 
 @pytest.mark.parametrize(

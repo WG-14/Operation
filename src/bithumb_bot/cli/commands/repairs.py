@@ -120,6 +120,7 @@ def command_specs() -> list[CommandSpec]:
                 "when no open orders, no existing lots, no SELL history, and portfolio quantity match."
             ),
             build=_build_rebuild_position_authority,
+            guard_policy="operator_recovery",
             **common,
         ),
         make_spec(

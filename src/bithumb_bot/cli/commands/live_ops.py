@@ -104,6 +104,7 @@ def command_specs() -> list[CommandSpec]:
             read_only=False,
             mutating=True,
             requires_live=True,
+            guard_policy="operator_recovery",
             writes_db=True,
             uses_broker=True,
         ),

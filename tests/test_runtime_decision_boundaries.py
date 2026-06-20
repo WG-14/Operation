@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,9 @@ import pytest
 
 from bithumb_bot.config import settings
 from bithumb_bot import engine
+from bithumb_bot.cli.context import AppContext
+from bithumb_bot.cli.dispatch import dispatch
+from bithumb_bot.cli.registry import CommandSpec, command_registry
 from bithumb_bot import runtime_compat
 from bithumb_bot import runtime_strategy_decision
 from bithumb_bot.core.sma_policy import PositionSnapshot, StrategyDecisionV2
@@ -150,6 +154,70 @@ def test_strategy_run_still_blocks_when_approved_profile_missing() -> None:
             object.__setattr__(settings, key, value)
 
     assert "approved_profile_required_for_live_compatible_runtime_strategy" in str(exc.value)
+
+
+def test_operator_projection_repair_available_when_profile_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = {
+        "MODE": settings.MODE,
+        "APPROVED_STRATEGY_PROFILE_PATH": settings.APPROVED_STRATEGY_PROFILE_PATH,
+        "STRATEGY_APPROVED_PROFILE_PATH": getattr(settings, "STRATEGY_APPROVED_PROFILE_PATH", ""),
+    }
+    calls: list[str] = []
+
+    def _handler(_args, _context) -> int:
+        calls.append("handler")
+        return 0
+
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "")
+        object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
+
+        registry = dict(command_registry())
+        spec = registry["rebuild-position-authority"]
+        registry["rebuild-position-authority"] = CommandSpec(
+            name=spec.name,
+            domain=spec.domain,
+            handler=_handler,
+            register_parser=spec.register_parser,
+            read_only=spec.read_only,
+            mutating=spec.mutating,
+            requires_live=spec.requires_live,
+            guard_policy=spec.guard_policy,
+            requires_confirmation=spec.requires_confirmation,
+            writes_db=spec.writes_db,
+            uses_broker=spec.uses_broker,
+            produces_artifact=spec.produces_artifact,
+            json_output_supported=spec.json_output_supported,
+        )
+        monkeypatch.setattr(
+            "bithumb_bot.operator_smoke_preflight.validate_live_operator_basic_guard",
+            lambda _settings: calls.append("basic_guard"),
+        )
+
+        rc = dispatch(
+            argparse.Namespace(
+                cmd="rebuild-position-authority",
+                apply=False,
+                yes=False,
+                note=None,
+                full_projection_rebuild=False,
+                flat_stale_projection_repair=False,
+            ),
+            AppContext(settings=settings),
+            registry,
+        )
+    except Exception as exc:
+        reason = str(exc)
+        assert "approved_profile_not_configured" not in reason
+        assert "approved_profile_required_for_live_compatible_runtime_strategy" not in reason
+        raise
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+    assert rc == 0
+    assert calls == ["basic_guard", "handler"]
 
 
 class CountingConnection(sqlite3.Connection):
