@@ -258,6 +258,52 @@ def cmd_smoke_buy(
         conn.close()
 
 
+def cmd_live_pipeline_smoke(
+    *,
+    plan: bool,
+    apply: bool,
+    yes: bool,
+    cycles: int,
+    max_orders: int,
+    max_notional_krw: float,
+    authority_path: str | None = None,
+    confirm: str | None = None,
+    json_output: bool = False,
+) -> None:
+    from .live_pipeline_smoke import cmd_live_pipeline_smoke as _cmd
+
+    _cmd(
+        plan=plan,
+        apply=apply,
+        yes=yes,
+        cycles=cycles,
+        max_orders=max_orders,
+        max_notional_krw=max_notional_krw,
+        authority_path=authority_path,
+        confirm=confirm,
+        json_output=json_output,
+    )
+
+
+def cmd_live_pipeline_smoke_authority(
+    *,
+    out: str,
+    cycles: int,
+    max_orders: int,
+    max_notional_krw: float,
+    expires_min: int,
+) -> None:
+    from .live_pipeline_smoke import cmd_live_pipeline_smoke_authority as _cmd
+
+    _cmd(
+        out=out,
+        cycles=cycles,
+        max_orders=max_orders,
+        max_notional_krw=max_notional_krw,
+        expires_min=expires_min,
+    )
+
+
 def _format_rule_value_with_source(*, field: str, value: object, source: dict[str, str] | None) -> str:
     return f"{value} (source={rule_source_for(field, source)})"
 

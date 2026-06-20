@@ -58,6 +58,34 @@ def _smoke_buy(args: argparse.Namespace, _context) -> None:
     )
 
 
+def _live_pipeline_smoke(args: argparse.Namespace, _context) -> None:
+    from bithumb_bot.operator_commands import cmd_live_pipeline_smoke
+
+    cmd_live_pipeline_smoke(
+        plan=bool(args.plan),
+        apply=bool(args.apply),
+        yes=bool(args.yes),
+        cycles=int(args.cycles),
+        max_orders=int(args.max_orders),
+        max_notional_krw=float(args.max_notional_krw),
+        authority_path=args.authority_path,
+        confirm=args.confirm,
+        json_output=bool(args.json),
+    )
+
+
+def _live_pipeline_smoke_authority(args: argparse.Namespace, _context) -> None:
+    from bithumb_bot.operator_commands import cmd_live_pipeline_smoke_authority
+
+    cmd_live_pipeline_smoke_authority(
+        out=str(args.out),
+        cycles=int(args.cycles),
+        max_orders=int(args.max_orders),
+        max_notional_krw=float(args.max_notional_krw),
+        expires_min=int(args.expires_min),
+    )
+
+
 def _panic(args: argparse.Namespace, _context) -> None:
     from bithumb_bot.operator_commands import cmd_panic_stop
 
@@ -150,6 +178,54 @@ def command_specs() -> list[CommandSpec]:
             guard_policy="operator_execution_smoke",
             writes_db=True,
             uses_broker=True,
+        ),
+        make_spec(
+            "live-pipeline-smoke",
+            domain="live_ops",
+            handler=_live_pipeline_smoke,
+            help="operator-authorized live run-loop pipeline smoke",
+            description=(
+                "Plan or execute a bounded 5x BUY/SELL live pipeline smoke through "
+                "the automatic decision/execution path."
+            ),
+            build=lambda p: (
+                p.add_argument("--plan", action="store_true"),
+                p.add_argument("--apply", action="store_true"),
+                p.add_argument("--yes", action="store_true"),
+                p.add_argument("--cycles", type=int, default=5),
+                p.add_argument("--max-orders", type=int, default=10),
+                p.add_argument("--max-notional-krw", type=float, default=10000.0),
+                p.add_argument("--authority-path"),
+                p.add_argument("--confirm"),
+                p.add_argument("--json", action="store_true"),
+            ),
+            read_only=False,
+            mutating=True,
+            requires_live=True,
+            guard_policy="operator_live_pipeline_smoke",
+            requires_confirmation=True,
+            writes_db=True,
+            uses_broker=True,
+            json_output_supported=True,
+        ),
+        make_spec(
+            "live-pipeline-smoke-authority",
+            domain="live_ops",
+            handler=_live_pipeline_smoke_authority,
+            help="create bounded live pipeline smoke authority artifact",
+            description="Create a one-shot authority artifact for live-pipeline-smoke.",
+            build=lambda p: (
+                p.add_argument("--out", required=True),
+                p.add_argument("--cycles", type=int, default=5),
+                p.add_argument("--max-orders", type=int, default=10),
+                p.add_argument("--max-notional-krw", type=float, default=10000.0),
+                p.add_argument("--expires-min", type=int, default=10),
+            ),
+            read_only=False,
+            mutating=True,
+            requires_live=True,
+            guard_policy="operator_live_pipeline_smoke_authority",
+            produces_artifact=True,
         ),
         make_spec(
             "panic-stop",

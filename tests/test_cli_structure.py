@@ -43,6 +43,8 @@ EXPECTED_COMMANDS = {
     "broker-diagnose",
     "target-delta-dry-run",
     "smoke-buy",
+    "live-pipeline-smoke",
+    "live-pipeline-smoke-authority",
     "panic-stop",
     "flatten-position",
     "cancel-open-orders",
@@ -149,6 +151,8 @@ def test_command_registration_contains_expected_major_groups() -> None:
     assert registry["run"].guard_policy == "live_run_loop"
     assert registry["live-dry-run"].guard_policy == "live_dry_run_loop"
     assert registry["smoke-buy"].guard_policy == "operator_execution_smoke"
+    assert registry["live-pipeline-smoke"].guard_policy == "operator_live_pipeline_smoke"
+    assert registry["live-pipeline-smoke-authority"].guard_policy == "operator_live_pipeline_smoke_authority"
     assert registry["panic-stop"].guard_policy == "operator_risk_reduction"
     assert registry["flatten-position"].guard_policy == "operator_risk_reduction"
     assert registry["cancel-open-orders"].guard_policy == "operator_risk_reduction"
@@ -175,6 +179,8 @@ def test_command_registration_contains_expected_major_groups() -> None:
         ("profile-promote", ["--profile", "--mode", "--out", "--paper-validation-evidence", "--live-readiness-evidence"]),
         ("backfill-candles", ["--market", "--interval", "--start", "--end", "--batch-size", "--dry-run"]),
         ("flatten-position", ["--dry-run", "--json"]),
+        ("live-pipeline-smoke", ["--plan", "--apply", "--yes", "--cycles", "--max-orders", "--max-notional-krw", "--authority-path", "--confirm", "--json"]),
+        ("live-pipeline-smoke-authority", ["--out", "--cycles", "--max-orders", "--max-notional-krw", "--expires-min"]),
     ],
 )
 def test_important_command_help_exposes_owned_options(
