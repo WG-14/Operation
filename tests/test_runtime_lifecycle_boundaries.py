@@ -4,10 +4,13 @@ import inspect
 import ast
 import textwrap
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from bithumb_bot import engine
 from bithumb_bot import runtime_state
 from bithumb_bot.runtime import runner
+from bithumb_bot.runtime.decision_coordinator import DecisionCycleResult
+from bithumb_bot.runtime.data_cycle_preflight import RuntimeDataCyclePreflight
 from bithumb_bot.runtime.app_container import build_runtime_dependency_manifest, create_default_runtime_app
 from bithumb_bot.runtime.public_api import RuntimeHealthQuery, RuntimeResumeQuery
 from bithumb_bot.runtime.execution_coordinator import ExecutionCoordinator
@@ -828,6 +831,124 @@ def test_execution_coordinator_owns_submit_checkpoint_and_post_trade_reconcile()
     )
     assert result.submitted is True
     assert result.post_trade_reconciled is True
+
+
+def test_runtime_cycle_pipeline_passes_settlement_coordinator_in_live_mode(monkeypatch) -> None:
+    from bithumb_bot.runtime import cycle_pipeline
+    from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
+
+    captured: dict[str, object] = {}
+
+    class _PreflightProvider:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def evaluate(self, **_kwargs):
+            return RuntimeDataCyclePreflight(
+                status="PASS",
+                reason_code=None,
+                latest_candle_ts=1000,
+                latest_close=100.0,
+                closed_candle_ts=1000,
+                incomplete_candle_ts=None,
+                candle_age_sec=1.0,
+                stale_cutoff_sec=60,
+                closed_candle_allowed=True,
+                runtime_data_availability_report_hash="sha256:preflight",
+                coverage_by_scope={},
+                selected_candle_by_scope={},
+                freshness_by_scope={},
+            )
+
+    class _Safety:
+        def evaluate_market_runtime(self, **_kwargs):
+            return SimpleNamespace(blocked=False, last_market_runtime_check_at=None)
+
+        def evaluate_runtime_safety(self, **_kwargs):
+            return SimpleNamespace(blocked=False, last_open_order_reconcile_at=None)
+
+    class _Decision:
+        def decide_cycle(self, **_kwargs):
+            return DecisionCycleResult(
+                candle_ts=1000,
+                strategy_name="unit",
+                signal="BUY",
+                reason="unit",
+                decision_id=1,
+                decision_context={},
+                execution_decision_summary=SimpleNamespace(submit_expected=True),
+                execution_plan_bundle=None,
+                strategy_decision_hash="sha256:strategy",
+                execution_plan_bundle_hash="sha256:plan",
+                persistence_status="persisted",
+                mark_processed_candidate=True,
+                market_price=100.0,
+            )
+
+    class _Execution:
+        def execute_cycle(self, **kwargs):
+            captured.update(kwargs)
+            return ExecutionCycleResult(
+                candle_ts=1000,
+                decision_id=1,
+                planning_status="submitted",
+                submit_expected=True,
+                submitted=True,
+                post_trade_reconciled=True,
+                mark_processed_allowed=False,
+                trade={"client_order_id": "cid", "exchange_order_id": "exid", "side": "BUY"},
+                settlement_result={"settled": False},
+            )
+
+    class _Checkpoint:
+        def apply(self, **_kwargs):
+            raise AssertionError("checkpoint must not apply when settlement is not settled")
+
+    class _Events:
+        def event(self, name, **fields):
+            return {"event_type": name, "event_hash": f"sha256:{name}", **fields}
+
+    monkeypatch.setattr(cycle_pipeline, "RuntimeDataCyclePreflightProvider", _PreflightProvider)
+    runtime_state.enable_trading()
+    container = SimpleNamespace(
+        interval_parser=lambda _interval: 60,
+        clock=lambda: 10.0,
+        settings_obj=SimpleNamespace(MODE="live", PAIR="KRW-BTC", INTERVAL="1m"),
+        notification_adapter=SimpleNamespace(send_event=lambda _event: None),
+        safety_controller=_Safety(),
+        validate_market_runtime=lambda _settings: None,
+        market_validation_error_type=ValueError,
+        portfolio_cash_qty_with_position_state=lambda **_kwargs: (0.0, 0.0, None, None),
+        db_factory=lambda: None,
+        open_order_snapshot=lambda _now_ms: (0, None),
+        mark_open_orders_recovery_required=lambda _reason, _now_ms: 0,
+        reconcile_with_broker=lambda _broker: None,
+        decision_coordinator=_Decision(),
+        execution_coordinator=_Execution(),
+        runtime_dependency_manifest_hash="sha256:manifest",
+    )
+    fake_runner = SimpleNamespace(
+        container=container,
+        runtime_checkpoint=_Checkpoint(),
+        runtime_events=_Events(),
+        runtime_strategy_set=None,
+        broker=object(),
+        execution_service=object(),
+        fail_count=0,
+        max_fails=3,
+        last_market_runtime_check_at=None,
+        last_open_order_reconcile_at=None,
+        _record_artifact=lambda cycle_id, **kwargs: RuntimeCycleArtifact(cycle_id=cycle_id, **kwargs),
+    )
+
+    artifact = RuntimeCyclePipeline(fake_runner).run_once()
+
+    assert artifact is not None
+    assert artifact.cycle_id == "checkpoint:processed"
+    assert captured["settlement_required"] is True
+    settlement_coordinator = captured["settlement_coordinator"]
+    assert settlement_coordinator is not None
+    assert settlement_coordinator.__class__.__name__ == "LiveOrderSettlementWrapper"
 
 
 def test_runtime_cycle_artifact_hashes_required_paths() -> None:

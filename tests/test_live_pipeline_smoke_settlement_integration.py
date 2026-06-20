@@ -17,8 +17,9 @@ from tests.test_live_pipeline_smoke_runner_fake_broker import (
 )
 
 
-def _noop_reconcile():
-    return None
+def _record_reconcile_attempt(attempts: list[str] | None = None):
+    if attempts is not None:
+        attempts.append("reconcile")
 
 
 def _run_smoke(monkeypatch, tmp_path, *, readiness_provider=None, service=None):
@@ -31,6 +32,7 @@ def _run_smoke(monkeypatch, tmp_path, *, readiness_provider=None, service=None):
     monkeypatch.setattr("bithumb_bot.live_pipeline_smoke.runtime_code_provenance", lambda: {"commit_sha": "unavailable"})
     monkeypatch.setattr("bithumb_bot.live_pipeline_smoke.validate_live_pipeline_smoke_start_preflight", lambda **_kwargs: None)
     service = service or LivePipelineSmokeExecutionService(broker=broker)
+    reconcile_attempts: list[str] = []
     payload = run_live_pipeline_smoke(
         conn=conn,
         broker=broker,
@@ -42,7 +44,7 @@ def _run_smoke(monkeypatch, tmp_path, *, readiness_provider=None, service=None):
         confirm=LIVE_PIPELINE_SMOKE_CONFIRMATION_TOKEN,
         execution_service=service,
         readiness_provider=readiness_provider or (lambda: _readiness_from_broker(broker)),
-        post_trade_reconcile=_noop_reconcile,
+        post_trade_reconcile=lambda: _record_reconcile_attempt(reconcile_attempts),
         run_id="lps_settlement_test",
     )
     return payload, conn, broker, service, old
@@ -118,7 +120,7 @@ def test_live_pipeline_smoke_fails_if_fee_pending_requires_manual_repair(monkeyp
             confirm=LIVE_PIPELINE_SMOKE_CONFIRMATION_TOKEN,
             execution_service=service,
             readiness_provider=lambda: _readiness_from_broker(broker),
-            post_trade_reconcile=_noop_reconcile,
+            post_trade_reconcile=lambda: _record_reconcile_attempt(),
             run_id="lps_fee_repair_test",
         )
         assert payload["status"] == "failed"

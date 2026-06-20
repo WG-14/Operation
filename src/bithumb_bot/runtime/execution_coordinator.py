@@ -96,6 +96,7 @@ class ExecutionCoordinator:
         post_trade_reconcile: Callable[[], Any] | None = None,
         settlement_coordinator: Callable[[Mapping[str, Any]], OrderSettlementResult | Mapping[str, Any]]
         | None = None,
+        settlement_required: bool = False,
         input_hash: str | None = None,
         execution_plan_bundle_hash: str | None = None,
     ) -> ExecutionCycleResult:
@@ -277,6 +278,8 @@ class ExecutionCoordinator:
         mark_processed_allowed = True
         if settlement_payload is not None:
             mark_processed_allowed = bool(settlement_payload.get("settled"))
+        elif settlement_required:
+            mark_processed_allowed = False
         return ExecutionCycleResult(
             candle_ts=candle_ts,
             decision_id=decision_id,

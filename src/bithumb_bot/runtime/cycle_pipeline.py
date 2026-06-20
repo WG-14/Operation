@@ -8,6 +8,7 @@ from .. import runtime_state
 from ..observability import format_log_kv
 from .cycle_artifact_assembler import RuntimeCycleArtifactAssembler
 from .data_cycle_preflight import RuntimeDataCyclePreflight, RuntimeDataCyclePreflightProvider
+from .live_order_settlement import LiveOrderSettlementWrapper
 from .lifecycle_artifacts import RuntimeCycleArtifact
 from .state_store import pause_trading_until
 
@@ -246,6 +247,16 @@ class RuntimeCyclePipeline:
                 if c.settings_obj.MODE == "live" and r.broker is not None
                 else None
             ),
+            settlement_coordinator=(
+                LiveOrderSettlementWrapper(
+                    broker=r.broker,
+                    db_factory=c.db_factory,
+                    reconcile_with_broker=c.reconcile_with_broker,
+                )
+                if c.settings_obj.MODE == "live" and r.broker is not None
+                else None
+            ),
+            settlement_required=c.settings_obj.MODE == "live" and r.broker is not None,
             input_hash=decision_result.as_dict()["decision_hash"],
             execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
         )
