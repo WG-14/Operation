@@ -8,6 +8,7 @@ import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,6 +16,10 @@ import pytest
 from bithumb_bot.db_core import ensure_schema
 from bithumb_bot.decision_envelope import DecisionEnvelope
 from bithumb_bot.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
+from bithumb_bot.h74_observation import (
+    H74_SOURCE_OBSERVATION_PARAMETERS,
+    build_h74_source_observation_authority_payload,
+)
 from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
 from bithumb_bot.runtime_data_provider import RuntimeDataRequirementResolver, SQLiteRuntimeDataProvider
@@ -39,7 +44,12 @@ from bithumb_bot.runtime_strategy_set import (
 )
 from bithumb_bot.strategy_plugins.canary_non_sma import CanaryNonSmaRuntimeDecisionAdapter
 from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeConfig
-from bithumb_bot.research.strategy_spec import StrategySpecError, materialize_strategy_parameters, strategy_spec_for_name
+from bithumb_bot.research.strategy_spec import (
+    StrategySpecError,
+    materialize_strategy_parameters,
+    runtime_bound_behavior_parameter_names,
+    strategy_spec_for_name,
+)
 from bithumb_bot.research.strategy_registry import resolve_research_strategy_plugin
 from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
@@ -240,6 +250,31 @@ def _complete_sma_parameters(**overrides: object) -> dict[str, object]:
     }
     params.update(overrides)
     return params
+
+
+def _h74_source_parameters(**overrides: object) -> dict[str, object]:
+    params = {
+        name: H74_SOURCE_OBSERVATION_PARAMETERS[name]
+        for name in runtime_bound_behavior_parameter_names("daily_participation_sma")
+    }
+    params.update(overrides)
+    return params
+
+
+def _write_h74_source_authority(tmp_path: Path) -> Path:
+    authority_path = tmp_path / "h74-source-authority.json"
+    authority_path.write_text(
+        json.dumps(
+            build_h74_source_observation_authority_payload(
+                source_candidate_artifact_hash="sha256:source-candidate",
+                backtest_report_hash="sha256:backtest",
+                validation_run_hash="sha256:validation",
+                code_commit_sha="test-commit",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return authority_path
 
 
 def test_common_runtime_adapter_protocol_is_request_shaped() -> None:
@@ -2728,6 +2763,248 @@ def test_decision_runner_rejects_live_multi_strategy_without_runtime_gateway(
         ):
             runtime_strategy_decision.DecisionRunner().decide_snapshot(
                 _conn(),
+                through_ts_ms=1_700_000_180_000,
+            )
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+
+def test_compute_legacy_signal_live_single_strategy_uses_structured_runtime_spec(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _clear_runtime_strategy_source_env: None,
+) -> None:
+    authority_path = _write_h74_source_authority(tmp_path)
+    structured_parameters = _h74_source_parameters(DAILY_PARTICIPATION_BUY_FRACTION=0.17)
+    runtime_strategy_set_json = json.dumps(
+        {
+            "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
+            "strategies": [
+                {
+                    "strategy_name": "daily_participation_sma",
+                    "strategy_instance_id": "h74-source-observation",
+                    "pair": "KRW-BTC",
+                    "interval": "1m",
+                    "desired_exposure_krw": 100_000,
+                    "max_target_exposure_krw": 100_000,
+                    "parameters": structured_parameters,
+                }
+            ],
+        }
+    )
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "STRATEGY_NAME": settings.STRATEGY_NAME,
+        "PAIR": settings.PAIR,
+        "INTERVAL": settings.INTERVAL,
+        "MAX_ORDER_KRW": settings.MAX_ORDER_KRW,
+        "MAX_DAILY_ORDER_COUNT": settings.MAX_DAILY_ORDER_COUNT,
+        "STRATEGY_EXIT_RULES": settings.STRATEGY_EXIT_RULES,
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": settings.STRATEGY_EXIT_MAX_HOLDING_MIN,
+        "APPROVED_STRATEGY_PROFILE_PATH": settings.APPROVED_STRATEGY_PROFILE_PATH,
+        "STRATEGY_APPROVED_PROFILE_PATH": settings.STRATEGY_APPROVED_PROFILE_PATH,
+        "RUNTIME_STRATEGY_SET_JSON": settings.RUNTIME_STRATEGY_SET_JSON,
+        "ACTIVE_STRATEGIES": settings.ACTIVE_STRATEGIES,
+        "H74_SOURCE_OBSERVATION_AUTHORITY_PATH": settings.H74_SOURCE_OBSERVATION_AUTHORITY_PATH,
+    }
+    captured: list[RuntimeDecisionRequest] = []
+
+    class _Adapter:
+        strategy_name = "daily_participation_sma"
+
+        def decide_feature_snapshot(self, request: RuntimeDecisionRequest, feature_snapshot: Any):
+            del feature_snapshot
+            captured.append(request)
+            result = _RuntimeResult(request.strategy_name)
+            result.base_context.update({"signal": "HOLD", "reason": "unit"})
+            _attach_unit_request_metadata(result, request)
+            return result
+
+        def typed_authority_required(self) -> bool:
+            return True
+
+    def _collect(self, conn, strategy_set, *, through_ts_ms, runtime_data_cycle_preflight_hash=None):
+        del conn, runtime_data_cycle_preflight_hash
+        context = ProfileAuthorityContext.for_strategy_set(
+            strategy_set,
+            settings_obj=self.request_builder.settings_obj,
+        )
+        request = self.request_builder.with_authority_context(context).build_for_spec(
+            strategy_set.active_strategies[0],
+            through_ts_ms=through_ts_ms,
+        )
+        result = _Adapter().decide_feature_snapshot(request, object())
+        return SimpleNamespace(results=(result,))
+
+    monkeypatch.setattr(runtime_strategy_decision, "get_runtime_decision_adapter", lambda _name: _Adapter())
+    monkeypatch.setattr(RuntimeStrategyDecisionCollector, "collect", _collect)
+    monkeypatch.setenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", True)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", False)
+        object.__setattr__(settings, "STRATEGY_NAME", "daily_participation_sma")
+        object.__setattr__(settings, "PAIR", "KRW-BTC")
+        object.__setattr__(settings, "INTERVAL", "1m")
+        object.__setattr__(settings, "MAX_ORDER_KRW", 100_000)
+        object.__setattr__(settings, "MAX_DAILY_ORDER_COUNT", 2)
+        object.__setattr__(settings, "STRATEGY_EXIT_RULES", "max_holding_time")
+        object.__setattr__(settings, "STRATEGY_EXIT_MAX_HOLDING_MIN", 74)
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "")
+        object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
+        object.__setattr__(settings, "RUNTIME_STRATEGY_SET_JSON", runtime_strategy_set_json)
+        object.__setattr__(settings, "ACTIVE_STRATEGIES", "")
+        object.__setattr__(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+        for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
+            if key.isupper():
+                object.__setattr__(settings, key, value)
+
+        payload = runtime_strategy_decision.compute_legacy_signal_for_diagnostics(
+            _conn(),
+            strategy_name="daily_participation_sma",
+        )
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+    assert payload is not None
+    assert captured
+    request = captured[0]
+    assert request.parameter_source == "runtime_strategy_spec"
+    assert request.parameters["DAILY_PARTICIPATION_BUY_FRACTION"] == pytest.approx(0.17)
+    fields = request.observability_fields()
+    assert fields["runtime_strategy_set_source"] == "RUNTIME_STRATEGY_SET_JSON"
+    assert fields["runtime_selection_kind"] == "single_strategy"
+    assert fields["runtime_gate_authority"] == "RUNTIME_STRATEGY_SET_JSON"
+    assert fields["parameter_authority_audit"]["legacy_compatibility_used"] is False
+
+
+def test_decision_runner_live_single_strategy_missing_structured_parameters_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _clear_runtime_strategy_source_env: None,
+) -> None:
+    authority_path = _write_h74_source_authority(tmp_path)
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "STRATEGY_NAME": settings.STRATEGY_NAME,
+        "PAIR": settings.PAIR,
+        "INTERVAL": settings.INTERVAL,
+        "MAX_ORDER_KRW": settings.MAX_ORDER_KRW,
+        "MAX_DAILY_ORDER_COUNT": settings.MAX_DAILY_ORDER_COUNT,
+        "STRATEGY_EXIT_RULES": settings.STRATEGY_EXIT_RULES,
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": settings.STRATEGY_EXIT_MAX_HOLDING_MIN,
+        "APPROVED_STRATEGY_PROFILE_PATH": settings.APPROVED_STRATEGY_PROFILE_PATH,
+        "STRATEGY_APPROVED_PROFILE_PATH": settings.STRATEGY_APPROVED_PROFILE_PATH,
+        "RUNTIME_STRATEGY_SET_JSON": settings.RUNTIME_STRATEGY_SET_JSON,
+        "ACTIVE_STRATEGIES": settings.ACTIVE_STRATEGIES,
+        "H74_SOURCE_OBSERVATION_AUTHORITY_PATH": settings.H74_SOURCE_OBSERVATION_AUTHORITY_PATH,
+    }
+    monkeypatch.setenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", True)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", False)
+        object.__setattr__(settings, "STRATEGY_NAME", "daily_participation_sma")
+        object.__setattr__(settings, "PAIR", "KRW-BTC")
+        object.__setattr__(settings, "INTERVAL", "1m")
+        object.__setattr__(settings, "MAX_ORDER_KRW", 100_000)
+        object.__setattr__(settings, "MAX_DAILY_ORDER_COUNT", 2)
+        object.__setattr__(settings, "STRATEGY_EXIT_RULES", "max_holding_time")
+        object.__setattr__(settings, "STRATEGY_EXIT_MAX_HOLDING_MIN", 74)
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "")
+        object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
+        object.__setattr__(settings, "ACTIVE_STRATEGIES", "")
+        object.__setattr__(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+        object.__setattr__(
+            settings,
+            "RUNTIME_STRATEGY_SET_JSON",
+            json.dumps(
+                {
+                    "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
+                    "strategies": [
+                        {
+                            "strategy_name": "daily_participation_sma",
+                            "strategy_instance_id": "h74-source-observation",
+                            "pair": "KRW-BTC",
+                            "interval": "1m",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="approved_profile_required_for_live_compatible_runtime_strategy"):
+            RuntimeDecisionRequestBuilder().build_for_spec(
+                RuntimeStrategySetResolver().resolve().active_strategies[0],
+                through_ts_ms=1_700_000_180_000,
+            )
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+
+
+def test_decision_runner_live_single_strategy_missing_h74_authority_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    _clear_runtime_strategy_source_env: None,
+) -> None:
+    runtime_strategy_set_json = json.dumps(
+        {
+            "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
+            "strategies": [
+                {
+                    "strategy_name": "daily_participation_sma",
+                    "strategy_instance_id": "h74-source-observation",
+                    "pair": "KRW-BTC",
+                    "interval": "1m",
+                    "parameters": _h74_source_parameters(),
+                }
+            ],
+        }
+    )
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "STRATEGY_NAME": settings.STRATEGY_NAME,
+        "PAIR": settings.PAIR,
+        "INTERVAL": settings.INTERVAL,
+        "MAX_ORDER_KRW": settings.MAX_ORDER_KRW,
+        "MAX_DAILY_ORDER_COUNT": settings.MAX_DAILY_ORDER_COUNT,
+        "STRATEGY_EXIT_RULES": settings.STRATEGY_EXIT_RULES,
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": settings.STRATEGY_EXIT_MAX_HOLDING_MIN,
+        "APPROVED_STRATEGY_PROFILE_PATH": settings.APPROVED_STRATEGY_PROFILE_PATH,
+        "STRATEGY_APPROVED_PROFILE_PATH": settings.STRATEGY_APPROVED_PROFILE_PATH,
+        "RUNTIME_STRATEGY_SET_JSON": settings.RUNTIME_STRATEGY_SET_JSON,
+        "ACTIVE_STRATEGIES": settings.ACTIVE_STRATEGIES,
+        "H74_SOURCE_OBSERVATION_AUTHORITY_PATH": settings.H74_SOURCE_OBSERVATION_AUTHORITY_PATH,
+    }
+    monkeypatch.delenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", raising=False)
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", True)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", False)
+        object.__setattr__(settings, "STRATEGY_NAME", "daily_participation_sma")
+        object.__setattr__(settings, "PAIR", "KRW-BTC")
+        object.__setattr__(settings, "INTERVAL", "1m")
+        object.__setattr__(settings, "MAX_ORDER_KRW", 100_000)
+        object.__setattr__(settings, "MAX_DAILY_ORDER_COUNT", 2)
+        object.__setattr__(settings, "STRATEGY_EXIT_RULES", "max_holding_time")
+        object.__setattr__(settings, "STRATEGY_EXIT_MAX_HOLDING_MIN", 74)
+        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "")
+        object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
+        object.__setattr__(settings, "RUNTIME_STRATEGY_SET_JSON", runtime_strategy_set_json)
+        object.__setattr__(settings, "ACTIVE_STRATEGIES", "")
+        object.__setattr__(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "")
+
+        with pytest.raises(RuntimeError, match="strategy_risk_profile_missing_for_live_strategy"):
+            RuntimeDecisionRequestBuilder().build_for_spec(
+                RuntimeStrategySetResolver().resolve().active_strategies[0],
                 through_ts_ms=1_700_000_180_000,
             )
     finally:

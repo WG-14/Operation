@@ -863,7 +863,7 @@ class ProfileAuthorityContext:
             ),
             "runtime_gate_authority": (
                 "RUNTIME_STRATEGY_SET_JSON"
-                if self.selection_kind == "multi_strategy"
+                if self.runtime_strategy_set_source == "RUNTIME_STRATEGY_SET_JSON"
                 else "STRATEGY_NAME"
             ),
         }

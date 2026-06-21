@@ -344,14 +344,24 @@ class DecisionRunner:
             parameters = dict(parameter_overrides or {})
             if parameters:
                 _reject_unapproved_runtime_overrides(selected_strategy_name)
-            spec = RuntimeStrategySpec(
-                strategy_name=selected_strategy_name,
-                parameters=parameters or None,
-                parameter_source=parameter_source if parameters else None,
-            )
+            if live_mode and resolved_strategy_set is not None:
+                resolved_spec = resolved_strategy_set.spec_for_strategy(selected_strategy_name)
+                if resolved_spec is None:
+                    raise RuntimeError(
+                        "decision_runner_live_strategy_not_in_runtime_strategy_set:"
+                        f"{selected_strategy_name}"
+                    )
+                spec = resolved_spec
+            else:
+                spec = RuntimeStrategySpec(
+                    strategy_name=selected_strategy_name,
+                    parameters=parameters or None,
+                    parameter_source=parameter_source if parameters else None,
+                )
         authority_context = None
-        if resolved_strategy_set is not None and resolved_strategy_set.multi_strategy_enabled:
+        if resolved_strategy_set is not None:
             authority_context = ProfileAuthorityContext.for_strategy_set(resolved_strategy_set)
+        if resolved_strategy_set is not None and resolved_strategy_set.multi_strategy_enabled:
             from .research.strategy_registry import strategy_runtime_capability_issues
 
             issues = strategy_runtime_capability_issues(
@@ -378,8 +388,16 @@ class DecisionRunner:
 
         strategy_set = RuntimeStrategySet(
             strategies=(spec,),
-            source="DecisionRunner",
-            market_scope=RuntimeMarketScope(pair=spec.pair, interval=spec.interval),
+            source=(
+                str(resolved_strategy_set.source)
+                if resolved_strategy_set is not None
+                else "DecisionRunner"
+            ),
+            market_scope=(
+                resolved_strategy_set.market_scope
+                if resolved_strategy_set is not None
+                else RuntimeMarketScope(pair=spec.pair, interval=spec.interval)
+            ),
         )
         collector = RuntimeStrategyDecisionCollector()
         request_builder = (
