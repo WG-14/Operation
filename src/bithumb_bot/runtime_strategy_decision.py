@@ -345,6 +345,9 @@ class DecisionRunner:
             if parameters:
                 _reject_unapproved_runtime_overrides(selected_strategy_name)
             if live_mode and resolved_strategy_set is not None:
+                validate_live_strategy_selection(
+                    replace(settings, STRATEGY_NAME=selected_strategy_name)
+                )
                 resolved_spec = resolved_strategy_set.spec_for_strategy(selected_strategy_name)
                 if resolved_spec is None:
                     raise RuntimeError(

@@ -92,12 +92,25 @@ def test_research_only_strategy_params_allowed_for_research_only_if_documented()
 
 @pytest.fixture
 def settings_guard():
+    missing = object()
     names = (
         "MODE",
         "LIVE_DRY_RUN",
         "LIVE_REAL_ORDER_ARMED",
+        "STRATEGY_NAME",
+        "STRATEGY_PARAMETERS_JSON",
         "PAIR",
         "INTERVAL",
+        "SMA_SHORT",
+        "SMA_LONG",
+        "SMA_FILTER_GAP_MIN_RATIO",
+        "SMA_FILTER_VOL_WINDOW",
+        "SMA_FILTER_VOL_MIN_RANGE_RATIO",
+        "SMA_FILTER_OVEREXT_LOOKBACK",
+        "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO",
+        "SMA_MARKET_REGIME_ENABLED",
+        "SMA_COST_EDGE_ENABLED",
+        "SMA_COST_EDGE_MIN_RATIO",
         "STRATEGY_EXIT_RULES",
         "STRATEGY_EXIT_STOP_LOSS_RATIO",
         "STRATEGY_EXIT_MAX_HOLDING_MIN",
@@ -113,15 +126,21 @@ def settings_guard():
         "STRATEGY_APPROVED_PROFILE_PATH",
         "STRATEGY_CANDIDATE_PROFILE_PATH",
         "EXECUTION_FILL_REFERENCE_POLICY",
+        "EXECUTION_DECISION_GUARD_MS",
+        "EXECUTION_MAX_QUOTE_WAIT_MS",
         "EXECUTION_MISSING_QUOTE_POLICY",
         "EXECUTION_MIN_REALITY_LEVEL_FOR_PROMOTION",
         "EXECUTION_ALLOW_SAME_CANDLE_CLOSE_FILL",
+        "EXECUTION_QUOTE_SOURCE",
+        "EXECUTION_QUOTE_AGE_LIMIT_MS",
         "EXECUTION_TOP_OF_BOOK_REQUIRED",
+        "EXECUTION_TOP_OF_BOOK_IS_FULL_DEPTH",
         "EXECUTION_DEPTH_REQUIRED",
         "EXECUTION_TRADE_TICK_REQUIRED",
         "EXECUTION_QUEUE_POSITION_REQUIRED",
         "EXECUTION_MARKET_IMPACT_REQUIRED",
         "EXECUTION_INTRA_CANDLE_PATH_AVAILABLE",
+        "EXECUTION_REALITY_LEVEL",
         "EXECUTION_LATENCY_MODEL_TYPE",
         "EXECUTION_LATENCY_MS",
         "EXECUTION_PARTIAL_FILL_MODEL_TYPE",
@@ -133,25 +152,88 @@ def settings_guard():
         "EXECUTION_CALIBRATION_REQUIRED",
         "EXECUTION_CALIBRATION_ARTIFACT_HASH",
     )
-    original = {name: getattr(settings, name) for name in names}
+    original = {name: getattr(settings, name, missing) for name in names}
     try:
         yield
     finally:
         for name, value in original.items():
+            if value is missing:
+                if hasattr(settings, name):
+                    object.__delattr__(settings, name)
+                continue
             object.__setattr__(settings, name, value)
 
 
 def _set_matching_runtime_execution_contract_settings() -> None:
+    object.__setattr__(settings, "STRATEGY_NAME", "sma_with_filter")
+    object.__setattr__(settings, "STRATEGY_PARAMETERS_JSON", "")
+    object.__setattr__(settings, "SMA_SHORT", 5)
+    object.__setattr__(settings, "SMA_LONG", 13)
+    object.__setattr__(
+        settings,
+        "SMA_FILTER_GAP_MIN_RATIO",
+        float(_sma_default("SMA_FILTER_GAP_MIN_RATIO")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_FILTER_VOL_WINDOW",
+        int(_sma_default("SMA_FILTER_VOL_WINDOW")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_FILTER_VOL_MIN_RANGE_RATIO",
+        float(_sma_default("SMA_FILTER_VOL_MIN_RANGE_RATIO")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_FILTER_OVEREXT_LOOKBACK",
+        int(_sma_default("SMA_FILTER_OVEREXT_LOOKBACK")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO",
+        float(_sma_default("SMA_FILTER_OVEREXT_MAX_RETURN_RATIO")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_MARKET_REGIME_ENABLED",
+        bool(_sma_default("SMA_MARKET_REGIME_ENABLED")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_COST_EDGE_ENABLED",
+        bool(_sma_default("SMA_COST_EDGE_ENABLED")),
+    )
+    object.__setattr__(
+        settings,
+        "SMA_COST_EDGE_MIN_RATIO",
+        float(_sma_default("SMA_COST_EDGE_MIN_RATIO")),
+    )
+    object.__setattr__(settings, "STRATEGY_EXIT_RULES", "opposite_cross,max_holding_time")
+    object.__setattr__(settings, "STRATEGY_EXIT_STOP_LOSS_RATIO", 0.0)
+    object.__setattr__(settings, "STRATEGY_EXIT_MAX_HOLDING_MIN", 45)
+    object.__setattr__(settings, "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO", 0.012)
+    object.__setattr__(settings, "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO", 0.003)
+    object.__setattr__(settings, "STRATEGY_ENTRY_SLIPPAGE_BPS", 7.0)
+    object.__setattr__(settings, "LIVE_FEE_RATE_ESTIMATE", 0.0015)
+    object.__setattr__(settings, "ENTRY_EDGE_BUFFER_RATIO", 0.0007)
+    object.__setattr__(settings, "STRATEGY_MIN_EXPECTED_EDGE_RATIO", 0.002)
     object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", "next_candle_open")
+    object.__setattr__(settings, "EXECUTION_DECISION_GUARD_MS", 0)
+    object.__setattr__(settings, "EXECUTION_MAX_QUOTE_WAIT_MS", 0)
     object.__setattr__(settings, "EXECUTION_MISSING_QUOTE_POLICY", "fail")
     object.__setattr__(settings, "EXECUTION_MIN_REALITY_LEVEL_FOR_PROMOTION", "candle_next_open")
     object.__setattr__(settings, "EXECUTION_ALLOW_SAME_CANDLE_CLOSE_FILL", False)
+    object.__setattr__(settings, "EXECUTION_QUOTE_SOURCE", "")
+    object.__setattr__(settings, "EXECUTION_QUOTE_AGE_LIMIT_MS", None)
     object.__setattr__(settings, "EXECUTION_TOP_OF_BOOK_REQUIRED", False)
+    object.__setattr__(settings, "EXECUTION_TOP_OF_BOOK_IS_FULL_DEPTH", False)
     object.__setattr__(settings, "EXECUTION_DEPTH_REQUIRED", False)
     object.__setattr__(settings, "EXECUTION_TRADE_TICK_REQUIRED", False)
     object.__setattr__(settings, "EXECUTION_QUEUE_POSITION_REQUIRED", False)
     object.__setattr__(settings, "EXECUTION_MARKET_IMPACT_REQUIRED", False)
     object.__setattr__(settings, "EXECUTION_INTRA_CANDLE_PATH_AVAILABLE", False)
+    object.__setattr__(settings, "EXECUTION_REALITY_LEVEL", "")
     object.__setattr__(settings, "EXECUTION_LATENCY_MODEL_TYPE", "fixed_bps")
     object.__setattr__(settings, "EXECUTION_LATENCY_MS", 0)
     object.__setattr__(settings, "EXECUTION_PARTIAL_FILL_MODEL_TYPE", "fixed_bps")
@@ -466,15 +548,13 @@ def test_approved_profile_selector_is_marked_full_contract_not_legacy(
     tmp_path: Path,
 ) -> None:
     object.__setattr__(settings, "MODE", "paper")
-    object.__setattr__(settings, "SMA_SHORT", 5)
-    object.__setattr__(settings, "SMA_LONG", 13)
     object.__setattr__(settings, "PAIR", "KRW-BTC")
     object.__setattr__(settings, "INTERVAL", "1m")
+    _set_matching_runtime_execution_contract_settings()
     profile_path = _write_paper_profile(tmp_path, sma_short=5)
     object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(profile_path))
     object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
     object.__setattr__(settings, "STRATEGY_CANDIDATE_PROFILE_PATH", "")
-    _set_matching_runtime_execution_contract_settings()
 
     config = sma_strategy_config_from_settings()
 

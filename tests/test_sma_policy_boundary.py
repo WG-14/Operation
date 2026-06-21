@@ -2352,8 +2352,11 @@ def test_position_normalizer_is_the_only_runtime_decision_mutation_boundary() ->
 def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -> None:
     events: list[str] = []
     conn = _build_candle_db([10.0 + 0.01 * idx for idx in range(40)])
+    missing = object()
     old_pair = engine.settings.PAIR
     old_interval = engine.settings.INTERVAL
+    old_sma_short = getattr(engine.settings, "SMA_SHORT", missing)
+    old_sma_long = getattr(engine.settings, "SMA_LONG", missing)
     base_ts = 1_700_000_000_000
 
     from bithumb_bot import runtime_data_provider_sma
@@ -2384,6 +2387,8 @@ def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -
     try:
         object.__setattr__(engine.settings, "PAIR", "BTC_KRW")
         object.__setattr__(engine.settings, "INTERVAL", "1m")
+        object.__setattr__(engine.settings, "SMA_SHORT", 5)
+        object.__setattr__(engine.settings, "SMA_LONG", 13)
         decision = engine.compute_strategy_decision_snapshot(
             conn,
             through_ts_ms=base_ts + 39 * 60_000,
@@ -2392,6 +2397,16 @@ def test_engine_orchestration_normalizes_before_snapshot_decision(monkeypatch) -
     finally:
         object.__setattr__(engine.settings, "PAIR", old_pair)
         object.__setattr__(engine.settings, "INTERVAL", old_interval)
+        if old_sma_short is missing:
+            if hasattr(engine.settings, "SMA_SHORT"):
+                object.__delattr__(engine.settings, "SMA_SHORT")
+        else:
+            object.__setattr__(engine.settings, "SMA_SHORT", old_sma_short)
+        if old_sma_long is missing:
+            if hasattr(engine.settings, "SMA_LONG"):
+                object.__delattr__(engine.settings, "SMA_LONG")
+        else:
+            object.__setattr__(engine.settings, "SMA_LONG", old_sma_long)
         conn.close()
 
     assert decision is None

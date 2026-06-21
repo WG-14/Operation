@@ -214,12 +214,15 @@ def test_compute_signal_routes_sma_with_filter_through_snapshot_orchestration(
 def test_live_sma_with_filter_route_does_not_call_legacy_decide(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    missing = object()
     old_db_path = settings.DB_PATH
     old_mode = settings.MODE
     old_armed = settings.LIVE_REAL_ORDER_ARMED
     old_dry_run = settings.LIVE_DRY_RUN
     old_strategy_name = settings.STRATEGY_NAME
     old_approved_profile_path = settings.APPROVED_STRATEGY_PROFILE_PATH
+    old_sma_short = getattr(settings, "SMA_SHORT", missing)
+    old_sma_long = getattr(settings, "SMA_LONG", missing)
     old_env_db_path = os.environ.get("DB_PATH")
 
     def _fail_legacy_decide(*args, **kwargs):
@@ -292,6 +295,8 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
     object.__setattr__(settings, "LIVE_DRY_RUN", False)
     object.__setattr__(settings, "STRATEGY_NAME", "sma_with_filter")
     object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "/tmp/unit-approved-profile.json")
+    object.__setattr__(settings, "SMA_SHORT", 5)
+    object.__setattr__(settings, "SMA_LONG", 13)
 
     conn = ensure_db()
     base_ts = 1_700_000_300_000
@@ -317,6 +322,16 @@ def test_live_sma_with_filter_route_does_not_call_legacy_decide(
         object.__setattr__(settings, "LIVE_DRY_RUN", old_dry_run)
         object.__setattr__(settings, "STRATEGY_NAME", old_strategy_name)
         object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", old_approved_profile_path)
+        if old_sma_short is missing:
+            if hasattr(settings, "SMA_SHORT"):
+                object.__delattr__(settings, "SMA_SHORT")
+        else:
+            object.__setattr__(settings, "SMA_SHORT", old_sma_short)
+        if old_sma_long is missing:
+            if hasattr(settings, "SMA_LONG"):
+                object.__delattr__(settings, "SMA_LONG")
+        else:
+            object.__setattr__(settings, "SMA_LONG", old_sma_long)
         if old_env_db_path is None:
             os.environ.pop("DB_PATH", None)
         else:
@@ -526,12 +541,17 @@ def test_runtime_replay_bundle_contains_reproducibility_material(tmp_path) -> No
 
 
 def test_replay_decision_cli_outputs_single_read_only_replay_bundle(tmp_path, capsys) -> None:
+    missing = object()
     old_db_path = settings.DB_PATH
+    old_sma_short = getattr(settings, "SMA_SHORT", missing)
+    old_sma_long = getattr(settings, "SMA_LONG", missing)
     old_env_db_path = os.environ.get("DB_PATH")
 
     db_path = str(tmp_path / "single_replay_decision.sqlite")
     os.environ["DB_PATH"] = db_path
     object.__setattr__(settings, "DB_PATH", db_path)
+    object.__setattr__(settings, "SMA_SHORT", 5)
+    object.__setattr__(settings, "SMA_LONG", 13)
 
     conn = ensure_db()
     base_ts = 1_700_000_500_000
@@ -556,13 +576,25 @@ def test_replay_decision_cli_outputs_single_read_only_replay_bundle(tmp_path, ca
         else:
             os.environ["DB_PATH"] = old_env_db_path
 
-    rc = cmd_replay_decision(
-        db_path=db_path,
-        strategy_name="sma_with_filter",
-        candle_ts=base_ts + 39 * 60_000,
-        as_json=True,
-    )
-    stdout = capsys.readouterr().out
+    try:
+        rc = cmd_replay_decision(
+            db_path=db_path,
+            strategy_name="sma_with_filter",
+            candle_ts=base_ts + 39 * 60_000,
+            as_json=True,
+        )
+        stdout = capsys.readouterr().out
+    finally:
+        if old_sma_short is missing:
+            if hasattr(settings, "SMA_SHORT"):
+                object.__delattr__(settings, "SMA_SHORT")
+        else:
+            object.__setattr__(settings, "SMA_SHORT", old_sma_short)
+        if old_sma_long is missing:
+            if hasattr(settings, "SMA_LONG"):
+                object.__delattr__(settings, "SMA_LONG")
+        else:
+            object.__setattr__(settings, "SMA_LONG", old_sma_long)
     out = json.loads(stdout[stdout.index('{\n  "bundle"') :])
 
     verify_conn = sqlite3.connect(db_path)
@@ -660,7 +692,10 @@ def test_replay_decision_cli_with_readiness_json_marks_execution_reconstructable
     tmp_path,
     capsys,
 ) -> None:
+    missing = object()
     old_db_path = settings.DB_PATH
+    old_sma_short = getattr(settings, "SMA_SHORT", missing)
+    old_sma_long = getattr(settings, "SMA_LONG", missing)
     old_env_db_path = os.environ.get("DB_PATH")
     db_path = str(tmp_path / "single_replay_with_readiness.sqlite")
     readiness_path = tmp_path / "readiness.json"
@@ -670,6 +705,8 @@ def test_replay_decision_cli_with_readiness_json_marks_execution_reconstructable
     )
     os.environ["DB_PATH"] = db_path
     object.__setattr__(settings, "DB_PATH", db_path)
+    object.__setattr__(settings, "SMA_SHORT", 5)
+    object.__setattr__(settings, "SMA_LONG", 13)
     conn = ensure_db()
     base_ts = 1_700_000_900_000
     try:
@@ -692,14 +729,26 @@ def test_replay_decision_cli_with_readiness_json_marks_execution_reconstructable
         else:
             os.environ["DB_PATH"] = old_env_db_path
 
-    rc = cmd_replay_decision(
-        db_path=db_path,
-        strategy_name="sma_with_filter",
-        candle_ts=base_ts + 39 * 60_000,
-        readiness_json_path=str(readiness_path),
-        as_json=True,
-    )
-    stdout = capsys.readouterr().out
+    try:
+        rc = cmd_replay_decision(
+            db_path=db_path,
+            strategy_name="sma_with_filter",
+            candle_ts=base_ts + 39 * 60_000,
+            readiness_json_path=str(readiness_path),
+            as_json=True,
+        )
+        stdout = capsys.readouterr().out
+    finally:
+        if old_sma_short is missing:
+            if hasattr(settings, "SMA_SHORT"):
+                object.__delattr__(settings, "SMA_SHORT")
+        else:
+            object.__setattr__(settings, "SMA_SHORT", old_sma_short)
+        if old_sma_long is missing:
+            if hasattr(settings, "SMA_LONG"):
+                object.__delattr__(settings, "SMA_LONG")
+        else:
+            object.__setattr__(settings, "SMA_LONG", old_sma_long)
     out = json.loads(stdout[stdout.index('{\n  "bundle"') :])
 
     assert rc == 0
