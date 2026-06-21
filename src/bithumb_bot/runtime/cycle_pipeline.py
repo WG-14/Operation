@@ -212,6 +212,13 @@ class RuntimeCyclePipeline:
                 startup_state="READY",
             )
         if decision_result.persistence_status == "failed":
+            r.decision_persistence_failure_count = int(
+                getattr(r, "decision_persistence_failure_count", 0) or 0
+            ) + 1
+            threshold = max(
+                1,
+                int(getattr(c.settings_obj, "DECISION_PERSISTENCE_FAILURE_HALT_THRESHOLD", 3) or 3),
+            )
             runner_module._log_loop_event(
                 logging.WARNING,
                 "[RUN] decision_persistence_failed_retryable",
@@ -219,7 +226,33 @@ class RuntimeCyclePipeline:
                 interval=c.settings_obj.INTERVAL,
                 candle_ts=decision_result.candle_ts,
                 reason=decision_result.failure_reason_code or "decision_persistence_failed_retryable",
+                consecutive_failures=r.decision_persistence_failure_count,
+                halt_threshold=threshold,
+                db_subphase=decision_result.db_subphase or "-",
+                sql_group=decision_result.sql_group or "-",
+                retry_count=decision_result.persistence_retry_count
+                if decision_result.persistence_retry_count is not None
+                else "-",
             )
+            if r.decision_persistence_failure_count >= threshold:
+                runtime_state.disable_trading_until(
+                    float("inf"),
+                    reason="decision persistence failed repeatedly; operator review required",
+                    reason_code="DECISION_PERSISTENCE_BLOCKED",
+                    halt_new_orders_blocked=True,
+                    unresolved=True,
+                    attempt_flatten=False,
+                    halt_projection={},
+                )
+                artifact = RuntimeCycleArtifactAssembler(
+                    runtime_dependency_manifest_hash=c.runtime_dependency_manifest_hash,
+                ).from_cycle_results(
+                    cycle_id="halt:decision_persistence_blocked",
+                    startup_state="READY",
+                    decision_result=decision_result,
+                )
+                RUN_LOG.info(format_log_kv("[RUN] runtime_cycle_artifact", **artifact.as_dict()))
+                return artifact
             artifact = RuntimeCycleArtifactAssembler(
                 runtime_dependency_manifest_hash=c.runtime_dependency_manifest_hash,
             ).from_cycle_results(
@@ -229,6 +262,7 @@ class RuntimeCyclePipeline:
             )
             RUN_LOG.info(format_log_kv("[RUN] runtime_cycle_artifact", **artifact.as_dict()))
             return artifact
+        r.decision_persistence_failure_count = 0
 
         execution_result = c.execution_coordinator.execute_cycle(
             candle_ts=decision_result.candle_ts,

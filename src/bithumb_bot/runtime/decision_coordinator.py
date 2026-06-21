@@ -32,6 +32,7 @@ from .decision_failure_taxonomy import (
     DecisionCycleFailure,
     classify_decision_cycle_failure,
 )
+from .decision_persistence import DecisionPersistenceUnitOfWork
 
 
 RUN_LOG = logging.getLogger("bithumb_bot.run")
@@ -264,10 +265,18 @@ class DecisionCycleResult:
     market_price: float | None = None
     exit_rule_name: str | None = None
     failure_phase: str | None = None
+    failure_subphase: str | None = None
     failure_reason_code: str | None = None
     failure_detail: str | None = None
     operator_next_action: str | None = None
     failure_evidence_hash: str | None = None
+    persistence_failure_metadata: dict[str, object] | None = None
+    persistence_retry_count: int | None = None
+    persistence_max_retry_count: int | None = None
+    db_subphase: str | None = None
+    sql_group: str | None = None
+    transaction_elapsed_ms: float | None = None
+    lock_wait_elapsed_ms: float | None = None
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -321,10 +330,18 @@ class DecisionCycleResult:
             "market_price": self.market_price,
             "exit_rule_name": self.exit_rule_name,
             "failure_phase": self.failure_phase,
+            "failure_subphase": self.failure_subphase,
             "failure_reason_code": self.failure_reason_code,
             "failure_detail": self.failure_detail,
             "operator_next_action": self.operator_next_action,
             "failure_evidence_hash": self.failure_evidence_hash,
+            "persistence_failure_metadata": dict(self.persistence_failure_metadata or {}),
+            "persistence_retry_count": self.persistence_retry_count,
+            "persistence_max_retry_count": self.persistence_max_retry_count,
+            "db_subphase": self.db_subphase,
+            "sql_group": self.sql_group,
+            "transaction_elapsed_ms": self.transaction_elapsed_ms,
+            "lock_wait_elapsed_ms": self.lock_wait_elapsed_ms,
         }
         payload["decision_hash"] = sha256_prefixed(payload)
         return payload
@@ -338,6 +355,7 @@ class DecisionCoordinator:
     planner_factory: Callable[..., object] = run_loop_execution_planner
     target_state_resolver: Callable[..., object] = resolve_target_position_state_for_run_loop
     persistence_context_builder: Callable[..., object] = prepare_strategy_decision_persistence_context
+    decision_persistence_uow_factory: Callable[[], DecisionPersistenceUnitOfWork] = DecisionPersistenceUnitOfWork
     record_runtime_strategy_decision_bundle_fn: Callable[..., dict[str, object]] = record_runtime_strategy_decision_bundle
     record_portfolio_allocation_decision_fn: Callable[..., dict[str, object]] = record_portfolio_allocation_decision
     record_execution_plan_batch_fn: Callable[..., dict[str, object]] = record_execution_plan_batch
@@ -391,10 +409,12 @@ class DecisionCoordinator:
                 persistence_status=failure.persistence_status,
                 mark_processed_candidate=False,
                 failure_phase=failure.phase,
+                failure_subphase=failure.subphase,
                 failure_reason_code=failure.reason_code,
                 failure_detail=failure.detail,
                 operator_next_action=failure.operator_next_action,
                 failure_evidence_hash=failure.evidence_hash,
+                persistence_failure_metadata=failure.metadata,
             )
         finally:
             conn.close()
@@ -437,6 +457,7 @@ class DecisionCoordinator:
         planning_bundle = None
         exit_rule_name: str | None = None
         persistence_status = "not_attempted"
+        persistence_metadata: dict[str, object] | None = None
         try:
             current_phase = "planner"
             try:
@@ -460,65 +481,25 @@ class DecisionCoordinator:
                 context["runtime_data_cycle_preflight_hash"] = runtime_data_cycle_preflight_hash
             if runtime_data_availability_report_hash:
                 context["runtime_data_availability_report_hash"] = runtime_data_availability_report_hash
-            current_phase = "bundle persistence"
-            bundle_refs = self.record_runtime_strategy_decision_bundle_fn(
-                conn,
-                result_bundle=typed_bundle,
-                pair=str(typed_bundle.strategy_set.market_scope.pair),
-                interval=str(typed_bundle.strategy_set.market_scope.interval),
-                created_ts=updated_ts,
-                settings_obj=self.settings_obj,
-                manifest_payload=self.run_start_manifest_payload,
-                runtime_strategy_set_manifest_id=self.run_start_manifest_id,
-                runtime_strategy_set_manifest_hash=self.run_start_manifest_hash,
-            )
-            context.update(bundle_refs)
-            allocation_payload = context.get("portfolio_allocation_decision")
-            if not isinstance(allocation_payload, dict):
-                planning_error = str(getattr(planning_bundle, "planning_error", "") or "").strip()
-                raise RuntimeError(
-                    "portfolio_allocation_decision_missing"
-                    + (f":{planning_error}" if planning_error else "")
-                )
-            current_phase = "allocation persistence"
-            allocation_refs = self.record_portfolio_allocation_decision_fn(
-                conn,
-                bundle_id=int(bundle_refs["runtime_strategy_decision_bundle_id"]),
-                allocation_decision=allocation_payload,
-            )
-            context.update(allocation_refs)
-            execution_plan_batch = getattr(planning_bundle, "execution_plan_batch", None)
-            if execution_plan_batch is None:
-                raise RuntimeError("execution_plan_batch_missing")
-            batch_refs = self.record_execution_plan_batch_fn(
-                conn,
-                execution_plan_batch=execution_plan_batch,
-                created_ts=updated_ts,
-            )
-            context.update(batch_refs)
-            current_phase = "execution plan persistence"
-            execution_refs = self.record_execution_plan_fn(
-                conn,
-                allocation_id=int(allocation_refs["portfolio_allocation_decision_id"]),
-                portfolio_target_hash=str(allocation_refs.get("portfolio_target_hash") or ""),
-                execution_plan_bundle=planning_bundle,
-            )
-            context.update(execution_refs)
-            context["runtime_strategy_decision_bundle_hash"] = bundle_refs[
-                "runtime_strategy_decision_bundle_hash"
-            ]
-            context["portfolio_allocation_decision_hash"] = allocation_refs[
-                "allocation_decision_hash"
-            ]
-            context["execution_submit_plan_hash"] = execution_refs[
-                "execution_submit_plan_hash"
-            ]
-            context["execution_plan_batch_hash"] = batch_refs[
-                "execution_plan_batch_hash"
-            ]
-            context["execution_plan_batch_id"] = batch_refs[
-                "execution_plan_batch_id"
-            ]
+            if getattr(planning_bundle, "planning_error", None) and not isinstance(
+                context.get("portfolio_allocation_decision"), dict
+            ):
+                planning_exc = RuntimeError(str(planning_bundle.planning_error))
+                planning_exc.metadata = {
+                    "failure_subphase": getattr(planning_bundle, "failure_subphase", None)
+                    or context.get("failure_subphase")
+                    or "execution_plan_batch_build",
+                    "failure_reason_code": getattr(planning_bundle, "failure_reason_code", None)
+                    or context.get("failure_reason_code")
+                    or "execution_planning_failed",
+                    "exception_type": getattr(planning_bundle, "exception_type", None)
+                    or context.get("exception_type")
+                    or "RuntimeError",
+                    "exception_message": getattr(planning_bundle, "exception_message", None)
+                    or context.get("exception_message")
+                    or str(planning_bundle.planning_error),
+                }
+                raise planning_exc
             if typed_bundle.strategy_set.multi_strategy_enabled:
                 context["strategy_decision_projection_type"] = (
                     "multi_strategy_compatibility_projection"
@@ -539,58 +520,44 @@ class DecisionCoordinator:
             exit_ctx = context.get("exit")
             if isinstance(exit_ctx, dict) and exit_ctx.get("rule") is not None:
                 exit_rule_name = str(exit_ctx.get("rule"))
-            candle_ts_raw = context.get("ts")
-            market_price_raw = context.get("last_close")
-            confidence_raw = context.get("confidence")
-            execution_decision = dict(context["execution_decision"])  # type: ignore[arg-type]
-            current_phase = "strategy decision persistence"
-            decision_id = self.record_strategy_decision_fn(
+            current_phase = "decision persistence"
+            persistence_uow = self.decision_persistence_uow_factory()
+            persistence_uow.record_runtime_strategy_decision_bundle_fn = self.record_runtime_strategy_decision_bundle_fn
+            persistence_uow.record_portfolio_allocation_decision_fn = self.record_portfolio_allocation_decision_fn
+            persistence_uow.record_execution_plan_batch_fn = self.record_execution_plan_batch_fn
+            persistence_uow.record_execution_plan_fn = self.record_execution_plan_fn
+            persistence_uow.record_strategy_decision_fn = self.record_strategy_decision_fn
+            result = persistence_uow.persist(
                 conn,
-                decision_ts=updated_ts,
+                typed_bundle=typed_bundle,
+                planning_bundle=planning_bundle,
+                context=context,
                 strategy_name=strategy_name,
                 signal=signal,
                 reason=reason,
-                candle_ts=int(candle_ts_raw) if candle_ts_raw is not None else None,
-                market_price=float(market_price_raw) if market_price_raw is not None else None,
-                confidence=float(confidence_raw) if confidence_raw is not None else None,
-                context=context,
-                runtime_strategy_decision_bundle_id=bundle_refs.get("runtime_strategy_decision_bundle_id"),
-                portfolio_allocation_decision_id=allocation_refs.get("portfolio_allocation_decision_id"),
-                portfolio_target_id=allocation_refs.get("portfolio_target_id"),
-                execution_plan_id=execution_refs.get("execution_plan_id"),
-                strategy_decision_projection_type=context.get("strategy_decision_projection_type"),
-                strategy_decisions_authority=context.get("strategy_decisions_authority"),
+                updated_ts=updated_ts,
+                settings_obj=self.settings_obj,
+                run_start_manifest_payload=self.run_start_manifest_payload,
+                run_start_manifest_id=self.run_start_manifest_id,
+                run_start_manifest_hash=self.run_start_manifest_hash,
             )
-            try:
-                current_phase = "target state persistence"
-                self.target_position_state_persister(
-                    conn,
-                    execution_decision=execution_decision,
-                    signal=signal,
-                    decision_id=decision_id,
-                    updated_ts=updated_ts,
-                    settings_obj=self.settings_obj,
-                    runtime_pair=str(context.get("runtime_pair") or typed_bundle.strategy_set.market_scope.pair),
-                    provenance_context=context,
-                )
-            except TypeError:
-                self.target_position_state_persister(
-                    conn,
-                    execution_decision=execution_decision,
-                    signal=signal,
-                    decision_id=decision_id,
-                    updated_ts=updated_ts,
-                )
-            conn.commit()
+            context = result.context
+            decision_id = result.decision_id
+            persistence_metadata = result.metadata()
             persistence_status = "persisted"
         except Exception as exc:
             failure = classify_decision_cycle_failure(exc, phase=current_phase)
+            persistence_metadata = dict(failure.metadata or {})
             RUN_LOG.warning(
                 format_log_kv(
                     "[WARN] strategy decision persistence failed",
                     error=failure.detail,
                     failure_phase=failure.phase,
+                    failure_subphase=failure.subphase,
                     failure_reason_code=failure.reason_code,
+                    db_subphase=persistence_metadata.get("db_subphase", ""),
+                    sql_group=persistence_metadata.get("sql_group", ""),
+                    retry_count=persistence_metadata.get("retry_count", ""),
                     strategy=strategy_name,
                     signal=signal,
                 )
@@ -661,10 +628,42 @@ class DecisionCoordinator:
             market_price=typed_bundle.market_price,
             exit_rule_name=exit_rule_name,
             failure_phase=None if failure is None else failure.phase,
+            failure_subphase=None if failure is None else failure.subphase,
             failure_reason_code=None if failure is None else failure.reason_code,
             failure_detail=None if failure is None else failure.detail,
             operator_next_action=None if failure is None else failure.operator_next_action,
             failure_evidence_hash=None if failure is None else failure.evidence_hash,
+            persistence_failure_metadata=persistence_metadata if failure is not None else None,
+            persistence_retry_count=(
+                int(persistence_metadata["retry_count"])
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("retry_count") is not None
+                else None
+            ),
+            persistence_max_retry_count=(
+                int(persistence_metadata["max_retry_count"])
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("max_retry_count") is not None
+                else None
+            ),
+            db_subphase=(
+                str(persistence_metadata.get("db_subphase"))
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("db_subphase") is not None
+                else None
+            ),
+            sql_group=(
+                str(persistence_metadata.get("sql_group"))
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("sql_group") is not None
+                else None
+            ),
+            transaction_elapsed_ms=(
+                float(persistence_metadata["transaction_elapsed_ms"])
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("transaction_elapsed_ms") is not None
+                else None
+            ),
+            lock_wait_elapsed_ms=(
+                float(persistence_metadata["lock_wait_elapsed_ms"])
+                if isinstance(persistence_metadata, dict) and persistence_metadata.get("lock_wait_elapsed_ms") is not None
+                else None
+            ),
         )
 
 

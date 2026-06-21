@@ -67,10 +67,18 @@ class RuntimeCycleArtifactAssembler:
             ),
             runtime_dependency_manifest_hash=self.runtime_dependency_manifest_hash,
             failure_phase=decision_result.failure_phase,
+            failure_subphase=decision_result.failure_subphase,
             failure_reason_code=decision_result.failure_reason_code,
             failure_detail=decision_result.failure_detail,
             operator_next_action=decision_result.operator_next_action,
             failure_evidence_hash=decision_result.failure_evidence_hash,
+            persistence_failure_metadata=decision_result.persistence_failure_metadata or {},
+            db_subphase=decision_result.db_subphase,
+            sql_group=decision_result.sql_group,
+            retry_count=decision_result.persistence_retry_count,
+            max_retry_count=decision_result.persistence_max_retry_count,
+            transaction_elapsed_ms=decision_result.transaction_elapsed_ms,
+            lock_wait_elapsed_ms=decision_result.lock_wait_elapsed_ms,
         )
 
 

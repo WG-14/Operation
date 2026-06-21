@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import sqlite3
 from types import SimpleNamespace
 
 from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
@@ -102,6 +103,52 @@ def test_planner_failure_has_execution_planning_reason_code() -> None:
     assert result.persistence_status == "failed"
     assert result.failure_phase == "planner"
     assert result.failure_reason_code == "execution_planning_failed"
+
+
+def test_planner_sqlite_lock_is_not_reported_as_bundle_persistence() -> None:
+    lock_error = sqlite3.OperationalError("database is locked")
+    coordinator = _coordinator(
+        planner_factory=lambda **_kwargs: SimpleNamespace(
+            plan_runtime_strategy_results=lambda *_args, **_kwargs: (_ for _ in ()).throw(lock_error)
+        )
+    )
+
+    result = coordinator.decide_cycle(runtime_strategy_set=object(), candle_ts=123, updated_ts=456)
+
+    assert result.failure_phase != "bundle persistence"
+    assert result.failure_reason_code != "runtime_decision_bundle_persistence_failed"
+    assert result.failure_phase == "planner"
+    assert result.failure_reason_code == "planner_sqlite_lock"
+
+
+def test_planning_error_prevents_portfolio_allocation_missing_rewrap() -> None:
+    coordinator = _coordinator(
+        planner_factory=lambda **_kwargs: SimpleNamespace(
+            plan_runtime_strategy_results=lambda *_args, **_kwargs: SimpleNamespace(
+                persistence_context={
+                    "execution_decision": {},
+                    "failure_subphase": "target_state_resolution",
+                    "failure_reason_code": "planner_sqlite_lock",
+                    "exception_type": "OperationalError",
+                    "exception_message": "database is locked",
+                },
+                execution_plan_batch=object(),
+                summary=None,
+                planning_error="OperationalError: database is locked",
+                failure_subphase="target_state_resolution",
+                failure_reason_code="planner_sqlite_lock",
+                exception_type="OperationalError",
+                exception_message="database is locked",
+            )
+        )
+    )
+
+    result = coordinator.decide_cycle(runtime_strategy_set=object(), candle_ts=123, updated_ts=456)
+
+    assert result.failure_phase == "planner"
+    assert result.failure_subphase == "target_state_resolution"
+    assert result.failure_reason_code == "planner_sqlite_lock"
+    assert "portfolio_allocation_decision_missing" not in str(result.failure_detail)
 
 
 def test_record_execution_plan_failure_has_persistence_reason_code() -> None:

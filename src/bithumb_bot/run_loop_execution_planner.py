@@ -6,12 +6,8 @@ from typing import Callable, Mapping
 from .config import settings
 from .canonical_decision import order_rules_snapshot_payload
 from .db_core import (
-    create_or_get_budget_lock,
-    create_or_get_order_lock,
     load_strategy_virtual_target_state,
     load_target_position_state,
-    upsert_strategy_virtual_target_state,
-    upsert_target_position_state,
 )
 from .decision_envelope import DecisionEnvelope, _thaw_mapping
 from .decision_equivalence import sha256_prefixed
@@ -102,6 +98,11 @@ class ExecutionPlanningResult:
     readiness_payload: dict[str, object]
     target_policy_metadata: dict[str, object]
     planning_error: str | None = None
+    failure_phase: str | None = None
+    failure_subphase: str | None = None
+    failure_reason_code: str | None = None
+    exception_type: str | None = None
+    exception_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -717,25 +718,25 @@ def resolve_target_position_state_for_run_loop(
             TARGET_POLICY_INITIALIZE_TRUE_DUST_FLAT: STARTUP_TARGET_SOURCE_TRUE_DUST_FLAT_INITIALIZATION,
         }
         metadata["actual_target_source"] = startup_source_by_action[policy.policy_action]
-        upsert_target_position_state(
-            conn,
-            pair=pair,
-            target_exposure_krw=float(policy.target_exposure_krw or 0.0),
-            target_qty=float(policy.target_qty or 0.0),
-            last_signal=str(raw_signal or "HOLD").upper(),
-            last_decision_id=None,
-            last_reference_price=float(reference_price or 0.0),
-            updated_ts=int(updated_ts),
-            target_origin=policy.target_origin,
-            adoption_reason=policy.adoption_reason,
-            adopted_broker_qty=policy.adopted_broker_qty,
-            adopted_broker_exposure_krw=policy.adopted_broker_exposure_krw,
-            created_from_signal=policy.created_from_signal,
-            actual_target_source=startup_source_by_action[policy.policy_action],
-        )
-        previous_target_state = load_target_position_state(conn, pair=pair)
+        metadata["target_state_update_intent"] = {
+            "pair": pair,
+            "target_exposure_krw": float(policy.target_exposure_krw or 0.0),
+            "target_qty": float(policy.target_qty or 0.0),
+            "last_signal": str(raw_signal or "HOLD").upper(),
+            "last_decision_id": None,
+            "last_reference_price": float(reference_price or 0.0),
+            "updated_ts": int(updated_ts),
+            "target_origin": policy.target_origin,
+            "adoption_reason": policy.adoption_reason,
+            "adopted_broker_qty": policy.adopted_broker_qty,
+            "adopted_broker_exposure_krw": policy.adopted_broker_exposure_krw,
+            "created_from_signal": policy.created_from_signal,
+            "actual_target_source": startup_source_by_action[policy.policy_action],
+        }
     previous_exposure = (
-        None if previous_target_state is None else float(previous_target_state.target_exposure_krw)
+        float(policy.target_exposure_krw or 0.0)
+        if "target_state_update_intent" in metadata
+        else None if previous_target_state is None else float(previous_target_state.target_exposure_krw)
     )
     if policy.policy_action == TARGET_POLICY_USE_EXISTING_TARGET and previous_target_state is not None:
         metadata.setdefault("target_origin", str(previous_target_state.target_origin or ""))
@@ -1351,7 +1352,6 @@ class ExecutionPlanner:
                                 "live_submit_authority": False,
                             },
                         )
-                        upsert_strategy_virtual_target_state(conn, virtual_state)
                         before_hash = (
                             ""
                             if previous_virtual_state is None
@@ -1386,6 +1386,7 @@ class ExecutionPlanner:
                                 ],
                                 "virtual_target_lifecycle_transition_artifact": virtual_lifecycle_artifact,
                                 "virtual_target_state_artifact": after_payload,
+                                "virtual_target_state_update_intent": after_payload,
                             }
                         )
                     runtime_result_contexts.append(result_metadata)
@@ -1583,6 +1584,11 @@ class ExecutionPlanner:
                     dict(item.get("virtual_target_lifecycle_transition_artifact") or {})
                     for item in runtime_result_contexts
                     if isinstance(item.get("virtual_target_lifecycle_transition_artifact"), Mapping)
+                ]
+                context["virtual_target_state_update_intents"] = [
+                    dict(item.get("virtual_target_state_update_intent") or {})
+                    for item in runtime_result_contexts
+                    if isinstance(item.get("virtual_target_state_update_intent"), Mapping)
                 ]
                 preferences = tuple(preference_list)
             context["strategy_preference_count"] = len(preferences)
@@ -1795,6 +1801,24 @@ class ExecutionPlanner:
             else "inspect_execution_planning_failure"
         )
         planning_error = reason_code if exc is None else f"{type(exc).__name__}: {exc}"
+        exception_type = None if exc is None else type(exc).__name__
+        exception_message = None if exc is None else str(exc)
+        failure_reason_code = (
+            "planner_sqlite_lock"
+            if exception_type == "OperationalError" and "database is locked" in str(exception_message or "").lower()
+            else "execution_planning_failed"
+        )
+        subphase = str(context.get("planner_subphase") or "execution_plan_batch_build")
+        context.update(
+            {
+                "planning_error": planning_error,
+                "failure_phase": "planner",
+                "failure_subphase": subphase,
+                "failure_reason_code": failure_reason_code,
+                "exception_type": exception_type,
+                "exception_message": exception_message,
+            }
+        )
         return ExecutionPlanningResult(
             context=context,
             execution_decision=execution_decision,
@@ -1802,6 +1826,11 @@ class ExecutionPlanner:
             readiness_payload={},
             target_policy_metadata={},
             planning_error=planning_error,
+            failure_phase="planner",
+            failure_subphase=subphase,
+            failure_reason_code=failure_reason_code,
+            exception_type=exception_type,
+            exception_message=exception_message,
         )
 
 def _primary_submit_plan(
@@ -1869,37 +1898,56 @@ def _build_execution_plan_batch_for_runtime_pair(
     )
     side = str(submit_plan.side if submit_plan is not None else context.get("authoritative_execution_signal") or "HOLD").upper()
     lock_evidence: dict[str, object]
+    lock_intent: dict[str, object] | None = None
     db_locking_available = False if read_only else _batch_lock_tables_available(conn)
-    if submit_plan is not None and bool(submit_plan.submit_expected) and side == "BUY" and db_locking_available:
-        lock_evidence = create_or_get_budget_lock(
-            conn,
-            currency="KRW",
-            pair=runtime_pair,
-            amount=float(submit_plan.notional_krw or 0.0),
-            reason="execution_plan_batch_buy_budget_lock",
-            created_ts=int(updated_ts),
-            idempotency_key=idempotency_key,
-            evidence={
-                "execution_submit_plan_hash": submit_hash,
-                "portfolio_target_hash": portfolio_target_hash,
-                "runtime_pair": runtime_pair,
-            },
+    if submit_plan is not None and bool(submit_plan.submit_expected) and side in {"BUY", "SELL"}:
+        lock_type = "quote_budget" if side == "BUY" else "base_order"
+        amount = float(submit_plan.notional_krw or 0.0) if side == "BUY" else float(submit_plan.qty or 0.0)
+        reason = (
+            "execution_plan_batch_buy_budget_lock"
+            if side == "BUY"
+            else "execution_plan_batch_sell_order_lock"
         )
-    elif submit_plan is not None and bool(submit_plan.submit_expected) and side == "SELL" and db_locking_available:
-        lock_evidence = create_or_get_order_lock(
-            conn,
-            pair=runtime_pair,
-            currency=_base_currency_from_pair(runtime_pair),
-            amount=float(submit_plan.qty or 0.0),
-            reason="execution_plan_batch_sell_order_lock",
-            created_ts=int(updated_ts),
-            idempotency_key=idempotency_key,
-            evidence={
-                "execution_submit_plan_hash": submit_hash,
-                "portfolio_target_hash": portfolio_target_hash,
-                "runtime_pair": runtime_pair,
-            },
-        )
+        currency = "KRW" if side == "BUY" else _base_currency_from_pair(runtime_pair)
+        evidence = {
+            "execution_submit_plan_hash": submit_hash,
+            "portfolio_target_hash": portfolio_target_hash,
+            "runtime_pair": runtime_pair,
+        }
+        lock_table = "budget_locks" if side == "BUY" else "order_locks"
+        lock_hash_payload = {
+            "schema_version": 1,
+            "lock_table": lock_table,
+            **(
+                {"currency": currency, "pair": runtime_pair}
+                if side == "BUY"
+                else {"pair": runtime_pair, "currency": currency}
+            ),
+            "amount": amount,
+            "reason": reason,
+            "idempotency_key": idempotency_key,
+            "evidence": evidence,
+        }
+        evidence_hash = sha256_prefixed(lock_hash_payload)
+        lock_intent = {
+            "lock_kind": "budget" if side == "BUY" else "order",
+            "currency": currency,
+            "pair": runtime_pair,
+            "amount": amount,
+            "reason": reason,
+            "created_ts": int(updated_ts),
+            "idempotency_key": idempotency_key,
+            "evidence": evidence,
+            "lock_hash": evidence_hash,
+            "evidence_hash": evidence_hash,
+        }
+        lock_evidence = {
+            "lock_hash": evidence_hash,
+            "lock_type": lock_type,
+            "lock_status": "intent_pending_persistence",
+            "evidence_hash": evidence_hash,
+            "lock_intent": dict(lock_intent),
+        }
     else:
         evidence_hash = sha256_prefixed(
             {
@@ -1930,6 +1978,12 @@ def _build_execution_plan_batch_for_runtime_pair(
             "lock_status": "diagnostic_unpersisted" if not db_locking_available else "not_required",
             "evidence_hash": evidence_hash,
         }
+    if isinstance(context, dict):
+        intents = list(context.get("lock_intents") or [])
+        if lock_intent is not None:
+            intents.append(dict(lock_intent))
+        context["lock_intents"] = intents
+        context["required_lock_evidence"] = lock_evidence
     execution_order_rules = resolve_execution_order_rules(dict(context), market=runtime_pair)
     order_rule_snapshot = order_rules_snapshot_payload(
         execution_order_rules.as_order_rules(),

@@ -2,7 +2,7 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:24b1f1bc5177e5c3b28b2c464b0c5d8e7aed0267373fc8c18a217ac526a0b843`
+Spec hash: `sha256:4ccee3af1d595bcceac62f8d192582050e643b596ee017e1c4313ed87742d965`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ Spec hash: `sha256:24b1f1bc5177e5c3b28b2c464b0c5d8e7aed0267373fc8c18a217ac526a0b
 | `DB_LOCK_RETRY_BACKOFF_MS` | number | common |  | no | no | no | P0 |  | DB_LOCK_RETRY_BACKOFF_MS runtime configuration. |
 | `DB_LOCK_RETRY_COUNT` | number | common |  | no | no | no | P0 |  | DB_LOCK_RETRY_COUNT runtime configuration. |
 | `DB_PATH` | string | live | `<PathManager>` | yes | no | no | P0 |  | Compatibility override for the mode-specific SQLite trade ledger path. |
+| `DECISION_PERSISTENCE_FAILURE_HALT_THRESHOLD` | string | common |  | no | no | no | P1 |  | DECISION_PERSISTENCE_FAILURE_HALT_THRESHOLD runtime configuration. |
 | `ENTRY_EDGE_BUFFER_RATIO` | number | common |  | no | no | no | P1 |  | ENTRY_EDGE_BUFFER_RATIO runtime configuration. |
 | `ENV_ROOT` | string | live | `<PathManager>` | yes | no | no | P0 |  | ENV_ROOT runtime configuration. |
 | `EVERY` | string | common |  | no | no | no | P1 |  | EVERY runtime configuration. |

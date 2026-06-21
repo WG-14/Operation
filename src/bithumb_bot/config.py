@@ -999,6 +999,9 @@ class Settings:
     DB_BUSY_TIMEOUT_MS: int = int(os.getenv("DB_BUSY_TIMEOUT_MS", "5000"))
     DB_LOCK_RETRY_COUNT: int = int(os.getenv("DB_LOCK_RETRY_COUNT", "2"))
     DB_LOCK_RETRY_BACKOFF_MS: int = int(os.getenv("DB_LOCK_RETRY_BACKOFF_MS", "50"))
+    DECISION_PERSISTENCE_FAILURE_HALT_THRESHOLD: int = int(
+        os.getenv("DECISION_PERSISTENCE_FAILURE_HALT_THRESHOLD", "3")
+    )
 
     # paper portfolio
     START_CASH_KRW: float = float(os.getenv("START_CASH_KRW", "1000000"))

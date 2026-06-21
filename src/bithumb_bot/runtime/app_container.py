@@ -283,13 +283,18 @@ def create_default_runtime_app(settings_obj=settings) -> RuntimeAppContainer:
     from ..runtime_decision_service import RuntimeDecisionGateway
 
     state_store = RuntimeStateStore(runtime_state.snapshot)
+    startup_schema_conn = ensure_db(ensure_schema_ready=True)
+    startup_schema_conn.close()
+
+    def runtime_db_factory():
+        return ensure_db(ensure_schema_ready=False)
 
     def now_ms() -> int:
         return int(time.time() * 1000)
 
     def exposure_snapshot(now_ms_value: int) -> tuple[bool, bool]:
         open_count, _ = _get_open_order_snapshot(now_ms_value)
-        conn = ensure_db()
+        conn = runtime_db_factory()
         try:
             snapshot = compute_runtime_readiness_snapshot(conn)
         finally:
@@ -381,7 +386,7 @@ def create_default_runtime_app(settings_obj=settings) -> RuntimeAppContainer:
     decision_gateway_factory = RuntimeDecisionGateway
     decision_coordinator = DecisionCoordinator(
         settings_obj=settings_obj,
-        db_factory=ensure_db,
+        db_factory=runtime_db_factory,
         decision_gateway_factory=decision_gateway_factory,
         planner_factory=run_loop_execution_planner,
     )
@@ -442,7 +447,7 @@ def create_default_runtime_app(settings_obj=settings) -> RuntimeAppContainer:
 
     return RuntimeAppContainer(
         settings_obj=settings_obj,
-        db_factory=ensure_db,
+        db_factory=runtime_db_factory,
         clock=clock,
         scheduler=scheduler,
         broker_factory=broker_factory,

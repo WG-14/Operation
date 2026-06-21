@@ -1441,7 +1441,7 @@ def test_planner_runtime_pair_uses_injected_scope_when_global_pair_changes(tmp_p
     assert result.persistence_context["portfolio_target"]["target_exposure_krw"] == pytest.approx(12_345.0)
 
 
-def test_runtime_planner_persists_virtual_lifecycle_without_submit_authority(tmp_path) -> None:
+def test_runtime_planner_returns_virtual_lifecycle_intents_without_submit_authority(tmp_path) -> None:
     from bithumb_bot.db_core import load_strategy_virtual_target_state
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -1508,16 +1508,20 @@ def test_runtime_planner_persists_virtual_lifecycle_without_submit_authority(tmp
     assert result.persistence_context["strategy_preference_count"] == 2
     assert result.persistence_context["allocation_target_pairs"] == ["KRW-BTC"]
     assert result.persistence_context["portfolio_target"]["pair"] == "KRW-BTC"
-    assert loaded_buy is not None
-    assert loaded_hold is not None
-    assert loaded_buy.virtual_target_exposure_krw == pytest.approx(60_000.0)
-    assert loaded_hold.virtual_target_exposure_krw == pytest.approx(0.0)
+    assert loaded_buy is None
+    assert loaded_hold is None
+    intents = {
+        str(item["strategy_instance_id"]): item
+        for item in result.persistence_context["virtual_target_state_update_intents"]
+    }
+    assert intents["buy"]["virtual_target_exposure_krw"] == pytest.approx(60_000.0)
+    assert intents["hold"]["virtual_target_exposure_krw"] == pytest.approx(0.0)
     assert buy_context["virtual_target_live_submit_authority"] is False
     assert hold_context["virtual_target_live_submit_authority"] is False
     assert buy_context["virtual_target_state_before_hash"] == ""
     assert str(buy_context["virtual_target_state_after_hash"]).startswith("sha256:")
-    assert loaded_buy.content_hash() == buy_context["virtual_target_state_after_hash"]
-    assert loaded_hold.content_hash() == hold_context["virtual_target_state_after_hash"]
+    assert intents["buy"]["evidence_hash"] == buy_context["virtual_target_state_evidence_hash"]
+    assert intents["hold"]["evidence_hash"] == hold_context["virtual_target_state_evidence_hash"]
     assert str(buy_context["virtual_target_lifecycle_transition_hash"]).startswith("sha256:")
     assert str(hold_context["virtual_target_lifecycle_transition_hash"]).startswith("sha256:")
     assert result.persistence_context["strategy_virtual_lifecycle_transition_hashes"] == [

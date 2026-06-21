@@ -283,10 +283,18 @@ class RuntimeCycleArtifact:
     runtime_dependency_manifest_hash: str | None = None
     notification_event_hashes: Sequence[str] = ()
     failure_phase: str | None = None
+    failure_subphase: str | None = None
     failure_reason_code: str | None = None
     failure_detail: str | None = None
     operator_next_action: str | None = None
     failure_evidence_hash: str | None = None
+    persistence_failure_metadata: Mapping[str, Any] = field(default_factory=dict)
+    db_subphase: str | None = None
+    sql_group: str | None = None
+    retry_count: int | None = None
+    max_retry_count: int | None = None
+    transaction_elapsed_ms: float | None = None
+    lock_wait_elapsed_ms: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -339,10 +347,18 @@ class RuntimeCycleArtifact:
             "runtime_dependency_manifest_hash": self.runtime_dependency_manifest_hash,
             "notification_event_hashes": list(self.notification_event_hashes),
             "failure_phase": self.failure_phase,
+            "failure_subphase": self.failure_subphase,
             "failure_reason_code": self.failure_reason_code,
             "failure_detail": self.failure_detail,
             "operator_next_action": self.operator_next_action,
             "failure_evidence_hash": self.failure_evidence_hash,
+            "persistence_failure_metadata": dict(self.persistence_failure_metadata),
+            "db_subphase": self.db_subphase,
+            "sql_group": self.sql_group,
+            "retry_count": self.retry_count,
+            "max_retry_count": self.max_retry_count,
+            "transaction_elapsed_ms": self.transaction_elapsed_ms,
+            "lock_wait_elapsed_ms": self.lock_wait_elapsed_ms,
         }
         payload["input_hash"] = _stable_hash(
             {
@@ -393,9 +409,17 @@ class RuntimeCycleArtifact:
                 "runtime_dependency_manifest_hash": self.runtime_dependency_manifest_hash,
                 "notification_event_hashes": list(self.notification_event_hashes),
                 "failure_phase": self.failure_phase,
+                "failure_subphase": self.failure_subphase,
                 "failure_reason_code": self.failure_reason_code,
                 "operator_next_action": self.operator_next_action,
                 "failure_evidence_hash": self.failure_evidence_hash,
+                "persistence_failure_metadata": dict(self.persistence_failure_metadata),
+                "db_subphase": self.db_subphase,
+                "sql_group": self.sql_group,
+                "retry_count": self.retry_count,
+                "max_retry_count": self.max_retry_count,
+                "transaction_elapsed_ms": self.transaction_elapsed_ms,
+                "lock_wait_elapsed_ms": self.lock_wait_elapsed_ms,
             }
         )
         payload["decision_hash"] = _stable_hash(payload)
