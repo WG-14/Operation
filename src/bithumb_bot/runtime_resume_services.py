@@ -323,6 +323,9 @@ class RuntimeResumeService:
                     overridable=False,
                 )
             )
+        residual_run_allowed = bool(
+            residual_disposition is not None and bool(getattr(residual_disposition, "run_allowed", False))
+        )
         dust_resume_blocker = (
             None
             if residual_disposition is not None
@@ -330,29 +333,34 @@ class RuntimeResumeService:
         )
         if dust_resume_blocker is not None:
             blocker_code, blocker_detail = dust_resume_blocker
-            dust_reason_code, dust_summary = classify_dust_resume_blocker(dust_context_for_halt)
-            reasons.append(
-                _resume_blocker(
-                    code=blocker_code,
-                    detail=blocker_detail,
-                    reason_code=dust_reason_code,
-                    summary=dust_summary,
-                    overridable=False,
+            if not any(str(existing.code) == blocker_code for existing in reasons):
+                dust_reason_code, dust_summary = classify_dust_resume_blocker(dust_context_for_halt)
+                reasons.append(
+                    _resume_blocker(
+                        code=blocker_code,
+                        detail=blocker_detail,
+                        reason_code=dust_reason_code,
+                        summary=dust_summary,
+                        overridable=False,
+                    )
                 )
-            )
 
-        residual_run_allowed = bool(
-            residual_disposition is not None and bool(getattr(residual_disposition, "run_allowed", False))
-        )
         legacy_dust_effective_flat = bool(
-            residual_disposition is None and bool(dust_context_for_halt["effective_flat"])
+            residual_disposition is None
+            and bool(dust_context_for_halt["effective_flat"])
+            and bool(dust_context_for_halt["allow_resume"])
+        )
+        reconciled_dust_effective_flat = bool(
+            bool(dust_context_for_halt["present"])
+            and bool(dust_context_for_halt["effective_flat"])
+            and bool(dust_context_for_halt["allow_resume"])
         )
         unresolved_dust_safe = bool(
             state.halt_state_unresolved
             and (state.halt_reason_code or "") in RISK_EXPOSURE_HALT_REASON_CODES
             and int(state.unresolved_open_order_count) == 0
             and int(state.recovery_required_count) == 0
-            and (residual_run_allowed or legacy_dust_effective_flat)
+            and (residual_run_allowed or legacy_dust_effective_flat or reconciled_dust_effective_flat)
         )
         if state.halt_state_unresolved and not unresolved_dust_safe:
             reasons.append(
@@ -390,9 +398,15 @@ class RuntimeResumeService:
                 and (
                     residual_run_allowed
                     or (
+                        bool(dust_context["present"])
+                        and bool(dust_context["effective_flat"])
+                        and bool(dust_context["allow_resume"])
+                    )
+                    or (
                         residual_disposition is None
                         and bool(dust_context["present"])
                         and bool(dust_context["effective_flat"])
+                        and bool(dust_context["allow_resume"])
                     )
                 )
             )

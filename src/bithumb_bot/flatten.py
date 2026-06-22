@@ -700,8 +700,16 @@ def flatten_btc_position(*, broker, dry_run: bool = False, trigger: str = "opera
                 (getattr(residual_disposition, "reason_codes", ()) or ("residual_disposition",))[0]
             )
             if residual_name in {"BLOCKING_INCONSISTENT", "AUTHORITY_REPAIR_REQUIRED"}:
+                block_reason = residual_reason
+                count_fields: dict[str, object] = {}
+                if int(readiness.recovery_required_count or 0) > 0:
+                    block_reason = "recovery_required_orders_present"
+                    count_fields["recovery_required_count"] = int(readiness.recovery_required_count or 0)
+                elif int(readiness.open_order_count or 0) > 0:
+                    block_reason = "unresolved_orders_present"
+                    count_fields["open_order_count"] = int(readiness.open_order_count or 0)
                 summary = _operator_blocked_json_summary(
-                    reason=residual_reason,
+                    reason=block_reason,
                     dry_run=dry_run,
                     trigger=trigger,
                     recommended_action=str(
@@ -733,6 +741,7 @@ def flatten_btc_position(*, broker, dry_run: bool = False, trigger: str = "opera
                     broker_local_projection_state=str(
                         getattr(residual_disposition, "broker_local_projection_state", "unknown")
                     ),
+                    **count_fields,
                 )
                 runtime_state.record_flatten_position_result(status="blocked", summary=summary)
                 return summary

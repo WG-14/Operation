@@ -220,10 +220,10 @@ def build_operator_clean_closeout_contract(
         )
     if quantity_contract.min_qty > 0 and planned_qty + _QTY_EPS < quantity_contract.min_qty:
         local_fallback = quantity_contract.qty_step_authority_level == "local_fallback"
-        exchange_authority = quantity_contract.qty_step_authority_level in {
-            "exchange_hard",
-            "persisted_exchange_snapshot",
-        }
+        rule_block_detail = (
+            "order qty below minimum: "
+            f"{planned_qty:.12f} < {quantity_contract.min_qty:.12f}"
+        )
         return _blocked_contract(
             market=market,
             dry_run=dry_run,
@@ -232,24 +232,22 @@ def build_operator_clean_closeout_contract(
             planned_sell_qty=planned_qty,
             market_price=market_price,
             quantity_contract=quantity_contract,
-            block_reason=REASON_LOCAL_POLICY_BLOCK
-            if local_fallback
-            else REASON_EXCHANGE_RULE_BLOCK
-            if exchange_authority
-            else (
-                "order qty below minimum: "
-                f"{planned_qty:.12f} < {quantity_contract.min_qty:.12f}"
+            block_reason=(
+                REASON_LOCAL_POLICY_BLOCK
+                if local_fallback
+                else rule_block_detail
             ),
             recommended_action=RECOMMENDED_REVIEW_LOCAL_FALLBACK
             if local_fallback
             else RECOMMENDED_MANUAL_CLOSEOUT,
+            submit_payload_preview={"rule_block_detail": rule_block_detail},
         )
     if quantity_contract.min_notional_krw > 0 and (planned_qty * float(market_price)) + _QTY_EPS < quantity_contract.min_notional_krw:
         local_fallback = quantity_contract.qty_step_authority_level == "local_fallback"
-        exchange_authority = quantity_contract.qty_step_authority_level in {
-            "exchange_hard",
-            "persisted_exchange_snapshot",
-        }
+        rule_block_detail = (
+            "order notional below minimum (SELL): "
+            f"{(planned_qty * float(market_price)):.2f} < {quantity_contract.min_notional_krw:.2f}"
+        )
         return _blocked_contract(
             market=market,
             dry_run=dry_run,
@@ -258,17 +256,15 @@ def build_operator_clean_closeout_contract(
             planned_sell_qty=planned_qty,
             market_price=market_price,
             quantity_contract=quantity_contract,
-            block_reason=REASON_LOCAL_POLICY_BLOCK
-            if local_fallback
-            else REASON_EXCHANGE_RULE_BLOCK
-            if exchange_authority
-            else (
-                "order notional below minimum (SELL): "
-                f"{(planned_qty * float(market_price)):.2f} < {quantity_contract.min_notional_krw:.2f}"
+            block_reason=(
+                REASON_LOCAL_POLICY_BLOCK
+                if local_fallback
+                else rule_block_detail
             ),
             recommended_action=RECOMMENDED_REVIEW_LOCAL_FALLBACK
             if local_fallback
             else RECOMMENDED_MANUAL_CLOSEOUT,
+            submit_payload_preview={"rule_block_detail": rule_block_detail},
         )
     if should_enforce_qty_step_as_hard_rule(
         quantity_contract,

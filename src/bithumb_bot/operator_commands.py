@@ -131,17 +131,28 @@ from .reason_codes import DUST_RESIDUAL_UNSELLABLE
 
 
 def _residual_operator_field_values(source: dict[str, object]) -> dict[str, object]:
-    disposition = source.get("residual_disposition")
+    nested_readiness = source.get("runtime_readiness")
+    readiness_source = nested_readiness if isinstance(nested_readiness, dict) else {}
+    disposition = source.get("residual_disposition", readiness_source.get("residual_disposition"))
     if isinstance(disposition, dict):
         disposition_value = disposition.get("disposition")
     else:
         disposition_value = disposition
     return {
         "residual_disposition": disposition_value or "NONE",
-        "residual_reason_code": source.get("residual_reason_code") or "none",
-        "manual_exchange_action_required": bool(source.get("manual_exchange_action_required")),
-        "quantity_rule_authority": source.get("quantity_rule_authority") or "unknown",
-        "broker_local_projection_state": source.get("broker_local_projection_state") or "unknown",
+        "residual_reason_code": source.get("residual_reason_code")
+        or readiness_source.get("residual_reason_code")
+        or "none",
+        "manual_exchange_action_required": bool(
+            source.get("manual_exchange_action_required")
+            or readiness_source.get("manual_exchange_action_required")
+        ),
+        "quantity_rule_authority": source.get("quantity_rule_authority")
+        or readiness_source.get("quantity_rule_authority")
+        or "unknown",
+        "broker_local_projection_state": source.get("broker_local_projection_state")
+        or readiness_source.get("broker_local_projection_state")
+        or "unknown",
     }
 
 
@@ -1777,8 +1788,11 @@ def cmd_health() -> None:
     blocker_reason_codes_label = ", ".join(resume_blocker_reason_codes) if resume_blocker_reason_codes else "none"
     unsafe_reasons: list[str] = []
     if not bool(resume_allowed):
-        for blocker in resume_blockers[:3]:
-            unsafe_reasons.append(str(blocker.code))
+        if any(str(blocker.code) == "STARTUP_SAFETY_GATE_BLOCKED" for blocker in resume_blockers):
+            unsafe_reasons.append("STARTUP_SAFETY_GATE_BLOCKED")
+        else:
+            for blocker in resume_blockers[:3]:
+                unsafe_reasons.append(str(blocker.code))
         if not unsafe_reasons:
             unsafe_reasons.append("RESUME_BLOCKED")
     if unsafe_reasons:
@@ -4429,17 +4443,6 @@ def _load_recovery_report(
 
     report = {
         "mode": settings.MODE,
-        "residual_disposition": (
-            (runtime_readiness_snapshot.get("residual_disposition") or {}).get("disposition")
-            if isinstance(runtime_readiness_snapshot.get("residual_disposition"), dict)
-            else runtime_readiness_snapshot.get("residual_disposition")
-        ),
-        "residual_reason_code": runtime_readiness_snapshot.get("residual_reason_code"),
-        "manual_exchange_action_required": bool(
-            runtime_readiness_snapshot.get("manual_exchange_action_required")
-        ),
-        "quantity_rule_authority": runtime_readiness_snapshot.get("quantity_rule_authority"),
-        "broker_local_projection_state": runtime_readiness_snapshot.get("broker_local_projection_state"),
         "unresolved_count": unresolved_count,
         "recovery_required_count": recovery_required_count,
         "submit_unknown_count": submit_unknown_count,
@@ -7105,12 +7108,15 @@ def cmd_flatten_position(*, dry_run: bool = False, json_output: bool = False) ->
         return
 
     if status == "blocked":
+        detail = str(summary.get("rule_block_detail") or summary.get("block_detail") or "").strip()
+        detail_suffix = f" detail={detail}" if detail else ""
         print(
             "[FLATTEN-POSITION] blocked "
             f"reason={str(summary.get('reason') or 'unknown')} "
             f"recovery_stage={str(summary.get('recovery_stage') or 'unknown')} "
             f"recommended_command={str(summary.get('recommended_command') or 'uv run python bot.py recovery-report')} "
             f"recommended_action={str(summary.get('recommended_action') or 'none')}"
+            f"{detail_suffix}"
         )
         raise SystemExit(1)
 
