@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -461,7 +462,13 @@ def test_h74_source_observation_authority_verifies_100k_exact_params() -> None:
     assert bound["backtest_report_hash"] == "sha256:backtest"
     assert bound["validation_run_hash"] == "sha256:validation"
     assert bound["SMA_FILTER_GAP_MIN_RATIO"] == 0.0002
+    assert bound["SMA_FILTER_VOL_MIN_RANGE_RATIO"] == 0.001
+    assert bound["SMA_FILTER_OVEREXT_LOOKBACK"] == 5
+    assert bound["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"] == 0.01
+    assert bound["ENTRY_EDGE_BUFFER_RATIO"] == 0.0
     assert bound["STRATEGY_EXIT_RULES"] == "max_holding_time"
+    assert bound["STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO"] == 0.0008
+    assert bound["STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO"] == 0.0005
     assert bound["DAILY_PARTICIPATION_MAX_ORDER_KRW"] == 100_000
     assert bound["DAILY_PARTICIPATION_BUY_FRACTION"] == 1.0
     assert bound["max_entry_notional_krw"] == 100_000
@@ -474,6 +481,120 @@ def test_h74_source_observation_authority_verifies_100k_exact_params() -> None:
     assert payload["risk_profile_source"] == "h74_source_live_observation_authority"
     assert payload["risk_enforcement_mode"] == "enforced"
     verify_h74_source_observation_authority(payload, runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS)
+
+
+def test_h74_source_observation_authority_binds_wsl_h74_behavior_parameters() -> None:
+    payload = _source_authority()
+    bound = payload["hash_bound_parameters"]
+    required = set(runtime_bound_behavior_parameter_names("daily_participation_sma"))
+    expected_wsl_h74 = {
+        "SMA_SHORT": 10,
+        "SMA_LONG": 86,
+        "STRATEGY_EXIT_MAX_HOLDING_MIN": 74,
+        "DAILY_PARTICIPATION_WINDOW_START_HOUR_KST": 9,
+        "DAILY_PARTICIPATION_WINDOW_END_HOUR_KST": 11,
+        "SMA_FILTER_VOL_MIN_RANGE_RATIO": 0.001,
+        "SMA_FILTER_OVEREXT_LOOKBACK": 5,
+        "SMA_FILTER_OVEREXT_MAX_RETURN_RATIO": 0.01,
+        "ENTRY_EDGE_BUFFER_RATIO": 0.0,
+        "STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO": 0.0008,
+        "STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO": 0.0005,
+    }
+
+    assert required - set(bound) == set()
+    for key, expected in expected_wsl_h74.items():
+        assert bound[key] == expected
+
+
+def test_h74_source_observation_verify_rejects_any_behavior_parameter_mismatch() -> None:
+    payload = _source_authority()
+
+    for name in runtime_bound_behavior_parameter_names("daily_participation_sma"):
+        runtime = dict(H74_SOURCE_OBSERVATION_PARAMETERS)
+        current = runtime[name]
+        if isinstance(current, bool):
+            runtime[name] = not current
+        elif isinstance(current, int):
+            runtime[name] = current + 1
+        elif isinstance(current, float):
+            runtime[name] = current + 0.12345
+        else:
+            runtime[name] = f"{current}_changed"
+
+        with pytest.raises(H74ObservationAuthorityError, match=name):
+            verify_h74_source_observation_authority(payload, runtime_values=runtime)
+
+
+def test_h74_source_observation_runtime_strategy_set_lint_passes_with_generated_authority(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from bithumb_bot.cli.main import main as cli_main
+
+    authority = _source_authority()
+    authority_path = tmp_path / "source-authority.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    monkeypatch.setenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+    runtime_strategy_set_json = json.dumps(
+        {
+            "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
+            "strategies": [
+                {
+                    "strategy_name": "daily_participation_sma",
+                    "strategy_instance_id": "h74-source-observation",
+                    "pair": "KRW-BTC",
+                    "interval": "1m",
+                    "desired_exposure_krw": 100_000,
+                    "parameters": _source_parameters(),
+                }
+            ],
+        }
+    )
+    cfg = _h74_source_cfg(authority_path, RUNTIME_STRATEGY_SET_JSON=runtime_strategy_set_json)
+
+    assert cli_main(
+        ["runtime-strategy-set-lint"],
+        context=argparse.Namespace(settings=cfg, printer=print, env_summary=None),
+    ) == 0
+    assert "runtime_strategy_set_lint_ok" in capsys.readouterr().out
+
+
+def test_h74_source_observation_runtime_strategy_set_lint_rejects_entry_edge_mismatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from bithumb_bot.cli.main import main as cli_main
+
+    authority = _source_authority()
+    authority_path = tmp_path / "source-authority.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    monkeypatch.setenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+    runtime_strategy_set_json = json.dumps(
+        {
+            "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
+            "strategies": [
+                {
+                    "strategy_name": "daily_participation_sma",
+                    "strategy_instance_id": "h74-source-observation",
+                    "pair": "KRW-BTC",
+                    "interval": "1m",
+                    "desired_exposure_krw": 100_000,
+                    "parameters": _source_parameters(),
+                }
+            ],
+        }
+    )
+    cfg = _h74_source_cfg(authority_path, RUNTIME_STRATEGY_SET_JSON=runtime_strategy_set_json)
+    object.__setattr__(cfg, "ENTRY_EDGE_BUFFER_RATIO", 0.0005)
+
+    with pytest.raises(Exception) as exc:
+        cli_main(
+            ["runtime-strategy-set-lint"],
+            context=argparse.Namespace(settings=cfg, printer=print, env_summary=None),
+        )
+    assert exc.type.__name__ == "LiveModeValidationError"
+    assert "h74_source_observation_authority_runtime_mismatch:ENTRY_EDGE_BUFFER_RATIO" in str(exc.value)
 
 
 def test_h74_source_observation_rejects_missing_risk_policy() -> None:
