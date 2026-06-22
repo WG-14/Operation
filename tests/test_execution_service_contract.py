@@ -790,7 +790,15 @@ def test_live_target_delta_pre_submit_uses_live_broker_snapshot(tmp_path, monkey
     expected = summary.target_submit_plan.as_final_payload()  # type: ignore[union-attr]
     db_path = tmp_path / "pre-submit-broker.sqlite"
     _seed_execution_plan_row(db_path, str(expected["submit_plan_hash"]))
-    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _sqlite_ensure_db_for(db_path))
+    def _forbidden_ensure_db(*_args, **_kwargs):
+        raise AssertionError("live pre-submit path must use injected runtime db factory")
+
+    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _forbidden_ensure_db)
+
+    def _runtime_db_factory():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
 
     def _fake_evaluate(self, *, plan, broker=None, submit_qty=None, current_asset_qty=None, **_kwargs):
         captured["broker"] = broker
@@ -828,6 +836,7 @@ def test_live_target_delta_pre_submit_uses_live_broker_snapshot(tmp_path, monkey
         )
         or {"status": "submitted"},
         harmless_dust_recorder=lambda **_kwargs: False,
+        db_factory=_runtime_db_factory,
     )
     result = service.execute(
         TypedExecutionRequest(
@@ -933,7 +942,15 @@ def test_live_target_delta_pre_submit_broker_none_fails_closed(tmp_path, monkeyp
     expected = summary.target_submit_plan.as_final_payload()  # type: ignore[union-attr]
     db_path = tmp_path / "pre-submit-broker-none.sqlite"
     _seed_execution_plan_row(db_path, str(expected["submit_plan_hash"]))
-    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _sqlite_ensure_db_for(db_path))
+    def _forbidden_ensure_db(*_args, **_kwargs):
+        raise AssertionError("live pre-submit path must use injected runtime db factory")
+
+    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _forbidden_ensure_db)
+
+    def _runtime_db_factory():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
     monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
     monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
     monkeypatch.setattr(
@@ -975,6 +992,7 @@ def test_live_target_delta_pre_submit_broker_none_fails_closed(tmp_path, monkeyp
         broker=None,  # type: ignore[arg-type]
         executor=lambda *_args, **kwargs: calls.append(kwargs) or {"status": "submitted"},
         harmless_dust_recorder=lambda **_kwargs: False,
+        db_factory=_runtime_db_factory,
     )
     result = service.execute(
         TypedExecutionRequest(
@@ -1133,7 +1151,12 @@ def test_pre_submit_coordinator_proof_persist_outside_serialization(tmp_path, mo
     final_payload = typed_plan.as_final_payload()
     db_path = tmp_path / "coordinator-persist.sqlite"
     _seed_execution_plan_row(db_path, str(final_payload["submit_plan_hash"]))
-    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _sqlite_ensure_db_for(db_path))
+    monkeypatch.setattr(
+        "bithumb_bot.execution_service.ensure_db",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pre-submit proof persistence must use caller connection")
+        ),
+    )
 
     def _fake_evaluate(self, *, plan, broker=None, submit_qty=None, **_kwargs):
         assert broker is not None

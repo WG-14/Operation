@@ -265,6 +265,57 @@ class ExecutionGateTrace:
     entries: Sequence[ExecutionGateTraceEntry] = ()
 
     @classmethod
+    def from_entries(
+        cls,
+        entries: Sequence[ExecutionGateTraceEntry | Mapping[str, Any]] | None,
+        *,
+        evaluated_at_ms: int | None = None,
+    ) -> "ExecutionGateTrace":
+        normalized: list[ExecutionGateTraceEntry] = []
+        for raw in entries or ():
+            if isinstance(raw, ExecutionGateTraceEntry):
+                normalized.append(raw)
+                continue
+            item = dict(raw)
+            gate = str(item.get("gate") or "").strip()
+            if not gate:
+                continue
+            status = str(item.get("status") or "").strip().upper() or "UNKNOWN"
+            reason_code = str(item.get("reason_code") or "").strip() or "UNKNOWN"
+            blocking = bool(item.get("blocking"))
+            if status in {"BLOCK", "REQUIRE_RECONCILE", "FORCE_EXIT", "REJECT"}:
+                blocking = True
+            normalized.append(
+                ExecutionGateTraceEntry(
+                    gate=gate,
+                    status=status,
+                    reason_code=reason_code,
+                    input_hash=(
+                        None
+                        if item.get("input_hash") is None
+                        else str(item.get("input_hash") or "")
+                    ),
+                    evidence_hash=(
+                        None
+                        if item.get("evidence_hash") is None
+                        else str(item.get("evidence_hash") or "")
+                    ),
+                    state_source=(
+                        None
+                        if item.get("state_source") is None
+                        else str(item.get("state_source") or "")
+                    ),
+                    evaluated_at_ms=(
+                        int(item["evaluated_at_ms"])
+                        if item.get("evaluated_at_ms") is not None
+                        else evaluated_at_ms
+                    ),
+                    blocking=blocking,
+                )
+            )
+        return cls(entries=tuple(normalized))
+
+    @classmethod
     def from_risk_layers(
         cls,
         *,
@@ -401,9 +452,14 @@ class RuntimeCycleArtifact:
     transaction_elapsed_ms: float | None = None
     lock_wait_elapsed_ms: float | None = None
     last_lock_error: str | None = None
+    hard_gate_trace_entries: Sequence[ExecutionGateTraceEntry | Mapping[str, Any]] = ()
 
     def gate_trace(self) -> ExecutionGateTrace:
-        return ExecutionGateTrace.from_risk_layers(
+        explicit_trace = ExecutionGateTrace.from_entries(
+            self.hard_gate_trace_entries,
+            evaluated_at_ms=self.candle_ts,
+        )
+        risk_trace = ExecutionGateTrace.from_risk_layers(
             evaluated_at_ms=self.candle_ts,
             strategy_status=self.strategy_risk_status,
             strategy_reason_code=self.strategy_risk_reason_code,
@@ -421,6 +477,7 @@ class RuntimeCycleArtifact:
             pre_submit_evidence_hash=self.pre_submit_risk_evidence_hash,
             pre_submit_state_source=self.pre_submit_risk_state_source,
         )
+        return ExecutionGateTrace(entries=tuple(explicit_trace.entries) + tuple(risk_trace.entries))
 
     def as_dict(self) -> dict[str, Any]:
         gate_trace = self.gate_trace()
@@ -552,6 +609,7 @@ class RuntimeCycleArtifact:
                 "max_retry_count": self.max_retry_count,
                 "transaction_elapsed_ms": self.transaction_elapsed_ms,
                 "lock_wait_elapsed_ms": self.lock_wait_elapsed_ms,
+                "hard_gate_trace_entries": gate_trace.as_list(),
             }
         )
         payload["decision_hash"] = _stable_hash(payload)

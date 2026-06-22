@@ -7,6 +7,9 @@ def test_gate_trace_records_first_blocking_gate() -> None:
     artifact = RuntimeCycleArtifact(
         cycle_id="cycle-1",
         candle_ts=1_800_000_000_000,
+        hard_gate_trace_entries=[
+            {"gate": "time_window", "status": "ALLOW", "reason_code": "within_kst_window"}
+        ],
         strategy_risk_status="ALLOW",
         strategy_risk_reason_code="OK",
         strategy_risk_input_hash="sha256:strategy-input",
@@ -27,6 +30,7 @@ def test_gate_trace_records_first_blocking_gate() -> None:
     assert artifact["primary_block_gate"] == "portfolio_risk"
     assert artifact["primary_block_reason"] == "MAX_DAILY_ORDER_COUNT"
     assert [entry["gate"] for entry in artifact["gate_trace"]] == [
+        "time_window",
         "strategy_risk",
         "portfolio_risk",
         "pre_submit_risk",
@@ -55,3 +59,37 @@ def test_pre_submit_risk_block_visible_in_runtime_artifact() -> None:
     assert pre_submit["blocking"] is True
     assert artifact["primary_block_gate"] == "pre_submit_risk"
     assert artifact["primary_block_reason"] == "RISK_STATE_MISMATCH"
+
+
+def test_non_risk_hard_gate_block_visible_in_runtime_artifact() -> None:
+    artifact = RuntimeCycleArtifact(
+        cycle_id="cycle-3",
+        candle_ts=1_800_000_000_000,
+        hard_gate_trace_entries=[
+            {"gate": "time_window", "status": "ALLOW", "reason_code": "within_kst_window"},
+            {
+                "gate": "submit_authority",
+                "status": "BLOCK",
+                "reason_code": "target_delta_missing_target_submit_plan",
+                "input_hash": "sha256:submit-authority-input",
+                "evidence_hash": "sha256:submit-authority-evidence",
+                "state_source": "submit_authority_policy",
+            },
+        ],
+        strategy_risk_status="ALLOW",
+        strategy_risk_reason_code="OK",
+        portfolio_risk_status="ALLOW",
+        portfolio_risk_reason_code="OK",
+    ).as_dict()
+
+    assert [entry["gate"] for entry in artifact["gate_trace"]] == [
+        "time_window",
+        "submit_authority",
+        "strategy_risk",
+        "portfolio_risk",
+    ]
+    submit_authority = artifact["gate_trace"][1]
+    assert submit_authority["status"] == "BLOCK"
+    assert submit_authority["blocking"] is True
+    assert artifact["primary_block_gate"] == "submit_authority"
+    assert artifact["primary_block_reason"] == "target_delta_missing_target_submit_plan"

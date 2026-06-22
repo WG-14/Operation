@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 
 from bithumb_bot.cli.registry import CommandSpec
 
@@ -84,6 +86,43 @@ def _live_pipeline_smoke_authority(args: argparse.Namespace, _context) -> None:
         max_notional_krw=float(args.max_notional_krw),
         expires_min=int(args.expires_min),
     )
+
+
+def _h74_live_rehearsal(args: argparse.Namespace, _context) -> None:
+    from bithumb_bot.h74_live_rehearsal import H74LiveRehearsalConfig, run_h74_live_rehearsal
+
+    payload = run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(
+            kst_time=str(args.kst_time),
+            no_submit=bool(args.no_submit),
+            source_artifact_path=args.source_artifact,
+        )
+    )
+    if bool(args.json):
+        print(json.dumps(payload, sort_keys=True))
+        return
+    print(payload["rehearsal_hash"])
+
+
+def _h74_readiness_certificate(args: argparse.Namespace, _context) -> None:
+    from bithumb_bot.h74_live_rehearsal import H74LiveRehearsalConfig, run_h74_live_rehearsal
+    from bithumb_bot.h74_readiness_certificate import build_h74_readiness_certificate
+
+    rehearsal = run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(
+            kst_time=str(args.kst_time),
+            no_submit=bool(args.no_submit),
+            source_artifact_path=args.source_artifact,
+        )
+    )
+    payload = build_h74_readiness_certificate(
+        rehearsal,
+        env_file=os.getenv("BITHUMB_ENV_FILE"),
+    )
+    if bool(args.json):
+        print(json.dumps(payload, sort_keys=True))
+        return
+    print(payload["certificate_hash"])
 
 
 def _panic(args: argparse.Namespace, _context) -> None:
@@ -226,6 +265,41 @@ def command_specs() -> list[CommandSpec]:
             requires_live=True,
             guard_policy="operator_live_pipeline_smoke_authority",
             produces_artifact=True,
+        ),
+        make_spec(
+            "h74-live-rehearsal",
+            domain="live_ops",
+            handler=_h74_live_rehearsal,
+            help="rehearse normal h74 live-real path to the broker submit boundary",
+            description="Run the normal h74 rehearsal with broker submit suppressed.",
+            build=lambda p: (
+                p.add_argument("--kst-time", default="10:00"),
+                p.add_argument("--no-submit", action="store_true", default=True),
+                p.add_argument("--source-artifact"),
+                p.add_argument("--json", action="store_true"),
+            ),
+            read_only=True,
+            requires_live=True,
+            uses_broker=False,
+            json_output_supported=True,
+        ),
+        make_spec(
+            "h74-readiness-certificate",
+            domain="live_ops",
+            handler=_h74_readiness_certificate,
+            help="issue an h74 readiness certificate from normal h74 rehearsal",
+            description="Issue a hash-bound h74 readiness certificate from h74-live-rehearsal.",
+            build=lambda p: (
+                p.add_argument("--kst-time", default="10:00"),
+                p.add_argument("--no-submit", action="store_true", default=True),
+                p.add_argument("--source-artifact"),
+                p.add_argument("--json", action="store_true"),
+            ),
+            read_only=True,
+            requires_live=True,
+            uses_broker=False,
+            produces_artifact=True,
+            json_output_supported=True,
         ),
         make_spec(
             "panic-stop",

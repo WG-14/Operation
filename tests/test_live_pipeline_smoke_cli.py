@@ -23,6 +23,16 @@ def test_live_pipeline_smoke_commands_registered_with_metadata() -> None:
     assert authority.uses_broker is False
     assert authority.writes_db is False
 
+    rehearsal = registry["h74-live-rehearsal"]
+    certificate = registry["h74-readiness-certificate"]
+    assert rehearsal.read_only is True
+    assert rehearsal.requires_live is True
+    assert rehearsal.json_output_supported is True
+    assert certificate.read_only is True
+    assert certificate.requires_live is True
+    assert certificate.produces_artifact is True
+    assert certificate.json_output_supported is True
+
 
 def test_live_pipeline_smoke_plan_payload_is_bounded() -> None:
     from bithumb_bot.live_pipeline_smoke import build_live_pipeline_smoke_plan

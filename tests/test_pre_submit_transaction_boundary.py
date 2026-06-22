@@ -4,7 +4,13 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot.execution_service import ExecutionSubmitPlan
+from bithumb_bot.config import settings
+from bithumb_bot.execution_service import (
+    ExecutionDecisionSummary,
+    ExecutionSubmitPlan,
+    LiveSignalExecutionService,
+    TypedExecutionRequest,
+)
 from bithumb_bot.pre_submit_risk_coordinator import PreSubmitRiskCoordinator
 from bithumb_bot.risk_contract import RiskDecision, RiskPolicy
 
@@ -44,6 +50,68 @@ def _payload() -> dict[str, object]:
         },
     )
     return plan.as_final_payload()
+
+
+def _typed_plan_from_payload(payload: dict[str, object]) -> ExecutionSubmitPlan:
+    extra = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "side",
+            "source",
+            "authority",
+            "final_action",
+            "qty",
+            "notional_krw",
+            "target_exposure_krw",
+            "current_effective_exposure_krw",
+            "delta_krw",
+            "submit_expected",
+            "pre_submit_proof_status",
+            "block_reason",
+            "idempotency_key",
+        }
+    }
+    return ExecutionSubmitPlan(
+        side=str(payload["side"]),
+        source=str(payload["source"]),
+        authority=str(payload["authority"]),
+        final_action=str(payload["final_action"]),
+        qty=float(payload["qty"]),
+        notional_krw=float(payload["notional_krw"]),
+        target_exposure_krw=float(payload["target_exposure_krw"]),
+        current_effective_exposure_krw=float(payload["current_effective_exposure_krw"]),
+        delta_krw=float(payload["delta_krw"]),
+        submit_expected=bool(payload["submit_expected"]),
+        pre_submit_proof_status=str(payload["pre_submit_proof_status"]),
+        block_reason=str(payload["block_reason"]),
+        idempotency_key=str(payload["idempotency_key"]),
+        extra_payload=extra,
+    )
+
+
+def _summary(payload: dict[str, object]) -> ExecutionDecisionSummary:
+    return ExecutionDecisionSummary(
+        raw_signal=str(payload["side"]),
+        final_signal=str(payload["side"]),
+        final_action=str(payload["final_action"]),
+        submit_expected=bool(payload["submit_expected"]),
+        pre_submit_proof_status=str(payload["pre_submit_proof_status"]),
+        block_reason=str(payload["block_reason"]),
+        strategy_sell_candidate=None,
+        residual_sell_candidate=None,
+        target_exposure_krw=float(payload["target_exposure_krw"]),
+        current_effective_exposure_krw=float(payload["current_effective_exposure_krw"]),
+        tracked_residual_exposure_krw=None,
+        buy_delta_krw=float(payload["delta_krw"]),
+        residual_live_sell_mode="block",
+        residual_buy_sizing_mode="block",
+        residual_submit_plan=None,
+        buy_submit_plan=None,
+        target_shadow_decision=None,
+        target_submit_plan=_typed_plan_from_payload(payload),
+    )
 
 
 def _decision(status: str, reason_code: str) -> RiskDecision:
@@ -144,6 +212,12 @@ def test_failed_pre_submit_proof_persists_skipped_payload(monkeypatch) -> None:
 def test_pre_submit_uses_caller_connection(monkeypatch) -> None:
     conn = sqlite3.connect(":memory:")
     captured: dict[str, object] = {}
+    original = {
+        "MODE": settings.MODE,
+        "LIVE_DRY_RUN": settings.LIVE_DRY_RUN,
+        "LIVE_REAL_ORDER_ARMED": settings.LIVE_REAL_ORDER_ARMED,
+        "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
+    }
 
     def _fake_evaluate(self, **_kwargs):
         captured["adapter_conn"] = self.conn
@@ -162,15 +236,76 @@ def test_pre_submit_uses_caller_connection(monkeypatch) -> None:
         _capture_persist,
     )
 
-    PreSubmitRiskCoordinator().evaluate_and_persist(
-        conn,
-        payload=_payload(),
-        broker=object(),
-        ts_ms=1_800_000_000_000,
-        market_price=100_000_000.0,
-        field_name="target_submit_plan",
-    )
+    try:
+        object.__setattr__(settings, "MODE", "live")
+        object.__setattr__(settings, "LIVE_DRY_RUN", False)
+        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
 
-    assert captured["adapter_conn"] is conn
-    assert captured["persist_conn"] is conn
-    conn.close()
+        PreSubmitRiskCoordinator().evaluate_and_persist(
+            conn,
+            payload=_payload(),
+            broker=object(),
+            ts_ms=1_800_000_000_000,
+            market_price=100_000_000.0,
+            field_name="target_submit_plan",
+        )
+
+        assert captured["adapter_conn"] is conn
+        assert captured["persist_conn"] is conn
+
+        class RuntimeConnection:
+            def __init__(self) -> None:
+                self.committed = False
+                self.rolled_back = False
+                self.closed = False
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        runtime_conn = RuntimeConnection()
+        captured.clear()
+        submit_calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            "bithumb_bot.execution_service.ensure_db",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("live pre-submit path must use injected runtime db factory")
+            ),
+        )
+        payload = _payload()
+        service = LiveSignalExecutionService(
+            broker=object(),
+            executor=lambda _broker, signal, ts, market_price, **kwargs: submit_calls.append(
+                {"signal": signal, "ts": ts, "market_price": market_price, "kwargs": dict(kwargs)}
+            )
+            or {"status": "submitted"},
+            harmless_dust_recorder=lambda **_kwargs: False,
+            db_factory=lambda: runtime_conn,
+        )
+
+        result = service.execute(
+            TypedExecutionRequest(
+                signal="BUY",
+                ts=1_800_000_000_000,
+                market_price=100_000_000.0,
+                strategy_name="daily_participation_sma",
+                execution_decision_summary=_summary(payload),
+            )
+        )
+
+        assert result == {"status": "submitted"}
+        assert captured["adapter_conn"] is runtime_conn
+        assert captured["persist_conn"] is runtime_conn
+        assert runtime_conn.committed is True
+        assert runtime_conn.closed is True
+        assert submit_calls
+    finally:
+        for key, value in original.items():
+            object.__setattr__(settings, key, value)
+        conn.close()

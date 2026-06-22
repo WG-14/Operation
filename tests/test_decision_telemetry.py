@@ -172,6 +172,49 @@ def test_telemetry_primary_block_gate_from_gate_trace(tmp_path, monkeypatch):
     assert rows[0].primary_block_reason == "RISK_STATE_MISMATCH"
 
 
+def test_telemetry_primary_block_gate_from_non_risk_gate_trace(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "decision-submit-authority-gate.sqlite")
+    monkeypatch.setenv("DB_PATH", db_path)
+    object.__setattr__(settings, "DB_PATH", db_path)
+
+    conn = ensure_db()
+    try:
+        record_strategy_decision(
+            conn,
+            decision_ts=1_800_000_000_000,
+            strategy_name="daily_participation_sma",
+            signal="BUY",
+            reason="submit authority block",
+            candle_ts=1_800_000_000_000,
+            market_price=100_000_000.0,
+            context={
+                "decision_contract_version": 1,
+                "base_signal": "BUY",
+                "raw_signal": "BUY",
+                "final_signal": "HOLD",
+                "primary_block_gate": "none",
+                "primary_block_reason": "none",
+                "gate_trace": [
+                    {"gate": "time_window", "status": "ALLOW", "reason_code": "within_kst_window"},
+                    {
+                        "gate": "submit_authority",
+                        "status": "BLOCK",
+                        "reason_code": "target_delta_missing_target_submit_plan",
+                        "blocking": True,
+                    },
+                    {"gate": "pre_submit_risk", "status": "ALLOW", "reason_code": "OK"},
+                ],
+            },
+        )
+        conn.commit()
+        rows = fetch_decision_telemetry_summary(conn, limit=20)
+    finally:
+        conn.close()
+
+    assert rows[0].primary_block_gate == "submit_authority"
+    assert rows[0].primary_block_reason == "target_delta_missing_target_submit_plan"
+
+
 def test_recent_decision_flow_surfaces_target_delta_order_rule_authority(tmp_path, monkeypatch):
     db_path = str(tmp_path / "decision-target-rules.sqlite")
     monkeypatch.setenv("DB_PATH", db_path)

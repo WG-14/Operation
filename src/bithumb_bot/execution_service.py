@@ -2696,7 +2696,14 @@ class LiveSignalExecutionService:
                         or typed_residual_plan is not None
                     )
                 ):
-                    pre_submit_conn = self.db_factory() if self.db_factory is not None else ensure_db(None)
+                    if self.db_factory is None:
+                        _log_live_submit_plan_block(
+                            reason="live_real_order_pre_submit_runtime_db_factory_missing",
+                            field_name="pre_submit_risk",
+                            side=request.signal,
+                        )
+                        return None
+                    pre_submit_conn = self.db_factory()
                 if typed_target_plan is not None:
                     target_plan = typed_target_plan.as_final_payload(
                         extra=_execution_batch_payload_extra(request)
