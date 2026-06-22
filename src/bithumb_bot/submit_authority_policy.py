@@ -194,7 +194,12 @@ def evaluate_submit_authority_policy(
     def decision(allowed: bool, reason: str) -> SubmitAuthorityPolicyDecision:
         risk_error = None
         risk_status = "not_required"
-        if allowed and policy.live_real_order_requires_target_delta and submit_expected:
+        if (
+            allowed
+            and policy.live_real_order_requires_target_delta
+            and submit_expected
+            and (source == TARGET_DELTA_SUBMIT_SOURCE or bool(payload.get("pre_submit_risk_required")))
+        ):
             expected_hash = str(payload.get("submit_plan_hash") or "").strip()
             risk_error = operational_pre_submit_risk_approval_error(
                 payload,

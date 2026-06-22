@@ -1722,6 +1722,7 @@ class _LoopConn:
             return _Rows([])
 
         if q == "BEGIN IMMEDIATE":
+            self.in_transaction = True
             return _Rows(None)
 
         if "INSERT INTO strategy_decisions" in q:
@@ -1742,6 +1743,11 @@ class _LoopConn:
         raise AssertionError(f"unexpected query: {query}")
 
     def commit(self):
+        self.in_transaction = False
+        return None
+
+    def rollback(self):
+        self.in_transaction = False
         return None
 
     def close(self):
@@ -2246,6 +2252,7 @@ def test_run_loop_surfaces_market_preflight_error_during_live_startup(monkeypatc
 
 
 def test_run_loop_reconcile_error_halts_instead_of_crash(monkeypatch):
+    global _RUN_LOOP_RUNNER
     _prepare_run_loop(monkeypatch)
 
     notifications: list[str] = []
@@ -2258,8 +2265,21 @@ def test_run_loop_reconcile_error_halts_instead_of_crash(monkeypatch):
         if calls["n"] >= 2:
             raise RuntimeError("reconcile boom")
 
+    object.__setattr__(settings, "LIVE_DRY_RUN", False)
+    object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
+    object.__setattr__(settings, "LIVE_PERFORMANCE_GATE_ENABLED", False)
     monkeypatch.setattr("bithumb_bot.recovery.reconcile_with_broker", _reconcile, raising=False)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.live_execute_signal", lambda broker, signal, ts, px: None)
+    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.evaluate_startup_safety_gate", lambda: None)
+
+    class _SubmittedExecutionService:
+        def execute(self, request):
+            return {"status": "submitted", "signal": request.signal}
+
+    assert _RUN_LOOP_RUNNER is not None
+    _RUN_LOOP_RUNNER.container = replace(
+        _RUN_LOOP_RUNNER.container,
+        execution_service_factory=lambda **_kwargs: _SubmittedExecutionService(),
+    )
 
     run_loop()
 
@@ -3748,7 +3768,7 @@ def test_run_loop_target_delta_persisted_target_state_reaches_live_execution(
                 "execution_submit_plan": kwargs.get("execution_submit_plan"),
             }
         )
-        return None
+        return {"status": "submitted", "side": side}
 
     monkeypatch.setattr("bithumb_bot.compat.engine_legacy.record_strategy_decision", _record_strategy_decision)
     monkeypatch.setattr("bithumb_bot.compat.engine_legacy.live_execute_signal", _capture_live_execution)

@@ -2921,6 +2921,9 @@ def test_decision_runner_live_single_strategy_missing_structured_parameters_fail
         object.__setattr__(settings, "STRATEGY_APPROVED_PROFILE_PATH", "")
         object.__setattr__(settings, "ACTIVE_STRATEGIES", "")
         object.__setattr__(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+        for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
+            if key.isupper():
+                object.__setattr__(settings, key, value)
         object.__setattr__(
             settings,
             "RUNTIME_STRATEGY_SET_JSON",

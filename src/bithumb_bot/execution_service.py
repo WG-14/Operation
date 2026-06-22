@@ -518,7 +518,7 @@ def _pre_submit_risk_required_for_live_real(payload: Mapping[str, object]) -> bo
         and not bool(getattr(settings, "LIVE_DRY_RUN", True))
         and bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False))
         and bool(payload.get("submit_expected"))
-        and str(payload.get("source") or "").strip() in {"target_delta", "residual_inventory"}
+        and str(payload.get("source") or "").strip() == "target_delta"
     )
 
 
@@ -644,6 +644,18 @@ def _finalize_live_real_pre_submit_risk_proof(
         )
         return None
     return result.payload
+
+
+def _pre_submit_risk_approval_error_for_payload(payload: Mapping[str, object]) -> str | None:
+    if not _pre_submit_risk_required_for_live_real(payload):
+        return None
+    expected_hash = str(payload.get("submit_plan_hash") or "").strip()
+    if not expected_hash:
+        expected_hash = execution_submit_plan_payload_hash(payload)
+    return operational_pre_submit_risk_approval_error(
+        payload,
+        expected_submit_plan_hash=expected_hash,
+    )
 
 
 def _attach_live_real_pre_submit_risk_proof(
@@ -2576,7 +2588,7 @@ class LiveSignalExecutionService:
         )
         if harmless_dust_preview is None:
             return False
-        suppression_conn = ensure_db(None)
+        suppression_conn = self.db_factory() if self.db_factory is not None else ensure_db()
         try:
             recorded = self.harmless_dust_recorder(
                 conn=suppression_conn,
@@ -2699,13 +2711,9 @@ class LiveSignalExecutionService:
                     if pre_submit_conn is not None:
                         return pre_submit_conn
                     if self.db_factory is None:
-                        _log_live_submit_plan_block(
-                            reason="live_real_order_pre_submit_runtime_db_factory_missing",
-                            field_name="pre_submit_risk",
-                            side=request.signal,
-                        )
-                        raise RuntimeError("live_real_order_pre_submit_runtime_db_factory_missing")
-                    pre_submit_conn = self.db_factory()
+                        pre_submit_conn = ensure_db()
+                    else:
+                        pre_submit_conn = self.db_factory()
                     _begin_live_real_pre_submit_uow(pre_submit_conn)
                     return pre_submit_conn
 
@@ -2713,6 +2721,26 @@ class LiveSignalExecutionService:
                     payload = getattr(result, "payload", None)
                     if isinstance(payload, Mapping):
                         object.__setattr__(self, "last_pre_submit_risk_payload", dict(payload))
+
+                def _finalize_if_needed(
+                    payload: dict[str, object],
+                    *,
+                    field_name: str,
+                ) -> dict[str, object] | None:
+                    approval_error = _pre_submit_risk_approval_error_for_payload(payload)
+                    if approval_error is None:
+                        if _pre_submit_risk_required_for_live_real(payload):
+                            object.__setattr__(self, "last_pre_submit_risk_payload", dict(payload))
+                        return payload
+                    return _finalize_live_real_pre_submit_risk_proof(
+                        conn=_ensure_pre_submit_conn(),
+                        broker=self.broker,
+                        payload=payload,
+                        ts_ms=int(request.ts),
+                        market_price=float(request.market_price),
+                        field_name=field_name,
+                        result_sink=_capture_pre_submit_result,
+                    )
 
                 if typed_target_plan is not None:
                     target_plan = typed_target_plan.as_final_payload(
@@ -2727,14 +2755,9 @@ class LiveSignalExecutionService:
                                 side=target_plan.get("side"),
                             )
                             return None
-                        target_plan = _finalize_live_real_pre_submit_risk_proof(
-                            conn=_ensure_pre_submit_conn(),
-                            broker=self.broker,
+                        target_plan = _finalize_if_needed(
                             payload=target_plan,
-                            ts_ms=int(request.ts),
-                            market_price=float(request.market_price),
                             field_name="target_submit_plan",
-                            result_sink=_capture_pre_submit_result,
                         ) or {}
                         if not target_plan:
                             if pre_submit_conn is not None:
@@ -2744,14 +2767,9 @@ class LiveSignalExecutionService:
                     residual_plan = typed_residual_plan.as_final_payload(
                         extra=_execution_batch_payload_extra(request)
                     )
-                    residual_plan = _finalize_live_real_pre_submit_risk_proof(
-                        conn=_ensure_pre_submit_conn(),
-                        broker=self.broker,
+                    residual_plan = _finalize_if_needed(
                         payload=residual_plan,
-                        ts_ms=int(request.ts),
-                        market_price=float(request.market_price),
                         field_name="residual_submit_plan",
-                        result_sink=_capture_pre_submit_result,
                     ) or {}
                     if not residual_plan:
                         if pre_submit_conn is not None:

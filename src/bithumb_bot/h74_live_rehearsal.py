@@ -378,16 +378,27 @@ def _seed_rehearsal_db(
                 ),
             )
         if unresolved_order_status:
+            created_ts = int(unresolved_order_created_ts_ms or 0)
             conn.execute(
                 """
-                INSERT OR REPLACE INTO orders(client_order_id, exchange_order_id, status, created_ts)
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO orders(
+                    client_order_id, exchange_order_id, status, side, pair, order_type,
+                    qty_req, qty_filled, local_intent_state, created_ts, updated_ts
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     f"h74-{str(unresolved_order_status).lower()}-fixture",
                     "",
                     str(unresolved_order_status).upper(),
-                    int(unresolved_order_created_ts_ms or 0),
+                    "BUY",
+                    "KRW-BTC",
+                    "LIMIT",
+                    0.001,
+                    0.0,
+                    str(unresolved_order_status).upper(),
+                    created_ts,
+                    created_ts,
                 ),
             )
         conn.commit()

@@ -831,7 +831,7 @@ def test_execution_coordinator_owns_submit_checkpoint_and_post_trade_reconcile()
         candle_ts=1,
         decision_id=1,
         execution_decision_summary=_Summary(),
-        submit_invoker=lambda: None,
+        submit_invoker=lambda: {"status": "submitted"},
         post_trade_reconcile=_record_reconcile_attempt,
     )
     assert result.submitted is True
