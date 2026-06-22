@@ -129,6 +129,49 @@ def test_record_strategy_decision_normalizes_hold_context_without_filter_block(t
     assert ctx["signal_strength_label"] == "neutral"
 
 
+def test_telemetry_primary_block_gate_from_gate_trace(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "decision-gate-trace.sqlite")
+    monkeypatch.setenv("DB_PATH", db_path)
+    object.__setattr__(settings, "DB_PATH", db_path)
+
+    conn = ensure_db()
+    try:
+        record_strategy_decision(
+            conn,
+            decision_ts=1_800_000_000_000,
+            strategy_name="daily_participation_sma",
+            signal="BUY",
+            reason="pre-submit block",
+            candle_ts=1_800_000_000_000,
+            market_price=100_000_000.0,
+            context={
+                "decision_contract_version": 1,
+                "base_signal": "BUY",
+                "raw_signal": "BUY",
+                "final_signal": "HOLD",
+                "primary_block_gate": "none",
+                "primary_block_reason": "none",
+                "gate_trace": [
+                    {"gate": "strategy_risk", "status": "ALLOW", "reason_code": "OK"},
+                    {"gate": "portfolio_risk", "status": "ALLOW", "reason_code": "OK"},
+                    {
+                        "gate": "pre_submit_risk",
+                        "status": "BLOCK",
+                        "reason_code": "RISK_STATE_MISMATCH",
+                        "blocking": True,
+                    },
+                ],
+            },
+        )
+        conn.commit()
+        rows = fetch_decision_telemetry_summary(conn, limit=20)
+    finally:
+        conn.close()
+
+    assert rows[0].primary_block_gate == "pre_submit_risk"
+    assert rows[0].primary_block_reason == "RISK_STATE_MISMATCH"
+
+
 def test_recent_decision_flow_surfaces_target_delta_order_rule_authority(tmp_path, monkeypatch):
     db_path = str(tmp_path / "decision-target-rules.sqlite")
     monkeypatch.setenv("DB_PATH", db_path)

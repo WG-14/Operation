@@ -250,7 +250,9 @@ class RuntimeRiskEngineAdapter:
             ts_ms=ts_ms,
             now_ms=ts_ms,
             cash=cash,
-            qty=qty,
+            submit_qty=None,
+            current_asset_qty=qty,
+            legacy_qty=None,
             price=price,
             broker=broker,
             mark_price_source=mark_price_source,
@@ -340,14 +342,17 @@ class RuntimeRiskEngineAdapter:
         elif current_asset_qty is not None:
             resolved_current_asset_qty = float(current_asset_qty)
             current_asset_qty_source = "explicit_current_position"
-        elif legacy_qty is not None:
-            resolved_current_asset_qty = float(legacy_qty)
-            current_asset_qty_source = "legacy_qty_compatibility"
         else:
             resolved_current_asset_qty = 0.0
             current_asset_qty_source = "missing_default_zero"
         if submit_qty is None:
-            submit_qty = float(plan.qty)
+            if include_unresolved_order_gate:
+                raise ValueError("pre_submit_submit_qty_required")
+            resolved_submit_qty = 0.0
+            submit_plan_qty_source = "not_applicable"
+        else:
+            resolved_submit_qty = float(submit_qty)
+            submit_plan_qty_source = "submit_plan.qty"
         unresolved_blocked = False
         unresolved_reason_code = "OK"
         unresolved_reason = "ok"
@@ -389,9 +394,10 @@ class RuntimeRiskEngineAdapter:
                     "mark_price_source": daily.mark_price_source,
                 },
                 "current_asset_qty_source": current_asset_qty_source,
-                "submit_plan_qty_source": "submit_plan.qty",
-                "submit_qty": float(submit_qty),
+                "submit_plan_qty_source": submit_plan_qty_source,
+                "submit_qty": float(resolved_submit_qty),
                 "current_asset_qty": float(resolved_current_asset_qty),
+                "legacy_qty_ignored_as_current_asset_qty": legacy_qty is not None,
                 "daily_order_count_scope": "account_global",
                 "daily_order_count_source": "orders.created_ts_kst_day",
                 "unresolved_order_gate": {

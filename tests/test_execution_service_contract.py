@@ -849,6 +849,81 @@ def test_live_target_delta_pre_submit_uses_live_broker_snapshot(tmp_path, monkey
     assert submitted_plan["pre_submit_risk_state_source"] == "runtime_db_broker"
 
 
+def test_pre_submit_proof_persist_uses_runtime_db_factory_not_internal_ensure_db(tmp_path, monkeypatch) -> None:
+    from bithumb_bot.risk_contract import RiskSnapshot
+    from bithumb_bot.risk_policy_engine import RiskPolicyEngine
+
+    _arm_live_real_orders(engine="target_delta")
+    broker = object()
+    calls: list[dict[str, object]] = []
+    plan_payload = _target_plan_requiring_pre_submit()
+    summary = _typed_target_execution_summary_with_plan(plan_payload)
+    expected = summary.target_submit_plan.as_final_payload()  # type: ignore[union-attr]
+    db_path = tmp_path / "pre-submit-runtime-factory.sqlite"
+    _seed_execution_plan_row(db_path, str(expected["submit_plan_hash"]))
+
+    def _forbidden_ensure_db(*_args, **_kwargs):
+        raise AssertionError("live pre-submit path must use injected runtime db factory")
+
+    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _forbidden_ensure_db)
+
+    def _runtime_db_factory():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _fake_evaluate(self, *, plan, broker=None, submit_qty=None, current_asset_qty=None, **_kwargs):
+        assert broker is not None
+        assert current_asset_qty is None
+        return RiskPolicyEngine(self.policy).evaluate_pre_submit(
+            plan,
+            RiskSnapshot(
+                evaluation_ts_ms=1_800_000_000_000,
+                mark_price=100_000_000.0,
+                current_equity=1_000_000.0,
+                baseline_equity=1_000_000.0,
+                loss_today=0.0,
+                current_cash_krw=1_000_000.0,
+                current_asset_qty=0.0,
+                state_source="runtime_db_broker",
+                evidence={
+                    "current_asset_qty_source": "broker_current_position",
+                    "submit_plan_qty_source": "submit_plan.qty",
+                    "submit_qty": float(submit_qty or 0.0),
+                    "current_asset_qty": 0.0,
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        "bithumb_bot.runtime_risk_engine.RuntimeRiskEngineAdapter.evaluate_pre_submit",
+        _fake_evaluate,
+    )
+
+    service = LiveSignalExecutionService(
+        broker=broker,
+        executor=lambda _broker, signal, ts, market_price, **kwargs: calls.append(
+            {"signal": signal, "ts": ts, "market_price": market_price, "kwargs": kwargs}
+        )
+        or {"status": "submitted"},
+        harmless_dust_recorder=lambda **_kwargs: False,
+        db_factory=_runtime_db_factory,
+    )
+    result = service.execute(
+        TypedExecutionRequest(
+            signal="BUY",
+            ts=1_800_000_000_000,
+            market_price=100_000_000.0,
+            strategy_name="daily_participation_sma",
+            decision_reason="unit",
+            execution_decision_summary=summary,
+        )
+    )
+
+    assert result == {"status": "submitted"}
+    assert calls
+
+
 def test_live_target_delta_pre_submit_broker_none_fails_closed(tmp_path, monkeypatch) -> None:
     _arm_live_real_orders(engine="target_delta")
     object.__setattr__(settings, "MAX_DAILY_LOSS_KRW", 50_000.0)
@@ -982,6 +1057,68 @@ def test_pre_submit_evidence_separates_submit_qty_and_current_asset_qty(monkeypa
 
     assert decision.evidence["current_asset_qty"] == 0.0
     assert decision.evidence["submit_qty"] == 0.0002
+    assert decision.evidence["current_asset_qty_source"] == "broker_current_position"
+    assert decision.evidence["submit_plan_qty_source"] == "submit_plan.qty"
+
+
+def test_pre_submit_sell_evidence_separates_submit_qty_and_current_asset_qty(monkeypatch) -> None:
+    from bithumb_bot.risk import DailyLossEvaluation
+    from bithumb_bot.runtime_risk_engine import RuntimeRiskEngineAdapter
+
+    def _daily_loss_state(*_args, **_kwargs) -> DailyLossEvaluation:
+        return DailyLossEvaluation(
+            blocked=False,
+            reason="ok",
+            reason_code="OK",
+            decision="allow",
+            evaluation_ts_ms=1_800_000_000_000,
+            day_kst="2026-06-22",
+            max_daily_loss_krw=50_000.0,
+            start_equity=1_000_000.0,
+            current_equity=1_000_000.0,
+            loss_today=0.0,
+            current_cash_krw=1_000_000.0,
+            current_asset_qty=0.0015,
+            mark_price=100_000_000.0,
+            mark_price_source="unit",
+            details={},
+        )
+
+    monkeypatch.setattr("bithumb_bot.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
+    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
+    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
+    monkeypatch.setattr(
+        "bithumb_bot.runtime_risk_engine.collect_risky_order_state",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "bithumb_bot.runtime_risk_engine._record_typed_decision_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    conn = sqlite3.connect(":memory:")
+    try:
+        decision = RuntimeRiskEngineAdapter(conn, policy=RiskPolicy(max_daily_loss_krw=50_000.0)).evaluate_pre_submit(
+            plan=SubmitPlan(
+                side="SELL",
+                qty=0.0004,
+                notional_krw=40_000.0,
+                source="target_delta",
+            ),
+            ts_ms=1_800_000_000_000,
+            now_ms=1_800_000_000_000,
+            cash=0.0,
+            submit_qty=0.0004,
+            current_asset_qty=None,
+            qty=0.0004,
+            price=100_000_000.0,
+            broker=object(),
+            evaluation_origin="live_real_submit_authority_pre_submit",
+        )
+    finally:
+        conn.close()
+
+    assert decision.evidence["current_asset_qty"] == 0.0015
+    assert decision.evidence["submit_qty"] == 0.0004
     assert decision.evidence["current_asset_qty_source"] == "broker_current_position"
     assert decision.evidence["submit_plan_qty_source"] == "submit_plan.qty"
 

@@ -2559,6 +2559,7 @@ class LiveSignalExecutionService:
     broker: "Broker"
     executor: Callable[..., dict | None]
     harmless_dust_recorder: Callable[..., bool]
+    db_factory: Callable[[], object] | None = None
 
     def record_harmless_dust_suppression_if_applicable(
         self,
@@ -2695,7 +2696,7 @@ class LiveSignalExecutionService:
                         or typed_residual_plan is not None
                     )
                 ):
-                    pre_submit_conn = ensure_db(None)
+                    pre_submit_conn = self.db_factory() if self.db_factory is not None else ensure_db(None)
                 if typed_target_plan is not None:
                     target_plan = typed_target_plan.as_final_payload(
                         extra=_execution_batch_payload_extra(request)
@@ -3245,6 +3246,7 @@ def build_signal_execution_service(
     paper_executor: Callable[..., dict | None] = paper_execute,
     live_executor: Callable[..., dict | None] = live_execute_signal,
     harmless_dust_recorder: Callable[..., bool] = record_harmless_dust_exit_suppression,
+    db_factory: Callable[[], object] | None = None,
 ) -> SignalExecutionService | None:
     if mode == "paper":
         return PaperSignalExecutionService(executor=paper_executor)
@@ -3253,5 +3255,6 @@ def build_signal_execution_service(
             broker=broker,
             executor=live_executor,
             harmless_dust_recorder=harmless_dust_recorder,
+            db_factory=db_factory,
         )
     return None

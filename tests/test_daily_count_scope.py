@@ -9,6 +9,7 @@ from bithumb_bot.runtime.daily_participation_count_provider import (
 )
 from bithumb_bot.runtime_risk_engine import RuntimeRiskEngineAdapter
 from bithumb_bot.strategy.daily_participation_policy import DailyParticipationPolicyConfig
+from bithumb_bot.h74_observation import build_h74_source_observation_authority_payload
 
 
 DECISION_TS = 1_704_046_800_000
@@ -117,3 +118,16 @@ def test_risk_daily_order_count_scope_matches_policy(monkeypatch) -> None:
     assert decision.evidence["daily_order_count_scope"] == "account_global"
     assert decision.evidence["daily_order_count_source"] == "orders.created_ts_kst_day"
     assert decision.effective_limits["max_daily_order_count"] == 2
+
+
+def test_h74_policy_records_daily_count_scopes() -> None:
+    payload = build_h74_source_observation_authority_payload(
+        source_candidate_artifact_hash="sha256:source",
+        backtest_report_hash="sha256:backtest",
+        validation_run_hash="sha256:validation",
+        code_commit_sha="unit",
+    )
+
+    bound = payload["hash_bound_parameters"]
+    assert bound["daily_participation_count_scope"] == "strategy_instance"
+    assert bound["daily_order_count_scope"] == "account_global"

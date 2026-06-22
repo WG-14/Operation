@@ -338,6 +338,10 @@ class DecisionTelemetrySummary:
     balance_preflight: str
     broker_qty_known: bool
     broker_qty: float | None
+
+    @property
+    def primary_block_gate(self) -> str:
+        return self.primary_block_layer
     broker_qty_evidence_policy: str
     target_exposure_krw: float | None
     current_effective_exposure_krw: float | None
@@ -1606,6 +1610,17 @@ def _float_or_none(value: object) -> float | None:
 
 def _decision_v2_fields(context: dict[str, object], fallback_signal: str = "") -> dict[str, object]:
     signal_flow = context.get("signal_flow") if isinstance(context.get("signal_flow"), dict) else {}
+    gate_trace = context.get("gate_trace") if isinstance(context.get("gate_trace"), list) else []
+    trace_primary_gate = ""
+    trace_primary_reason = ""
+    for entry in gate_trace:
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "").strip().upper()
+        if bool(entry.get("blocking")) or status in {"BLOCK", "REQUIRE_RECONCILE", "FORCE_EXIT"}:
+            trace_primary_gate = str(entry.get("gate") or "").strip()
+            trace_primary_reason = str(entry.get("reason_code") or "").strip()
+            break
     base_signal = _text_field(
         signal_flow.get("base_signal")
         or context.get("base_signal")
@@ -1623,11 +1638,17 @@ def _decision_v2_fields(context: dict[str, object], fallback_signal: str = "") -
         "HOLD",
     ).upper()
     primary_layer = _text_field(
-        signal_flow.get("primary_block_layer") or context.get("primary_block_layer"),
+        trace_primary_gate
+        or signal_flow.get("primary_block_layer")
+        or context.get("primary_block_layer")
+        or context.get("primary_block_gate"),
         "-",
     )
     primary_reason = _text_field(
-        signal_flow.get("primary_block_reason") or context.get("primary_block_reason"),
+        trace_primary_reason
+        or signal_flow.get("primary_block_reason")
+        or context.get("primary_block_reason")
+        or context.get("primary_block_reason_code"),
         "-",
     )
     raw_all_reasons = (

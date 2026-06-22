@@ -191,6 +191,7 @@ class Runner:
             paper_executor=c.paper_executor,
             live_executor=c.live_executor,
             harmless_dust_recorder=c.harmless_dust_recorder,
+            db_factory=c.db_factory,
         )
         _log_loop_event(
             logging.INFO,
