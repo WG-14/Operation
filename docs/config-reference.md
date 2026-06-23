@@ -2,7 +2,7 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:8ef9a1a0d5968259fc26093db9460c7d9f321d072eef7129f311d3eed8ddf009`
+Spec hash: `sha256:ecb5fcd370bbff1c9d1b49cd7eff57e91f28a21319b2f43955c6fecd050e9cfb`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -82,6 +82,7 @@ Spec hash: `sha256:8ef9a1a0d5968259fc26093db9460c7d9f321d072eef7129f311d3eed8ddf
 | `EXECUTION_TRADE_TICK_REQUIRED` | string | common |  | no | no | no | P1 |  | EXECUTION_TRADE_TICK_REQUIRED runtime configuration. |
 | `FEE_RATE` | number | common |  | no | no | no | P1 |  | FEE_RATE runtime configuration. |
 | `H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY` | string | internal |  | no | no | no | internal |  | H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY runtime configuration. |
+| `H74_READINESS_CERTIFICATE_PATH` | string | common |  | no | no | no | P1 |  | H74_READINESS_CERTIFICATE_PATH runtime configuration. |
 | `H74_SOURCE_OBSERVATION_AUTHORITY_PATH` | string | common |  | no | no | no | P1 |  | H74_SOURCE_OBSERVATION_AUTHORITY_PATH runtime configuration. |
 | `H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH` | string | common |  | no | no | no | P1 |  | H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH runtime configuration. |
 | `HEALTH_MAX_CANDLE_AGE_SEC` | number | common |  | no | no | no | P1 |  | HEALTH_MAX_CANDLE_AGE_SEC runtime configuration. |
