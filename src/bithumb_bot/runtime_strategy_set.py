@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, replace
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Callable, Literal, Mapping
 
 from .approved_profile import (
@@ -208,7 +208,35 @@ def _settings_for_authority_context(
         updates["LIVE_DRY_RUN"] = bool(authority_context.live_dry_run)
     if authority_context.live_real_order_armed is not None:
         updates["LIVE_REAL_ORDER_ARMED"] = bool(authority_context.live_real_order_armed)
-    return replace(fallback, **updates) if updates else fallback
+    if authority_context.h74_live_rehearsal_no_submit_boundary is not None:
+        updates["H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY"] = bool(
+            authority_context.h74_live_rehearsal_no_submit_boundary
+        )
+    if authority_context.h74_source_observation_authority_path:
+        updates["H74_SOURCE_OBSERVATION_AUTHORITY_PATH"] = authority_context.h74_source_observation_authority_path
+        from .h74_observation import H74_SOURCE_OBSERVATION_PARAMETERS, H74_STRATEGY_NAME
+
+        updates["STRATEGY_NAME"] = H74_STRATEGY_NAME
+        for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
+            if str(key).isupper():
+                updates[str(key)] = value
+    if not updates:
+        return fallback
+    try:
+        return replace(fallback, **updates)
+    except TypeError:
+        values = dict(vars(fallback))
+        values.update(updates)
+        return SimpleNamespace(**values)
+
+
+def _replace_settings_obj(settings_obj: object, **changes: object) -> object:
+    try:
+        return replace(settings_obj, **changes)
+    except TypeError:
+        values = dict(vars(settings_obj))
+        values.update(changes)
+        return SimpleNamespace(**values)
 
 
 @dataclass(frozen=True)
@@ -757,6 +785,8 @@ class ProfileAuthorityContext:
     live_dry_run: bool | None = None
     live_real_order_armed: bool | None = None
     authority_scope: RuntimeAuthorityScope = "paper_legacy"
+    h74_source_observation_authority_path: str | None = None
+    h74_live_rehearsal_no_submit_boundary: bool | None = None
 
     def __post_init__(self) -> None:
         selection_kind = str(self.selection_kind or "").strip()
@@ -775,6 +805,12 @@ class ProfileAuthorityContext:
         object.__setattr__(self, "expected_profile_modes", modes)
         if self.runtime_mode is not None:
             object.__setattr__(self, "runtime_mode", str(self.runtime_mode).strip().lower() or None)
+        if self.h74_source_observation_authority_path is not None:
+            object.__setattr__(
+                self,
+                "h74_source_observation_authority_path",
+                str(self.h74_source_observation_authority_path).strip() or None,
+            )
         object.__setattr__(self, "authority_scope", normalize_runtime_authority_scope(self.authority_scope))
 
     @classmethod
@@ -801,6 +837,13 @@ class ProfileAuthorityContext:
             live_dry_run=bool(getattr(settings_obj, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False)),
             authority_scope=runtime_authority_scope_from_settings(settings_obj),
+            h74_source_observation_authority_path=(
+                str(getattr(settings_obj, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
+                or None
+            ),
+            h74_live_rehearsal_no_submit_boundary=bool(
+                getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False)
+            ),
         )
 
     @classmethod
@@ -827,6 +870,14 @@ class ProfileAuthorityContext:
                 bool(payload["live_real_order_armed"]) if "live_real_order_armed" in payload else None
             ),
             authority_scope=str(payload.get("authority_scope") or "paper_legacy"),  # type: ignore[arg-type]
+            h74_source_observation_authority_path=(
+                str(payload.get("h74_source_observation_authority_path") or "").strip() or None
+            ),
+            h74_live_rehearsal_no_submit_boundary=(
+                bool(payload["h74_live_rehearsal_no_submit_boundary"])
+                if "h74_live_rehearsal_no_submit_boundary" in payload
+                else None
+            ),
         )
 
     @classmethod
@@ -840,6 +891,13 @@ class ProfileAuthorityContext:
             live_dry_run=bool(getattr(settings, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False)),
             authority_scope=runtime_authority_scope_from_settings(settings),
+            h74_source_observation_authority_path=(
+                str(getattr(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
+                or None
+            ),
+            h74_live_rehearsal_no_submit_boundary=bool(
+                getattr(settings, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False)
+            ),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -856,6 +914,8 @@ class ProfileAuthorityContext:
             "live_dry_run": self.live_dry_run,
             "live_real_order_armed": self.live_real_order_armed,
             "authority_scope": self.authority_scope,
+            "h74_source_observation_authority_path": self.h74_source_observation_authority_path,
+            "h74_live_rehearsal_no_submit_boundary": self.h74_live_rehearsal_no_submit_boundary,
             "profile_binding_kind": (
                 "spec_bound_approved_profiles"
                 if self.require_spec_bound_profile
@@ -1447,7 +1507,7 @@ class RuntimeDecisionRequestBuilder:
             plugin = resolve_research_strategy_plugin(spec.strategy_name)
         except ResearchStrategyRegistryError as exc:
             raise RuntimeError(f"runtime_strategy_plugin_unsupported:{spec.strategy_name}") from exc
-        cfg = replace(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
+        cfg = _replace_settings_obj(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
         authority_context = self._authority_context()
         live_like = str(getattr(self.settings_obj, "MODE", "") or "").strip().lower() == "live"
         live_real_order = bool(
@@ -1642,7 +1702,7 @@ class RuntimeDecisionRequestBuilder:
         through_ts_ms: int | None,
     ) -> RuntimeDecisionRequest:
         instance = self.materialize_instance(spec)
-        cfg = replace(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
+        cfg = _replace_settings_obj(self.settings_obj, STRATEGY_NAME=spec.strategy_name)
         request_payload = {
             "schema_version": 1,
             "strategy_instance_id": instance.strategy_instance_id,
@@ -2071,7 +2131,7 @@ class RuntimeStrategyDecisionCollector:
         if str(getattr(settings_obj, "MODE", "") or "").strip().lower() != "live":
             return
         if authority_context.selection_kind == "single_strategy":
-            validate_live_strategy_selection(replace(settings_obj, STRATEGY_NAME=spec.strategy_name))
+            validate_live_strategy_selection(_replace_settings_obj(settings_obj, STRATEGY_NAME=spec.strategy_name))
             return
         if authority_context.require_spec_bound_profile:
             if not str(spec.approved_profile_path or "").strip():

@@ -15,6 +15,7 @@ from .broker import order_rules as order_rules_module
 from .config import settings
 from .db_core import ensure_schema
 from .decision_equivalence import sha256_prefixed
+from .evidence_claim_scope import EvidenceArtifactType
 from .entry_authority import ENTRY_AUTHORITY_REASON_BLOCKED
 from .execution_service import (
     LiveSignalExecutionService,
@@ -44,6 +45,7 @@ from .runtime_strategy_decision import (
     get_runtime_decision_adapter,
 )
 from .runtime_strategy_set import (
+    ProfileAuthorityContext,
     RuntimeDecisionRequestBuilder,
     RuntimeMarketScope,
     RuntimeStrategyDecisionResultBundle,
@@ -429,7 +431,12 @@ def _runtime_decision_bundle(
 ) -> RuntimeStrategyDecisionResultBundle:
     strategy_set = _h74_runtime_strategy_set()
     spec = strategy_set.active_strategies[0]
-    request = RuntimeDecisionRequestBuilder(settings_obj=settings_obj).build_for_spec(spec, through_ts_ms=ts_ms)
+    authority_context = ProfileAuthorityContext.for_strategy_set(strategy_set, settings_obj=settings_obj)
+    request = (
+        RuntimeDecisionRequestBuilder(settings_obj=settings_obj)
+        .with_authority_context(authority_context)
+        .build_for_spec(spec, through_ts_ms=ts_ms)
+    )
     base_snapshot = _base_runtime_feature_snapshot(ts_ms)
     feature_snapshot = daily_participation_sma.runtime_feature_snapshot_builder(
         conn=conn,
@@ -1031,7 +1038,7 @@ def run_h74_live_rehearsal(
     daily_window_end = int(_h74_runtime_strategy_parameters()["DAILY_PARTICIPATION_WINDOW_END_HOUR_KST"])
     daily_entry_authorized = daily_reason == "daily_participation_fallback_allowed"
     payload: dict[str, Any] = {
-        "artifact_type": "SyntheticGateEvidence",
+        "artifact_type": EvidenceArtifactType.SYNTHETIC_GATE.value,
         "schema_version": 1,
         "claim_scope": "synthetic_gate",
         "claims_scope": "synthetic_gate",

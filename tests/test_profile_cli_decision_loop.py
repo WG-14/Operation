@@ -684,10 +684,19 @@ def _write_golden_profile(tmp_path: Path, manifest_payload: dict[str, object], d
     candidate["strategy_plugin_contract_hash"] = plugin.contract_hash()
     candidate["candidate_profile_hash"] = sha256_prefixed(build_candidate_profile(candidate))
     promotion = {
+        "artifact_type": "DecisionParityEvidence",
         "strategy_name": manifest.strategy_name,
         "strategy_profile_id": f"{manifest.experiment_id}_{selected_candidate_id}",
         "strategy_profile_source_experiment": manifest.experiment_id,
         "strategy_profile_hash": candidate["candidate_profile_hash"],
+        "claim_scope": "submit_plan_equivalence_only",
+        "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
+            "full_lifecycle_equivalence_supported": False,
+            "submit_plan_equivalence_supported": True,
+        },
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "strategy_plugin_contract": candidate["strategy_plugin_contract"],
         "strategy_plugin_contract_hash": candidate["strategy_plugin_contract_hash"],
         "candidate_id": selected_candidate_id,
@@ -744,7 +753,11 @@ def _promotion_decision_equivalence_report(
     decision_contract_version: str,
 ) -> dict[str, object]:
     report: dict[str, object] = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": 2,
+        "claim_scope": "submit_plan_equivalence_only",
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "comparison_contract_version": "canonical_decision_v2",
         "canonical_schema": True,
         "canonical_v2_schema": True,
@@ -785,6 +798,7 @@ def _promotion_decision_equivalence_report(
         "legacy_or_unverified_export": False,
         "post_export_canonical_artifact_equivalence": True,
         "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
             "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
             "unsupported_state_classes": [],
             "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",

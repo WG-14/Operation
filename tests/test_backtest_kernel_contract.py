@@ -33,6 +33,7 @@ from bithumb_bot.strategy_policy_contract import (
     PositionSnapshot,
     StrategyDecisionV2,
 )
+from bithumb_bot.strategy_evaluation_receipt import build_strategy_evaluation_receipt
 
 
 def test_decision_event_backtest_kernel_executes_buy_and_updates_portfolio() -> None:
@@ -410,6 +411,14 @@ def test_promotion_grade_backtest_final_consumer_rejects_missing_submit_plan(mon
             "final_reason": "unit_missing_submit_plan_buy",
             "execution_intent": execution_intent.as_dict(),
         }
+        policy_input_hash = canonical_payload_hash(policy_input)
+        policy_decision_hash = canonical_payload_hash(policy_decision)
+        receipt = build_strategy_evaluation_receipt(
+            decision_input_bundle_hash=policy_input_hash,
+            policy_decision_hash=policy_decision_hash,
+            strategy_name=strategy_name,
+            mode="research_promotion",
+        ).as_dict()
         return StrategyDecisionV2(
             strategy_name=strategy_name,
             raw_signal="BUY",
@@ -434,16 +443,19 @@ def test_promotion_grade_backtest_final_consumer_rejects_missing_submit_plan(mon
                 "schema_version": 1,
                 "raw_filter_would_block": False,
                 "entry_blocked": False,
+                "decision_input_bundle_hash": policy_input_hash,
                 "replay_fingerprint_hash": canonical_payload_hash(
                     {
-                        "policy_input_hash": canonical_payload_hash(policy_input),
-                        "policy_decision_hash": canonical_payload_hash(policy_decision),
+                        "policy_input_hash": policy_input_hash,
+                        "policy_decision_hash": policy_decision_hash,
                         "candle_ts": int(event.candle_ts),
                     }
                 ),
+                "strategy_evaluation_receipt": receipt,
                 "strategy_evaluation_provenance": {
                     "decision_boundary": "StrategyDecisionService.evaluate",
                     "strategy_evaluation_mode": "research_promotion",
+                    "strategy_evaluation_receipt": receipt,
                 },
             },
             policy_hash=canonical_payload_hash(
@@ -452,8 +464,8 @@ def test_promotion_grade_backtest_final_consumer_rejects_missing_submit_plan(mon
             policy_contract_hash=canonical_payload_hash(
                 {"strategy_name": strategy_name, "contract": "missing_submit_plan_guard"}
             ),
-            policy_input_hash=canonical_payload_hash(policy_input),
-            policy_decision_hash=canonical_payload_hash(policy_decision),
+            policy_input_hash=policy_input_hash,
+            policy_decision_hash=policy_decision_hash,
         )
 
     plugin = ResearchStrategyPlugin(

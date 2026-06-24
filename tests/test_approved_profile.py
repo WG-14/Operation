@@ -229,10 +229,19 @@ def _promotion(**overrides) -> dict[str, object]:
     candidate = _candidate()
     decision_report_path, decision_report_hash = _write_source_decision_equivalence_report(candidate)
     promotion = {
+        "artifact_type": "DecisionParityEvidence",
         "strategy_name": candidate["strategy_name"],
         "strategy_profile_id": "exp1_candidate_001",
         "strategy_profile_source_experiment": "exp1",
         "strategy_profile_hash": candidate["candidate_profile_hash"],
+        "claim_scope": "submit_plan_equivalence_only",
+        "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
+            "full_lifecycle_equivalence_supported": False,
+            "submit_plan_equivalence_supported": True,
+        },
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "strategy_plugin_contract": candidate["strategy_plugin_contract"],
         "strategy_plugin_contract_hash": candidate["strategy_plugin_contract_hash"],
         "candidate_id": candidate["parameter_candidate_id"],
@@ -277,7 +286,11 @@ def _write_source_decision_equivalence_report(candidate: dict[str, object]) -> t
     path = Path("/tmp") / "bithumb_bot_test_source_decision_equivalence.json"
     plugin = resolve_research_strategy_plugin(str(candidate["strategy_name"]))
     report: dict[str, object] = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": 2,
+        "claim_scope": "submit_plan_equivalence_only",
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "comparison_contract_version": "canonical_decision_v2",
         "canonical_schema": True,
         "canonical_v2_schema": True,
@@ -318,6 +331,7 @@ def _write_source_decision_equivalence_report(candidate: dict[str, object]) -> t
         "legacy_or_unverified_export": False,
         "post_export_canonical_artifact_equivalence": True,
         "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
             "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
             "unsupported_state_classes": [],
             "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
@@ -803,9 +817,20 @@ def _write_profile_with_source(tmp_path: Path) -> Path:
 
 def _evidence_payload(profile: dict[str, object], *, evidence_type: str = "paper_validation") -> dict[str, object]:
     mode = "paper" if evidence_type == "paper_validation" else "live"
+    artifact_type = "DecisionParityEvidence" if evidence_type == "paper_validation" else "LiveSubmitEvidence"
+    claim_scope = "submit_plan_equivalence_only" if evidence_type == "paper_validation" else "live_submit"
     payload: dict[str, object] = {
+        "artifact_type": artifact_type,
         "evidence_schema_version": 1,
         "evidence_type": evidence_type,
+        "claim_scope": claim_scope,
+        "claims_scope": {
+            "claim_scope": claim_scope,
+            "full_lifecycle_equivalence_supported": False,
+            "submit_plan_equivalence_supported": evidence_type == "paper_validation",
+        },
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": evidence_type == "paper_validation",
         "mode": mode,
         "market": profile["market"],
         "interval": profile["interval"],
@@ -963,7 +988,11 @@ def _attach_decision_equivalence_report(
         return Path(str(payload["decision_equivalence_report_path"]))
     report_path = tmp_path / f"decision_equivalence_{len(list(tmp_path.glob('decision_equivalence_*.json')))}.json"
     report = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": 2,
+        "claim_scope": "submit_plan_equivalence_only",
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "comparison_contract_version": "canonical_decision_v2",
         "canonical_schema": True,
         "canonical_v2_schema": True,
@@ -1042,6 +1071,7 @@ def _attach_decision_equivalence_report(
         "post_export_canonical_artifact_equivalence": True,
         "outcome": "PASS_POSITIVE_EQUIVALENCE",
         "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
             "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
             "unsupported_state_classes": [],
             "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",

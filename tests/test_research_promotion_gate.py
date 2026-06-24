@@ -566,7 +566,11 @@ def _attach_effective_parameter_contract(payload: dict[str, object]) -> None:
 
 def _decision_equivalence_report_for_candidate(candidate: dict[str, object], tmp_path: Path) -> Path:
     report = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": 2,
+        "claim_scope": "submit_plan_equivalence_only",
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "comparison_contract_version": "canonical_decision_v2",
         "canonical_schema": True,
         "canonical_v2_schema": True,
@@ -609,6 +613,7 @@ def _decision_equivalence_report_for_candidate(candidate: dict[str, object], tmp
         "post_export_canonical_artifact_equivalence": True,
         "outcome": "PASS_POSITIVE_EQUIVALENCE",
         "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
             "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
             "unsupported_state_classes": [],
             "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",

@@ -9,6 +9,7 @@ from typing import Any
 from bithumb_bot.paths import PathManager, PathPolicyError
 from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.evidence_safety import evidence_rejection_reasons
+from bithumb_bot.evidence_claim_scope import EvidenceArtifactType
 from bithumb_bot.execution_reality_contract import (
     evaluate_execution_reality_policy,
     capability_contract_hash_matches,
@@ -1869,7 +1870,16 @@ def promote_candidate(
                 raise PromotionGateError(f"promotion refused: {','.join(walk_forward_binding_reasons)}")
         walk_forward_required = bool(policy["effective_walk_forward_required"])
     artifact = {
+        "artifact_type": EvidenceArtifactType.DECISION_PARITY.value,
         "promotion_schema_version": 1,
+        "claim_scope": "submit_plan_equivalence_only",
+        "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
+            "full_lifecycle_equivalence_supported": False,
+            "submit_plan_equivalence_supported": True,
+        },
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "strategy_name": candidate["strategy_name"],
         "strategy_profile_id": f"{experiment_id}_{candidate_id}",
         "strategy_profile_source_experiment": experiment_id,

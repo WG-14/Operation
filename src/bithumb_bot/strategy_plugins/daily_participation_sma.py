@@ -333,14 +333,31 @@ def evaluate_daily_participation_sma_decision(
         count_snapshot=count_snapshot,
         signal_context_extra=signal_context_extra,
     )
-    return strategy.decide_snapshot(
-        market=market,
-        position=position,
-        config=composite_config,
-        execution_context=execution_context,
-        exit_policy_config=exit_policy_config,
-        rule_sources=rule_sources,
-    )
+    return StrategyDecisionService().evaluate(
+        StrategyEvaluationRequest(
+            strategy_name="daily_participation_sma",
+            strategy_instance_id="daily_participation_sma:direct_helper",
+            mode="research_exploratory",
+            strategy_policy=strategy,
+            market_snapshot=market,
+            position_snapshot=position,
+            strategy_config=composite_config,
+            execution_constraints=execution_context,
+            exit_policy_config=exit_policy_config,
+            rule_sources=rule_sources or {},
+            approved_profile_hash=None,
+            runtime_contract_hash=None,
+            plugin_contract_hash=None,
+            request_hash=None,
+            provenance={
+                "strategy_parameters_hash": materialized_strategy_parameters_hash(
+                    composite_config.policy_input_payload()
+                ),
+                "helper": "evaluate_daily_participation_sma_decision",
+            },
+            decision_evidence_contract=DAILY_PARTICIPATION_DECISION_EVIDENCE_CONTRACT,
+        )
+    ).decision
 
 
 def _compose_daily_participation_decision(
@@ -445,7 +462,8 @@ def _compose_daily_participation_decision(
             "participation_decision_hash": participation.participation_decision_hash,
         }
     )
-    return StrategyDecisionV2(
+    return replace(
+        base,
         strategy_name="daily_participation_sma",
         raw_signal=base.raw_signal,
         raw_reason=base.raw_reason,

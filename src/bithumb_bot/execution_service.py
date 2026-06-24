@@ -2601,6 +2601,11 @@ def _build_execution_decision_summary_from_authority_payload(
                         ),
                     )
             target_submit_plan = _with_submit_plan_extra(target_plan, target_plan_extra)
+            if h74_submit_semantics is not None and target_submit_plan.h74_submit_semantics is None:
+                target_submit_plan = replace(
+                    target_submit_plan,
+                    h74_submit_semantics=h74_submit_semantics,
+                )
 
     if execution_engine == "target_delta":
         if target_submit_plan is not None:

@@ -13,7 +13,10 @@ from .backtest_stages import ReplayTick, StrategyEvaluationEnvelope
 
 @dataclass(frozen=True)
 class DefaultStrategyEvaluator:
-    """Policy-evaluation authority boundary for the default research path."""
+    """Policy-evaluation authority boundary for the default research path.
+
+    Promotion-grade decisions must carry StrategyDecisionService.evaluate provenance.
+    """
 
     def run(self, state: Any) -> Any:
         return state
@@ -121,6 +124,8 @@ class DefaultStrategyEvaluator:
             ]
             if not replay_hash:
                 missing.append("replay_fingerprint_hash")
+            if not isinstance(service_provenance, dict):
+                missing.append("strategy_evaluation_provenance")
             if not isinstance(service_receipt, dict):
                 missing.append("strategy_evaluation_receipt")
             else:

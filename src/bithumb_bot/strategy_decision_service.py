@@ -275,6 +275,7 @@ class StrategyDecisionService:
                 **dict(decision.trace),
                 "strategy_evaluation_receipt": receipt.as_dict(),
                 "strategy_evaluation_provenance": provenance,
+                "decision_input_bundle_hash": decision_input_bundle_hash,
                 "replay_fingerprint_hash": replay_payload["replay_fingerprint_hash"],
                 **(bundle.observability_payload() if bundle is not None else {}),
             },

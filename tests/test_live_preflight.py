@@ -307,7 +307,11 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
     }
     candidate_hash = sha256_prefixed(build_candidate_profile(candidate))
     decision_report = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": 2,
+        "claim_scope": "submit_plan_equivalence_only",
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "comparison_contract_version": "canonical_decision_v2",
         "canonical_schema": True,
         "canonical_v2_schema": True,
@@ -348,6 +352,7 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
         "legacy_or_unverified_export": False,
         "post_export_canonical_artifact_equivalence": True,
         "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
             "positive_equivalence_state_classes": ["flat_no_dust_no_position"],
             "unsupported_state_classes": [],
             "promotion_claim": "positive_decision_equivalence_for_explicitly_modeled_state_classes_only",
@@ -381,8 +386,17 @@ def _write_live_profile(tmp_path: Path, *, mode: str = "small_live", sma_short: 
     decision_report_path = tmp_path / "decision_equivalence_report.json"
     write_json_atomic(decision_report_path, decision_report)
     promotion = {
+        "artifact_type": "DecisionParityEvidence",
         "strategy_name": "sma_with_filter",
         "strategy_profile_source_experiment": "live-exp",
+        "claim_scope": "submit_plan_equivalence_only",
+        "claims_scope": {
+            "claim_scope": "submit_plan_equivalence_only",
+            "full_lifecycle_equivalence_supported": False,
+            "submit_plan_equivalence_supported": True,
+        },
+        "full_lifecycle_equivalence_supported": False,
+        "submit_plan_equivalence_supported": True,
         "candidate_id": "candidate_001",
         "manifest_hash": "sha256:manifest",
         "dataset_snapshot_id": "snap",

@@ -22,6 +22,20 @@ def _file_hash(path: str | None) -> str:
     return sha256_prefixed({"path": str(candidate), "content": candidate.read_text(encoding="utf-8")})
 
 
+def _is_h74_live_rehearsal(payload: Mapping[str, Any]) -> bool:
+    artifact_type = str(payload.get("artifact_type") or "")
+    if artifact_type == "h74_live_rehearsal":
+        return True
+    if artifact_type != "SyntheticGateEvidence":
+        return False
+    claim_scope = str(payload.get("claim_scope") or payload.get("claims_scope") or "")
+    return (
+        claim_scope == "synthetic_gate"
+        and str(payload.get("readiness_scope") or "") == "h74_normal_path"
+        and payload.get("operator_live_pipeline_smoke") is False
+    )
+
+
 def build_h74_readiness_certificate(
     rehearsal: Mapping[str, Any],
     *,
@@ -30,7 +44,7 @@ def build_h74_readiness_certificate(
     schema_hash: str = "sha256:operational-schema-v1",
     negative_rehearsal: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if str(rehearsal.get("artifact_type") or "") != "h74_live_rehearsal":
+    if not _is_h74_live_rehearsal(rehearsal):
         raise H74ReadinessCertificateError("h74_certificate_requires_h74_live_rehearsal")
     if str(rehearsal.get("source_artifact_status") or "") != "loaded":
         raise H74ReadinessCertificateError("h74_certificate_source_artifact_not_loaded")
@@ -85,7 +99,7 @@ def build_h74_readiness_certificate(
                 source_artifact_path=str(rehearsal.get("source_artifact_path") or "") or None,
             )
         )
-    if str(negative_rehearsal.get("artifact_type") or "") != "h74_live_rehearsal":
+    if not _is_h74_live_rehearsal(negative_rehearsal):
         raise H74ReadinessCertificateError("h74_certificate_requires_negative_h74_live_rehearsal")
     negative_blocks_entry = (
         negative_rehearsal.get("broker_submit_reached") is False

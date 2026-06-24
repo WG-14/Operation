@@ -81,6 +81,7 @@ EXPECTED_COMMANDS = {
     "execution-quality-report",
     "research-backtest",
     "research-batch",
+    "paired-experiment",
     "research-workload-estimate",
     "research-verify-audit",
     "research-validate",

@@ -22,6 +22,7 @@ from .execution_service import (
     ExecutionSubmitPlan,
     ExecutionTargetPlanningInput,
     H74_SUBMIT_SEMANTIC_FIELDS,
+    H74SubmitSemantics,
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
@@ -58,6 +59,11 @@ from .h74_observation import (
     H74_SOURCE_OBSERVATION_AUTHORITY_ENV,
     verify_h74_source_observation_authority,
     h74_source_runtime_values_from_settings,
+)
+from .h74_submit_semantics import (
+    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
+    H74_ENTRY_SUBMIT_SEMANTICS_NAME,
+    H74_SOURCE_MAX_ORDER_KRW,
 )
 from .h74_startup_gate import evaluate_h74_startup_gate
 from .target_position import (
@@ -2200,6 +2206,30 @@ def _with_h74_submit_plan_evidence(
 ) -> ExecutionSubmitPlan | None:
     if submit_plan is None:
         return None
+    position_mode = str(
+        readiness_payload.get("position_mode") or context.get("position_mode") or ""
+    ).strip()
+    if (
+        submit_plan.h74_submit_semantics is None
+        and position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
+        and str(submit_plan.side or "").upper() == "BUY"
+    ):
+        submit_plan = replace(
+            submit_plan,
+            h74_submit_semantics=H74SubmitSemantics(
+                sizing_mode="quote_notional",
+                quote_notional_krw=float(submit_plan.notional_krw or H74_SOURCE_MAX_ORDER_KRW),
+                submit_semantics=H74_ENTRY_SUBMIT_SEMANTICS_NAME,
+                fill_qty_authority="broker_fill",
+                position_mode=position_mode,
+                exchange_order_type="price",
+                exchange_submit_field="price",
+                exchange_submit_notional_krw=float(submit_plan.notional_krw or H74_SOURCE_MAX_ORDER_KRW),
+                exchange_submit_qty=None,
+                quote_notional_authority=H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
+                submit_semantics_authority=H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
+            ),
+        )
     extra = dict(submit_plan.extra_payload)
     for h74_key in (
         "position_mode",
