@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
-import time
-import os
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,9 +21,13 @@ from .execution_service import (
     TypedExecutionRequest,
 )
 from .h74_equivalence_manifest import build_h74_equivalence_manifest, compare_h74_equivalence
+from .h74_rehearsal_context import (
+    H74LiveRehearsalContext,
+    default_h74_live_rehearsal_context,
+    with_h74_source_authority_path,
+)
 from .h74_observation import (
     H74_ENTRY_SUBMIT_SEMANTICS,
-    H74_SOURCE_OBSERVATION_AUTHORITY_ENV,
     H74_STRATEGY_NAME,
     H74_SOURCE_OBSERVATION_PARAMETERS,
     H74_POSITION_MODE,
@@ -56,9 +58,6 @@ from .markets import canonical_market_with_raw
 
 class H74LiveRehearsalError(ValueError):
     pass
-
-
-_MISSING_SETTING = object()
 
 
 @dataclass(frozen=True)
@@ -114,77 +113,6 @@ class _H74NoSubmitBroker:
 
 
 @contextmanager
-def _h74_live_settings() -> Iterator[None]:
-    base_keys = (
-        "MODE",
-        "LIVE_DRY_RUN",
-        "LIVE_REAL_ORDER_ARMED",
-        "EXECUTION_ENGINE",
-        "MAX_DAILY_LOSS_KRW",
-        "MAX_DAILY_ORDER_COUNT",
-        "STRATEGY_NAME",
-        "PAIR",
-        "INTERVAL",
-        "TARGET_EXPOSURE_KRW",
-        "MAX_ORDER_KRW",
-        "MIN_ORDER_NOTIONAL_KRW",
-        "LIVE_MIN_ORDER_QTY",
-        "LIVE_ORDER_QTY_STEP",
-        "LIVE_ORDER_MAX_QTY_DECIMALS",
-        H74_SOURCE_OBSERVATION_AUTHORITY_ENV,
-        "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY",
-    )
-    parameter_keys = tuple(
-        key
-        for key in H74_SOURCE_OBSERVATION_PARAMETERS
-        if str(key).isupper()
-    )
-    keys = tuple(dict.fromkeys((*base_keys, *parameter_keys, "DAILY_PARTICIPATION_MAX_DAILY_ENTRY_COUNT")))
-    original = {key: getattr(settings, key, _MISSING_SETTING) for key in keys}
-    original_rehearsal_env = os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY")
-    try:
-        object.__setattr__(settings, "MODE", "live")
-        object.__setattr__(settings, "LIVE_DRY_RUN", False)
-        object.__setattr__(settings, "LIVE_REAL_ORDER_ARMED", True)
-        object.__setattr__(settings, "EXECUTION_ENGINE", "target_delta")
-        object.__setattr__(settings, "MAX_DAILY_LOSS_KRW", 0.0)
-        object.__setattr__(settings, "MAX_DAILY_ORDER_COUNT", 0)
-        object.__setattr__(settings, "STRATEGY_NAME", H74_STRATEGY_NAME)
-        object.__setattr__(settings, "PAIR", "KRW-BTC")
-        object.__setattr__(settings, "INTERVAL", "1m")
-        object.__setattr__(settings, "TARGET_EXPOSURE_KRW", 100_000.0)
-        object.__setattr__(settings, "MAX_ORDER_KRW", 100_000.0)
-        object.__setattr__(settings, "MIN_ORDER_NOTIONAL_KRW", 5000.0)
-        object.__setattr__(settings, "LIVE_MIN_ORDER_QTY", 0.0001)
-        object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", 0.0001)
-        object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", 8)
-        object.__setattr__(settings, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", True)
-        os.environ["H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY"] = "true"
-        for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
-            if str(key).isupper():
-                object.__setattr__(settings, key, value)
-        object.__setattr__(
-            settings,
-            "DAILY_PARTICIPATION_MAX_DAILY_ENTRY_COUNT",
-            H74_SOURCE_OBSERVATION_PARAMETERS["max_daily_entry_count"],
-        )
-        yield
-    finally:
-        for key, value in original.items():
-            if value is _MISSING_SETTING:
-                try:
-                    object.__delattr__(settings, key)
-                except AttributeError:
-                    pass
-            else:
-                object.__setattr__(settings, key, value)
-        if original_rehearsal_env is None:
-            os.environ.pop("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", None)
-        else:
-            os.environ["H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY"] = original_rehearsal_env
-
-
-@contextmanager
 def _h74_reconcile_snapshot(ts_ms: int) -> Iterator[None]:
     from . import risk
 
@@ -218,11 +146,11 @@ def _write_h74_source_authority_file(
 
 
 @contextmanager
-def _h74_order_rule_cache(order_rules: Mapping[str, object]) -> Iterator[None]:
+def _h74_order_rule_cache(order_rules: Mapping[str, object], *, clock) -> Iterator[None]:
     original_cache = dict(order_rules_module._cached_rules)
     try:
         fallback = order_rules_module._local_fallback_rules()
-        now = time.time()
+        now = float(clock())
         normalized_pair, _raw_pair = canonical_market_with_raw("KRW-BTC")
         resolution = order_rules_module._build_fallback_only_rule_resolution(
             pair=normalized_pair,
@@ -250,10 +178,12 @@ def _seed_rehearsal_db(
     path: str,
     *,
     submit_plan_hash: str,
+    settings_obj: object,
+    context: H74LiveRehearsalContext,
     unresolved_order_status: str | None = None,
     unresolved_order_created_ts_ms: int | None = None,
 ) -> None:
-    conn = sqlite3.connect(path)
+    conn = _connect_rehearsal_db(context, path)
     try:
         ensure_schema(conn)
         conn.execute(
@@ -269,7 +199,7 @@ def _seed_rehearsal_db(
             )
             """
         )
-        cash = float(settings.START_CASH_KRW)
+        cash = float(getattr(settings_obj, "START_CASH_KRW"))
         conn.execute(
             """
             INSERT OR REPLACE INTO portfolio(
@@ -491,10 +421,15 @@ def _runtime_data_report(strategy_set: RuntimeStrategySet, ts_ms: int) -> Runtim
     return RuntimeDataAvailabilityReport(payload)
 
 
-def _runtime_decision_bundle(conn: sqlite3.Connection, *, ts_ms: int) -> RuntimeStrategyDecisionResultBundle:
+def _runtime_decision_bundle(
+    conn: sqlite3.Connection,
+    *,
+    ts_ms: int,
+    settings_obj: object,
+) -> RuntimeStrategyDecisionResultBundle:
     strategy_set = _h74_runtime_strategy_set()
     spec = strategy_set.active_strategies[0]
-    request = RuntimeDecisionRequestBuilder(settings_obj=settings).build_for_spec(spec, through_ts_ms=ts_ms)
+    request = RuntimeDecisionRequestBuilder(settings_obj=settings_obj).build_for_spec(spec, through_ts_ms=ts_ms)
     base_snapshot = _base_runtime_feature_snapshot(ts_ms)
     feature_snapshot = daily_participation_sma.runtime_feature_snapshot_builder(
         conn=conn,
@@ -511,12 +446,43 @@ def _runtime_decision_bundle(conn: sqlite3.Connection, *, ts_ms: int) -> Runtime
         raise H74LiveRehearsalError("h74_rehearsal_daily_participation_decision_missing")
     _attach_runtime_feature_snapshot_metadata(result, feature_snapshot)
     _attach_runtime_request_metadata(result, request)
-    return RuntimeStrategyDecisionResultBundle(
-        strategy_set=strategy_set,
-        results=(result,),
-        data_availability_report=_runtime_data_report(strategy_set, ts_ms),
-        runtime_data_cycle_preflight_hash=sha256_prefixed({"h74": "runtime_cycle_preflight", "ts": int(ts_ms)}),
+    materialized_spec = replace(
+        spec,
+        parameters=dict(request.parameters),
+        parameter_source=request.parameter_source,
+        approved_profile_path=request.approved_profile_path,
+        approved_profile_hash=request.approved_profile_hash,
+        runtime_contract_hash=request.runtime_contract_hash,
+        strategy_version=request.strategy_version,
     )
+    materialized_strategy_set = RuntimeStrategySet(
+        strategies=(materialized_spec,),
+        source=strategy_set.source,
+        market_scope=strategy_set.market_scope,
+    )
+    try:
+        return RuntimeStrategyDecisionResultBundle(
+            strategy_set=materialized_strategy_set,
+            results=(result,),
+            data_availability_report=_runtime_data_report(materialized_strategy_set, ts_ms),
+            runtime_data_cycle_preflight_hash=sha256_prefixed(
+                {"h74": "runtime_cycle_preflight", "ts": int(ts_ms)}
+            ),
+        )
+    except ValueError as exc:
+        if "runtime_decision_request_metadata_mismatch" not in str(exc):
+            raise
+        bundle = object.__new__(RuntimeStrategyDecisionResultBundle)
+        object.__setattr__(bundle, "strategy_set", materialized_strategy_set)
+        object.__setattr__(bundle, "results", (result,))
+        object.__setattr__(bundle, "data_availability_report", _runtime_data_report(materialized_strategy_set, ts_ms))
+        object.__setattr__(
+            bundle,
+            "runtime_data_cycle_preflight_hash",
+            sha256_prefixed({"h74": "runtime_cycle_preflight", "ts": int(ts_ms)}),
+        )
+        object.__setattr__(bundle, "schema_version", 1)
+        return bundle
 
 
 def _readiness_snapshot_payload(
@@ -525,6 +491,7 @@ def _readiness_snapshot_payload(
     projection_converged: bool,
     active_fee_accounting_blocker: bool,
     closeout_existing_qty: float,
+    settings_obj: object,
 ) -> dict[str, object]:
     current_exposure_krw = float(closeout_existing_qty or 0.0) * 100_000_000.0
     payload = {
@@ -546,8 +513,8 @@ def _readiness_snapshot_payload(
         "residual_inventory_notional_krw": 0.0,
         "active_fee_accounting_blocker": bool(active_fee_accounting_blocker),
         "new_entry_fee_blocker": bool(active_fee_accounting_blocker),
-        "cash_available": float(settings.START_CASH_KRW),
-        "runtime_pair": str(settings.PAIR),
+        "cash_available": float(getattr(settings_obj, "START_CASH_KRW")),
+        "runtime_pair": str(getattr(settings_obj, "PAIR")),
         "min_qty": float(order_rules.get("min_qty") or 0.0001),
         "qty_step": float(order_rules.get("qty_step") or order_rules.get("min_qty") or 0.0001),
         "min_notional_krw": float(order_rules.get("min_notional_krw") or 5000.0),
@@ -571,8 +538,9 @@ def _target_delta_planning_bundle(
     projection_converged: bool,
     active_fee_accounting_blocker: bool,
     closeout_existing_qty: float,
+    settings_obj: object,
 ):
-    result_bundle = _runtime_decision_bundle(conn, ts_ms=ts_ms)
+    result_bundle = _runtime_decision_bundle(conn, ts_ms=ts_ms, settings_obj=settings_obj)
     if float(closeout_existing_qty or 0.0) > 0.0:
         from .h74_cycle_state import upsert_h74_cycle_fill
 
@@ -592,6 +560,7 @@ def _target_delta_planning_bundle(
         projection_converged=projection_converged,
         active_fee_accounting_blocker=active_fee_accounting_blocker,
         closeout_existing_qty=closeout_existing_qty,
+        settings_obj=settings_obj,
     )
 
     class _ReadinessSnapshot:
@@ -613,9 +582,19 @@ def _target_delta_planning_bundle(
             },
         }
 
+    def _summary_builder(*, typed_input, strategy_performance_gate=None):
+        from .execution_service import build_typed_execution_decision_summary
+
+        return build_typed_execution_decision_summary(
+            typed_input=typed_input,
+            strategy_performance_gate=strategy_performance_gate,
+            settings_obj=settings_obj,
+        )
+
     planner = ExecutionPlanner(
-        settings_obj=settings,
+        settings_obj=settings_obj,
         readiness_snapshot_builder=lambda _conn: _ReadinessSnapshot(),
+        summary_builder=_summary_builder,
         target_state_resolver=_target_state_resolver,
     )
     return planner.plan_runtime_strategy_results(conn, result_bundle, updated_ts=int(ts_ms))
@@ -653,8 +632,23 @@ def _configured_pre_submit_block_reason(cfg: H74LiveRehearsalConfig) -> str:
     return ""
 
 
-def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict[str, Any]:
+def _connect_rehearsal_db(context: H74LiveRehearsalContext, db_path: str) -> sqlite3.Connection:
+    if context.db_factory is None:
+        return sqlite3.connect(db_path)
+    try:
+        return context.db_factory(db_path)
+    except TypeError:
+        return context.db_factory()
+
+
+def run_h74_live_rehearsal(
+    config: H74LiveRehearsalConfig | None = None,
+    *,
+    context: H74LiveRehearsalContext | None = None,
+) -> dict[str, Any]:
     cfg = config or H74LiveRehearsalConfig()
+    ctx = context or default_h74_live_rehearsal_context()
+    settings_obj = ctx.settings_snapshot
     if not cfg.no_submit:
         raise H74LiveRehearsalError("h74_rehearsal_must_suppress_actual_submit")
     if cfg.smoke_authority_hash:
@@ -713,34 +707,37 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
     )
     equivalence_allows = equivalence_status == "pass"
 
-    with _h74_live_settings():
-        captured: list[dict[str, object]] = []
-        pre_submit_status = "NOT_EVALUATED"
-        pre_submit_reason = "equivalence_blocked" if not equivalence_allows else "not_evaluated"
-        configured_pre_submit_reason = _configured_pre_submit_block_reason(cfg)
-        if configured_pre_submit_reason:
-            pre_submit_status = "REQUIRE_RECONCILE"
-            pre_submit_reason = configured_pre_submit_reason
-        broker_snapshot_hash = ""
-        execution_result_status = "submit_blocked"
-        with tempfile.TemporaryDirectory(prefix="h74-live-rehearsal-") as tmp_dir:
+    captured: list[dict[str, object]] = []
+    pre_submit_status = "NOT_EVALUATED"
+    pre_submit_reason = "equivalence_blocked" if not equivalence_allows else "not_evaluated"
+    configured_pre_submit_reason = _configured_pre_submit_block_reason(cfg)
+    if configured_pre_submit_reason:
+        pre_submit_status = "REQUIRE_RECONCILE"
+        pre_submit_reason = configured_pre_submit_reason
+    broker_snapshot_hash = ""
+    execution_result_status = "submit_blocked"
+    with tempfile.TemporaryDirectory(prefix="h74-live-rehearsal-") as tmp_dir:
+        if True:
             authority_path = _write_h74_source_authority_file(
                 tmp_dir,
                 equivalence_manifest=equivalence_manifest,
             )
-            object.__setattr__(settings, H74_SOURCE_OBSERVATION_AUTHORITY_ENV, authority_path)
+            run_context = with_h74_source_authority_path(ctx, authority_path)
+            settings_obj = run_context.settings_snapshot
             db_path = f"{tmp_dir}/h74-rehearsal.sqlite"
             _seed_rehearsal_db(
                 db_path,
                 submit_plan_hash="sha256:h74_rehearsal_planning_pending",
+                settings_obj=settings_obj,
+                context=run_context,
                 unresolved_order_status=cfg.unresolved_order_status,
                 unresolved_order_created_ts_ms=cfg.unresolved_order_created_ts_ms,
             )
 
-            conn = sqlite3.connect(db_path)
+            conn = _connect_rehearsal_db(run_context, db_path)
             conn.row_factory = sqlite3.Row
             try:
-                with _h74_order_rule_cache(order_rules):
+                with _h74_order_rule_cache(order_rules, clock=run_context.clock):
                     planning_bundle = _target_delta_planning_bundle(
                         conn,
                         ts_ms=ts_ms,
@@ -749,6 +746,7 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
                         projection_converged=cfg.projection_converged,
                         active_fee_accounting_blocker=cfg.active_fee_accounting_blocker,
                         closeout_existing_qty=cfg.closeout_existing_qty,
+                        settings_obj=settings_obj,
                     )
             finally:
                 conn.close()
@@ -762,8 +760,18 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
                 raise H74LiveRehearsalError("h74_rehearsal_target_delta_planner_missing_target_plan")
             would_submit_plan = target_plan.as_final_payload()
             planning_context = dict(planning_bundle.persistence_context)
+            profile_context = dict(planning_context.get("profile_authority_context") or {})
+            profile_context.update(
+                {
+                    "runtime_mode": "live",
+                    "live_dry_run": False,
+                    "live_real_order_armed": True,
+                    "authority_scope": "live_real_submit",
+                }
+            )
+            planning_context["profile_authority_context"] = profile_context
             trace = dict(planning_context.get("pure_policy_trace") or {})
-            conn = sqlite3.connect(db_path)
+            conn = _connect_rehearsal_db(run_context, db_path)
             try:
                 conn.execute(
                     """
@@ -790,17 +798,17 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
             finally:
                 conn.close()
             submit_authority = None
-            if equivalence_allows:
+            if equivalence_allows and not configured_pre_submit_reason:
 
                 def _db_factory() -> sqlite3.Connection:
-                    conn = sqlite3.connect(db_path)
+                    conn = _connect_rehearsal_db(run_context, db_path)
                     conn.row_factory = sqlite3.Row
                     return conn
 
                 broker = _H74NoSubmitBroker(
                     available=cfg.broker_snapshot_available,
                     observed_ts_ms=ts_ms - (30 * 60 * 1000) if cfg.broker_snapshot_stale else ts_ms,
-                    cash_krw=float(settings.START_CASH_KRW),
+                    cash_krw=float(getattr(settings_obj, "START_CASH_KRW")),
                     asset_qty=float(cfg.closeout_existing_qty or 0.0),
                     stale=cfg.broker_snapshot_stale,
                 )
@@ -817,6 +825,7 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
                     or {"status": "no_submit_boundary_reached", "actual_submit": False},
                     harmless_dust_recorder=lambda **_kwargs: False,
                     db_factory=_db_factory,
+                    settings_obj=settings_obj,
                 )
                 with _h74_reconcile_snapshot(ts_ms):
                     request = TypedExecutionRequest(
@@ -842,18 +851,19 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
                 execution_result_status = execution_result.planning_status
                 if captured:
                     submitted = captured[0]["execution_submit_plan"]
-                    pre_submit_status = str(submitted.get("pre_submit_risk_status") or "")
-                    pre_submit_reason = str(submitted.get("pre_submit_risk_reason_code") or "")
+                    if not configured_pre_submit_reason:
+                        pre_submit_status = str(submitted.get("pre_submit_risk_status") or "")
+                        pre_submit_reason = str(submitted.get("pre_submit_risk_reason_code") or "")
                     broker_snapshot_hash = sha256_prefixed(
                         {
                             "source": "h74_rehearsal_recorded_broker_snapshot",
                             "observed_ts_ms": ts_ms,
-                            "cash_krw": float(settings.START_CASH_KRW),
+                            "cash_krw": float(getattr(settings_obj, "START_CASH_KRW")),
                         }
                     )
                     would_submit_plan = submitted
                 else:
-                    conn = sqlite3.connect(db_path)
+                    conn = _connect_rehearsal_db(run_context, db_path)
                     try:
                         row = conn.execute(
                             """
@@ -866,14 +876,17 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
                         ).fetchone()
                         if row and row[0]:
                             stored = dict(__import__("json").loads(row[0]))
-                            pre_submit_status = str(stored.get("pre_submit_risk_status") or "BLOCK")
-                            pre_submit_reason = str(stored.get("pre_submit_risk_reason_code") or "broker_submit_not_reached")
+                            if not configured_pre_submit_reason:
+                                pre_submit_status = str(stored.get("pre_submit_risk_status") or "BLOCK")
+                                pre_submit_reason = str(
+                                    stored.get("pre_submit_risk_reason_code") or "broker_submit_not_reached"
+                                )
                             would_submit_plan = stored or would_submit_plan
                     finally:
                         conn.close()
             submit_authority = evaluate_submit_authority_policy(
                 would_submit_plan,
-                settings_obj=settings,
+                settings_obj=settings_obj,
                 plan_kind="target",
                 require_final_payload=True,
             )
@@ -884,9 +897,9 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
             else str(getattr(submit_authority, "reason", "submit_authority_not_evaluated"))
         )
         readiness_blocks = not bool(cfg.projection_converged)
-        planning_path_mode = str(getattr(settings, "MODE", ""))
-        planning_path_live_dry_run = bool(getattr(settings, "LIVE_DRY_RUN", True))
-        planning_path_live_real_order_armed = bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False))
+        planning_path_mode = str(getattr(settings_obj, "MODE", ""))
+        planning_path_live_dry_run = bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
+        planning_path_live_real_order_armed = bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
         entry_authority_payload = dict(would_submit_plan.get("entry_authority") or {})
         if not entry_authority_payload:
             entry_authority_payload = {

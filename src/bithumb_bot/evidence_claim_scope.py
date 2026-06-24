@@ -51,9 +51,17 @@ class EvidenceClaimScope:
             submit_plan_equivalence_supported=submit_plan,
         )
 
-    def require(self, required_type: EvidenceArtifactType, *, allow_diagnostic_only: bool = False) -> None:
+    def require(
+        self,
+        required_type: EvidenceArtifactType,
+        *,
+        required_scope: str | None = None,
+        allow_diagnostic_only: bool = False,
+    ) -> None:
         if self.artifact_type != required_type:
             raise ValueError(f"evidence_artifact_type_mismatch:{required_type.value}:{self.artifact_type.value}")
+        if required_scope is not None and self.claims_scope != required_scope:
+            raise ValueError(f"evidence_claim_scope_mismatch:{required_scope}:{self.claims_scope}")
         if not allow_diagnostic_only and self.claims_scope.endswith("_diagnostic_only"):
             raise ValueError(f"evidence_claim_scope_diagnostic_only:{self.claims_scope}")
 
@@ -62,10 +70,11 @@ def require_artifact_claim_scope(
     payload: Mapping[str, object],
     *,
     required_type: EvidenceArtifactType,
+    required_scope: str | None = None,
     allow_diagnostic_only: bool = False,
 ) -> EvidenceClaimScope:
     scope = EvidenceClaimScope.parse_and_validate(payload)
-    scope.require(required_type, allow_diagnostic_only=allow_diagnostic_only)
+    scope.require(required_type, required_scope=required_scope, allow_diagnostic_only=allow_diagnostic_only)
     return scope
 
 

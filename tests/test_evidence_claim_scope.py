@@ -39,6 +39,17 @@ def test_decision_equivalence_rejected_as_full_lifecycle_without_fill_claims() -
         require_artifact_claim_scope(payload, required_type=EvidenceArtifactType.FULL_LIFECYCLE_COMPARISON)
 
 
+def test_paired_diagnostic_rejected_as_full_lifecycle_without_fill_claims() -> None:
+    payload = {
+        "artifact_type": "PairedExperimentEvidence",
+        "claims_scope": "paired_diagnostic_only",
+        "full_lifecycle_equivalence_supported": False,
+    }
+
+    with pytest.raises(ValueError, match="evidence_artifact_type_mismatch"):
+        require_artifact_claim_scope(payload, required_type=EvidenceArtifactType.FULL_LIFECYCLE_COMPARISON)
+
+
 def test_paired_experiment_artifact_accepted_for_paired_diagnostic_only() -> None:
     payload = {
         "artifact_type": "PairedExperimentEvidence",

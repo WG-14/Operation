@@ -10,10 +10,36 @@ from .cycle_artifact_assembler import RuntimeCycleArtifactAssembler
 from .data_cycle_preflight import RuntimeDataCyclePreflight, RuntimeDataCyclePreflightProvider
 from .live_order_settlement import LiveOrderSettlementWrapper
 from .lifecycle_artifacts import RuntimeCycleArtifact
+from .no_submit_diagnostic import diagnostic_for_stage
 from .state_store import pause_trading_until
 
 FAILSAFE_RETRY_DELAY_SEC = 180
 RUN_LOG = logging.getLogger("bithumb_bot.run")
+
+
+def _diagnostic(
+    *,
+    cycle_id: str,
+    candle_ts: int | None,
+    stage: str,
+    reason_code: str,
+    runtime_data_availability_report_hash: str | None = None,
+    strategy_decision_hash: str | None = None,
+    daily_count_snapshot_hash: str | None = None,
+    execution_plan_bundle_hash: str | None = None,
+    submit_authority_reason: str | None = None,
+) -> dict[str, object]:
+    return diagnostic_for_stage(
+        cycle_id=cycle_id,
+        candle_ts=candle_ts,
+        stage=stage,
+        reason_code=reason_code,
+        runtime_data_availability_report_hash=runtime_data_availability_report_hash,
+        strategy_decision_hash=strategy_decision_hash,
+        daily_count_snapshot_hash=daily_count_snapshot_hash,
+        execution_plan_bundle_hash=execution_plan_bundle_hash,
+        submit_authority_reason=submit_authority_reason,
+    ).as_dict()
 
 
 @dataclass(frozen=True)
@@ -87,6 +113,12 @@ class RuntimeCyclePipeline:
                 candle_ts=None,
                 startup_state="READY",
                 notification_event_hashes=hashes,
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id="skip:sync_failed",
+                    candle_ts=None,
+                    stage="market",
+                    reason_code="sync_failed",
+                ),
             )
 
         if preflight.reason_code == "no_candles_after_sync":
@@ -97,6 +129,13 @@ class RuntimeCyclePipeline:
                 candle_ts=None,
                 startup_state="READY",
                 notification_event_hashes=[event.get("event_hash")],
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id="skip:no_candles",
+                    candle_ts=None,
+                    stage="market",
+                    reason_code="no_candles_after_sync",
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                ),
             )
         if preflight.reason_code == "stale_candle_detected":
             event = r.runtime_events.event(
@@ -110,6 +149,13 @@ class RuntimeCyclePipeline:
                 candle_ts=preflight.latest_candle_ts,
                 startup_state="READY",
                 notification_event_hashes=[event.get("event_hash")],
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id="skip:stale_candle",
+                    candle_ts=preflight.latest_candle_ts,
+                    stage="market",
+                    reason_code="stale_candle_detected",
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                ),
             )
 
         market_safety_result = c.safety_controller.evaluate_market_runtime(
@@ -136,6 +182,14 @@ class RuntimeCyclePipeline:
                 safety_decision_hash=safety_hash,
                 state_transition_hash=market_safety_result.state_transition_hash,
                 notification_event_hashes=market_safety_result.notification_event_hashes,
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id=market_safety_result.cycle_id or "halt:market_runtime",
+                    candle_ts=preflight.latest_candle_ts,
+                    stage="risk",
+                    reason_code=str(getattr(market_safety_result, "reason_code", "") or "market_runtime_safety_block"),
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                    strategy_decision_hash=safety_hash,
+                ),
             )
 
         safety_result = c.safety_controller.evaluate_runtime_safety(
@@ -166,6 +220,14 @@ class RuntimeCyclePipeline:
                 safety_decision_hash=safety_hash,
                 state_transition_hash=safety_result.state_transition_hash,
                 notification_event_hashes=safety_result.notification_event_hashes,
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id=safety_result.cycle_id or "safety:block",
+                    candle_ts=preflight.latest_candle_ts,
+                    stage="risk",
+                    reason_code=str(getattr(safety_result, "reason_code", "") or "runtime_safety_block"),
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                    strategy_decision_hash=safety_hash,
+                ),
             )
 
         paper_runtime_data_preflight_warning = (
@@ -188,6 +250,13 @@ class RuntimeCyclePipeline:
                     "skip:runtime_data_preflight_failed",
                     candle_ts=preflight.closed_candle_ts,
                     startup_state="READY",
+                    runtime_cycle_diagnostic=_diagnostic(
+                        cycle_id="skip:runtime_data_preflight_failed",
+                        candle_ts=preflight.closed_candle_ts,
+                        stage="market",
+                        reason_code="runtime_data_preflight_failed",
+                        runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                    ),
                 )
         if not preflight.closed_candle_allowed and not paper_runtime_data_preflight_warning:
             checkpoint_decision = preflight.checkpoint_decision
@@ -195,6 +264,17 @@ class RuntimeCyclePipeline:
                 checkpoint_decision.cycle_id if checkpoint_decision is not None else "skip:no_closed_candle",
                 candle_ts=None if checkpoint_decision is None else checkpoint_decision.candle_ts,
                 startup_state="READY",
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id=checkpoint_decision.cycle_id if checkpoint_decision is not None else "skip:no_closed_candle",
+                    candle_ts=None if checkpoint_decision is None else checkpoint_decision.candle_ts,
+                    stage="market",
+                    reason_code=str(
+                        checkpoint_decision.reason
+                        if checkpoint_decision is not None
+                        else "no_closed_candle"
+                    ),
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                ),
             )
 
         closed_candle_ts_ms = int(preflight.closed_candle_ts or 0)
@@ -211,6 +291,15 @@ class RuntimeCyclePipeline:
                 "skip:insufficient_signal_history",
                 candle_ts=closed_candle_ts_ms,
                 startup_state="READY",
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id="skip:insufficient_signal_history",
+                    candle_ts=closed_candle_ts_ms,
+                    stage="strategy",
+                    reason_code="insufficient_signal_history",
+                    runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+                    strategy_decision_hash=decision_result.strategy_decision_hash,
+                    execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
+                ),
             )
         if decision_result.persistence_status == "failed":
             r.decision_persistence_failure_count = int(
@@ -368,6 +457,20 @@ class RuntimeCyclePipeline:
                     *decision.as_dict().get("operator_event_hashes", []),
                     event.get("event_hash"),
                 ],
+                runtime_cycle_diagnostic=_diagnostic(
+                    cycle_id=f"halt:{execution_result.planning_status}",
+                    candle_ts=decision_result.candle_ts,
+                    stage="submit",
+                    reason_code=str(execution_result.planning_status),
+                    runtime_data_availability_report_hash=(
+                        decision_result.decision_context or {}
+                    ).get("runtime_data_availability_report_hash")
+                    if isinstance(decision_result.decision_context, dict)
+                    else None,
+                    strategy_decision_hash=decision_result.strategy_decision_hash,
+                    execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
+                    submit_authority_reason=str(execution_result.planning_status),
+                ),
             )
         return artifact
 

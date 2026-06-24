@@ -23,6 +23,7 @@ from .evidence_chain import (
     validate_candidate_regime_policy_equivalence_evidence,
     validate_profile_transition_evidence,
 )
+from .evidence_claim_scope import EvidenceArtifactType, require_artifact_claim_scope
 from .evidence_safety import evidence_rejection_reasons
 from .promotion_provenance import (
     payload_has_promotion_provenance_markers,
@@ -323,6 +324,14 @@ def expected_profile_modes_for_runtime(runtime: dict[str, Any]) -> tuple[set[str
 
 def verify_promotion_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     _verify_payload_hash(payload, field="content_hash", label="promotion_content")
+    try:
+        require_artifact_claim_scope(
+            payload,
+            required_type=EvidenceArtifactType.DECISION_PARITY,
+            required_scope="submit_plan_equivalence_only",
+        )
+    except ValueError as exc:
+        raise ApprovedProfileError(f"promotion_claim_scope_invalid:{exc}") from exc
     profile = payload.get("candidate_profile")
     if not isinstance(profile, dict):
         raise ApprovedProfileError("promotion_candidate_profile_missing")
@@ -456,6 +465,14 @@ def _validate_source_promotion_decision_equivalence(payload: dict[str, Any]) -> 
         raise
     except (OSError, ValueError) as exc:
         raise ApprovedProfileError(f"decision_equivalence_report_invalid:{exc}") from exc
+    try:
+        require_artifact_claim_scope(
+            report,
+            required_type=EvidenceArtifactType.DECISION_PARITY,
+            required_scope="submit_plan_equivalence_only",
+        )
+    except ValueError as exc:
+        raise ApprovedProfileError(f"decision_equivalence_claim_scope_invalid:{exc}") from exc
     reasons = validate_decision_equivalence_report(report, expected_hash=expected_hash)
     if reasons:
         raise ApprovedProfileError(",".join(reasons))
@@ -1088,11 +1105,29 @@ def verify_profile_evidence_artifacts(profile: dict[str, Any]) -> None:
 
 
 def _reject_evidence_artifact_contract_reasons(payload: dict[str, Any], *, label: str) -> None:
+    _require_transition_artifact_claim_scope(payload, label=label)
     reasons = evidence_rejection_reasons(payload)
     if reasons:
         raise ApprovedProfileError(
             f"{label}_artifact_not_acceptable:" + ",".join(reasons)
         )
+
+
+def _require_transition_artifact_claim_scope(payload: dict[str, Any], *, label: str) -> None:
+    required_type = (
+        EvidenceArtifactType.LIVE_SUBMIT
+        if label == "live_readiness_evidence"
+        else EvidenceArtifactType.DECISION_PARITY
+    )
+    required_scope = "live_submit" if label == "live_readiness_evidence" else "submit_plan_equivalence_only"
+    try:
+        require_artifact_claim_scope(
+            payload,
+            required_type=required_type,
+            required_scope=required_scope,
+        )
+    except ValueError as exc:
+        raise ApprovedProfileError(f"{label}_claim_scope_invalid:{exc}") from exc
 
 
 def load_profile_or_promotion_regime_policy(

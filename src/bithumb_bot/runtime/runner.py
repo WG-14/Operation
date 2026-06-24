@@ -283,6 +283,7 @@ def _record_runtime_cycle_artifact(
     recovery_decision_hash: str | None = None,
     state_transition_hash: str | None = None,
     notification_event_hashes: object = (),
+    runtime_cycle_diagnostic: object | None = None,
 ) -> RuntimeCycleArtifact:
     hashes = (
         list(notification_event_hashes)
@@ -340,6 +341,11 @@ def _record_runtime_cycle_artifact(
         recovery_decision_hash=recovery_decision_hash,
         state_transition_hash=state_transition_hash,
         notification_event_hashes=[str(item) for item in hashes],
+        runtime_cycle_diagnostic=(
+            dict(runtime_cycle_diagnostic)
+            if isinstance(runtime_cycle_diagnostic, dict)
+            else {}
+        ),
     )
     RUN_LOG.info(format_log_kv("[RUN] runtime_cycle_artifact", **artifact.as_dict()))
     return artifact

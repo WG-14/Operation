@@ -351,6 +351,7 @@ def compare_decision_equivalence(
         state_coverage_matrix=state_coverage_matrix,
     )
     report: dict[str, Any] = {
+        "artifact_type": "DecisionParityEvidence",
         "schema_version": DECISION_EQUIVALENCE_SCHEMA_VERSION,
         "comparison_contract_version": comparison_contract_version,
         "canonical_schema": canonical_comparison,

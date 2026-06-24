@@ -1220,18 +1220,18 @@ def live_execute_signal(
     )
 
 
-def _residual_live_sell_mode() -> str:
-    mode = str(getattr(settings, "RESIDUAL_LIVE_SELL_MODE", "telemetry") or "telemetry").strip().lower()
+def _residual_live_sell_mode(settings_obj: object = settings) -> str:
+    mode = str(getattr(settings_obj, "RESIDUAL_LIVE_SELL_MODE", "telemetry") or "telemetry").strip().lower()
     return mode if mode in {"telemetry", "dry_run", "enabled"} else "telemetry"
 
 
-def _residual_buy_sizing_mode() -> str:
-    mode = str(getattr(settings, "RESIDUAL_BUY_SIZING_MODE", "telemetry") or "telemetry").strip().lower()
+def _residual_buy_sizing_mode(settings_obj: object = settings) -> str:
+    mode = str(getattr(settings_obj, "RESIDUAL_BUY_SIZING_MODE", "telemetry") or "telemetry").strip().lower()
     return mode if mode in {"off", "telemetry", "delta"} else "telemetry"
 
 
-def _execution_engine() -> str:
-    engine = str(getattr(settings, "EXECUTION_ENGINE", "lot_native") or "lot_native").strip().lower()
+def _execution_engine(settings_obj: object = settings) -> str:
+    engine = str(getattr(settings_obj, "EXECUTION_ENGINE", "lot_native") or "lot_native").strip().lower()
     return engine if engine in {"lot_native", "target_delta"} else "lot_native"
 
 
@@ -1733,6 +1733,7 @@ def build_typed_execution_decision_summary(
     *,
     typed_input: TypedExecutionPlanningInput,
     strategy_performance_gate: object | None = None,
+    settings_obj: object = settings,
 ) -> ExecutionDecisionSummary:
     payload = typed_input.as_authority_payload()
     return _build_execution_decision_summary_from_authority_payload(
@@ -1745,6 +1746,7 @@ def build_typed_execution_decision_summary(
         portfolio_target_hash=typed_input.target.portfolio_target_hash,
         portfolio_target_required=True,
         strategy_performance_gate=strategy_performance_gate,
+        settings_obj=settings_obj,
     )
 
 
@@ -1757,6 +1759,7 @@ def build_execution_decision_summary(
     final_reason: str | None = None,
     previous_target_exposure_krw: float | None = None,
     strategy_performance_gate: object | None = None,
+    settings_obj: object = settings,
 ) -> ExecutionDecisionSummary:
     """Compatibility wrapper for legacy dict callers.
 
@@ -1776,6 +1779,7 @@ def build_execution_decision_summary(
         final_reason=final_reason,
         previous_target_exposure_krw=previous_target_exposure_krw,
         strategy_performance_gate=strategy_performance_gate,
+        settings_obj=settings_obj,
     )
 
 
@@ -1790,6 +1794,7 @@ def _build_execution_decision_summary_from_authority_payload(
     portfolio_target_hash: str = "",
     portfolio_target_required: bool = False,
     strategy_performance_gate: object | None = None,
+    settings_obj: object = settings,
 ) -> ExecutionDecisionSummary:
     payload: dict[str, object] = dict(authority_payload)
 
@@ -1823,7 +1828,7 @@ def _build_execution_decision_summary_from_authority_payload(
         strategy_trace = payload.get("strategy_trace")
         if isinstance(strategy_trace, dict) and isinstance(strategy_trace.get("execution_intent"), dict):
             intent_payload = dict(strategy_trace["execution_intent"])
-        target_exposure_krw = max(0.0, float(getattr(settings, "MAX_ORDER_KRW", 0.0) or 0.0))
+        target_exposure_krw = max(0.0, float(getattr(settings_obj, "MAX_ORDER_KRW", 0.0) or 0.0))
         if final == "BUY" and str(intent_payload.get("side") or "").upper() == "BUY":
             cash_available = max(0.0, float(payload.get("cash_available") or 0.0))
             budget_fraction = max(0.0, float(intent_payload.get("budget_fraction_of_cash") or 0.0))
@@ -1851,15 +1856,15 @@ def _build_execution_decision_summary_from_authority_payload(
     if raw == "SELL" and residual_candidate is not None:
         proof = build_residual_sell_presubmit_proof(payload)
 
-    residual_live_sell_mode = _residual_live_sell_mode()
-    residual_buy_sizing_mode = _residual_buy_sizing_mode()
+    residual_live_sell_mode = _residual_live_sell_mode(settings_obj)
+    residual_buy_sizing_mode = _residual_buy_sizing_mode(settings_obj)
     residual_submit_plan: ExecutionSubmitPlan | None = None
     buy_submit_plan: ExecutionSubmitPlan | None = None
     target_shadow_decision: dict[str, object] | None = None
     target_submit_plan: ExecutionSubmitPlan | None = None
     pre_trade_economics: dict[str, object] | None = None
-    execution_engine = _execution_engine()
-    submit_authority_policy = submit_authority_policy_from_settings(settings)
+    execution_engine = _execution_engine(settings_obj)
+    submit_authority_policy = submit_authority_policy_from_settings(settings_obj)
     submit_authority_policy_hash = submit_authority_policy.content_hash()
     risk_decision = build_risk_decision_artifact(
         max_target_exposure_krw=getattr(portfolio_target, "target_exposure_krw", None),
@@ -1868,8 +1873,8 @@ def _build_execution_decision_summary_from_authority_payload(
     )
     exposure_boundary_artifact_hash = str(risk_decision["exposure_boundary_artifact_hash"])
 
-    if bool(getattr(settings, "TARGET_EXECUTION_SHADOW", False)) or execution_engine == "target_delta":
-        settings_pair = str(getattr(settings, "PAIR", "") or "").strip()
+    if bool(getattr(settings_obj, "TARGET_EXECUTION_SHADOW", False)) or execution_engine == "target_delta":
+        settings_pair = str(getattr(settings_obj, "PAIR", "") or "").strip()
         authoritative_pair = (
             str(portfolio_target.pair).strip()
             if portfolio_target is not None
@@ -1889,7 +1894,7 @@ def _build_execution_decision_summary_from_authority_payload(
         target_authority_error = target_authority_error or pair_authority_error
         configured_position_mode = str(
             payload.get("position_mode")
-            or getattr(settings, "POSITION_MODE", "")
+            or getattr(settings_obj, "POSITION_MODE", "")
             or (
                 POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
                 if str(payload.get("strategy") or payload.get("strategy_name") or "").strip().lower()
@@ -1902,15 +1907,16 @@ def _build_execution_decision_summary_from_authority_payload(
             target_authority_error is None
             and configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
             and raw == "BUY"
-            and str(getattr(settings, "MODE", "") or "").strip().lower() == "live"
-            and bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False))
-            and not bool(getattr(settings, "LIVE_DRY_RUN", True))
+            and str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
+            and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
+            and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
+            and not bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False))
             and str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower()
             not in {"1", "true", "yes", "on"}
         ):
             cert_path = str(
                 payload.get("h74_readiness_certificate_path")
-                or getattr(settings, "H74_READINESS_CERTIFICATE_PATH", "")
+                or getattr(settings_obj, "H74_READINESS_CERTIFICATE_PATH", "")
                 or ""
             ).strip()
             if not cert_path:
@@ -1930,9 +1936,9 @@ def _build_execution_decision_summary_from_authority_payload(
             settings=TargetPositionSettings(
                 execution_engine=execution_engine,
                 shadow_enabled=execution_engine != "target_delta",
-                target_exposure_krw=getattr(settings, "TARGET_EXPOSURE_KRW", None),
-                max_order_krw=float(getattr(settings, "MAX_ORDER_KRW", 0.0) or 0.0),
-                hold_policy=str(getattr(settings, "TARGET_HOLD_POLICY", "maintain_previous_target")),
+                target_exposure_krw=getattr(settings_obj, "TARGET_EXPOSURE_KRW", None),
+                max_order_krw=float(getattr(settings_obj, "MAX_ORDER_KRW", 0.0) or 0.0),
+                hold_policy=str(getattr(settings_obj, "TARGET_HOLD_POLICY", "maintain_previous_target")),
                 position_mode=configured_position_mode,
             ),
             authoritative_target_exposure_krw=authoritative_target_exposure_krw,
@@ -2000,7 +2006,7 @@ def _build_execution_decision_summary_from_authority_payload(
                     min_qty=target_decision.order_rule_min_qty,
                     qty_step=target_decision.order_rule_qty_step,
                     min_notional_krw=target_decision.order_rule_min_notional_krw,
-                    max_qty_decimals=getattr(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", 0),
+                    max_qty_decimals=getattr(settings_obj, "LIVE_ORDER_MAX_QTY_DECIMALS", 0),
                     authority_source="target_delta.desired_delta",
                 )
                 target_sizing_dict = target_sizing.as_dict()
@@ -2067,15 +2073,16 @@ def _build_execution_decision_summary_from_authority_payload(
                     }
                 )
                 if (
-                    str(getattr(settings, "MODE", "") or "").strip().lower() == "live"
-                    and bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False))
-                    and not bool(getattr(settings, "LIVE_DRY_RUN", True))
+                    str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
+                    and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
+                    and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
+                    and not bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False))
                     and str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower()
                     not in {"1", "true", "yes", "on"}
                 ):
                     cert_path = str(
                         payload.get("h74_readiness_certificate_path")
-                        or getattr(settings, "H74_READINESS_CERTIFICATE_PATH", "")
+                        or getattr(settings_obj, "H74_READINESS_CERTIFICATE_PATH", "")
                         or ""
                     ).strip()
                     if not cert_path:
@@ -2424,9 +2431,9 @@ def _build_execution_decision_summary_from_authority_payload(
                 "legacy_non_authoritative_exposure_risk_decision": risk_decision,
                 "legacy_non_authoritative_exposure_risk_decision_hash": exposure_boundary_artifact_hash,
                 "pre_submit_risk_required": bool(
-                    str(getattr(settings, "MODE", "") or "").strip().lower() == "live"
-                    and bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False))
-                    and not bool(getattr(settings, "LIVE_DRY_RUN", True))
+                    str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
+                    and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
+                    and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
                 ),
                 "pre_submit_risk_decision_authority": "RuntimeRiskEngineAdapter.evaluate_pre_submit",
             }
@@ -2965,6 +2972,7 @@ class LiveSignalExecutionService:
     executor: Callable[..., dict | None]
     harmless_dust_recorder: Callable[..., bool]
     db_factory: Callable[[], object] | None = None
+    settings_obj: object = settings
     last_pre_submit_risk_payload: Mapping[str, object] | None = field(default=None, init=False)
 
     def record_harmless_dust_suppression_if_applicable(
@@ -3006,7 +3014,12 @@ class LiveSignalExecutionService:
 
     def execute(self, request: TypedExecutionRequest) -> dict | None:
         object.__setattr__(self, "last_pre_submit_risk_payload", None)
-        submit_plan_required = _live_real_order_submit_plan_required()
+        execution_engine = _execution_engine(self.settings_obj)
+        submit_plan_required = bool(
+            str(getattr(self.settings_obj, "MODE", "") or "").strip().lower() == "live"
+            and bool(getattr(self.settings_obj, "LIVE_REAL_ORDER_ARMED", False))
+            and not bool(getattr(self.settings_obj, "LIVE_DRY_RUN", True))
+        )
         observability_context = _request_observability_payload(request)
         if observability_context is not None and not isinstance(observability_context, dict):
             field_name = (
@@ -3136,7 +3149,7 @@ class LiveSignalExecutionService:
                     target_plan = typed_target_plan.as_final_payload(
                         extra=_execution_batch_payload_extra(request)
                     )
-                    if _execution_engine() == "target_delta":
+                    if execution_engine == "target_delta":
                         if str(target_plan.get("pre_submit_proof_status") or "") != "passed":
                             _block_live_submit_plan(
                                 reason="target_delta_pre_submit_proof_not_passed",
@@ -3192,7 +3205,7 @@ class LiveSignalExecutionService:
             finally:
                 if pre_submit_conn is not None:
                     pre_submit_conn.close()
-        submit_authority_policy = submit_authority_policy_from_settings(settings)
+        submit_authority_policy = submit_authority_policy_from_settings(self.settings_obj)
         residual_only_plan = bool(
             request.signal == "SELL"
             and residual_plan
@@ -3204,7 +3217,7 @@ class LiveSignalExecutionService:
         primary_plan = target_plan or residual_plan or buy_plan
         if (
             submit_authority_policy.live_real_order_requires_target_delta
-            and _execution_engine() != "target_delta"
+            and execution_engine != "target_delta"
             and not residual_only_plan
         ):
             if primary_plan:
@@ -3226,7 +3239,7 @@ class LiveSignalExecutionService:
         )
         if (
             invariant_error == "execution_signal_submit_plan_mismatch"
-            and _execution_engine() == "target_delta"
+            and execution_engine == "target_delta"
             and str(settings.MODE).lower() == "live"
         ):
             _log_live_submit_plan_block(
@@ -3259,7 +3272,7 @@ class LiveSignalExecutionService:
             field_name="buy_submit_plan",
         ):
             return None
-        if _execution_engine() == "target_delta" and str(settings.MODE).lower() != "live" and target_plan:
+        if execution_engine == "target_delta" and str(getattr(self.settings_obj, "MODE", "")).lower() != "live" and target_plan:
             plan_side = str(target_plan.get("side") or request.signal).upper()
             if not _validate_submit_authority_before_executor(
                 target_plan,
@@ -3278,7 +3291,7 @@ class LiveSignalExecutionService:
                 exit_rule_name=request.exit_rule_name,
                 execution_submit_plan=target_plan,
             )
-        if _execution_engine() == "target_delta" and str(settings.MODE).lower() == "live":
+        if execution_engine == "target_delta" and str(getattr(self.settings_obj, "MODE", "")).lower() == "live":
             if not target_plan:
                 if (
                     request.signal == "SELL"

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import replace
+import sqlite3
 
 import pytest
 
 from bithumb_bot import h74_live_rehearsal
+from bithumb_bot.config import settings
+from bithumb_bot.h74_rehearsal_context import default_h74_live_rehearsal_context
 from bithumb_bot.h74_live_rehearsal import (
     H74LiveRehearsalConfig,
     H74LiveRehearsalError,
@@ -60,6 +65,69 @@ def test_h74_rehearsal_reaches_broker_submit_boundary_at_kst_10(tmp_path) -> Non
     assert payload["broker_submit_reached"] is True
     assert payload["actual_submit"] is False
     assert payload["LIVE_DRY_RUN"] is False
+
+
+def test_h74_rehearsal_does_not_mutate_global_settings(tmp_path) -> None:
+    before = (
+        settings.MODE,
+        settings.LIVE_DRY_RUN,
+        settings.LIVE_REAL_ORDER_ARMED,
+    )
+
+    run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(kst_time="10:00", no_submit=True, source_artifact_path=_source_artifact(tmp_path))
+    )
+
+    assert (
+        settings.MODE,
+        settings.LIVE_DRY_RUN,
+        settings.LIVE_REAL_ORDER_ARMED,
+    ) == before
+
+
+def test_h74_rehearsal_does_not_mutate_environment(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", raising=False)
+
+    run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(kst_time="10:00", no_submit=True, source_artifact_path=_source_artifact(tmp_path))
+    )
+
+    assert "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY" not in os.environ
+
+
+def test_h74_rehearsal_claim_scope_is_synthetic_gate_only(tmp_path) -> None:
+    payload = run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(kst_time="10:00", no_submit=True, source_artifact_path=_source_artifact(tmp_path))
+    )
+
+    assert payload["artifact_type"] == "SyntheticGateEvidence"
+    assert payload["claims_scope"] == "synthetic_gate"
+    assert payload["full_lifecycle_equivalence_supported"] is False
+
+
+def test_h74_rehearsal_uses_injected_clock_and_db_factory(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[float] = []
+    db_paths: list[str] = []
+    base = default_h74_live_rehearsal_context()
+
+    def _db_factory(path: str) -> sqlite3.Connection:
+        db_paths.append(path)
+        return sqlite3.connect(path)
+
+    context = replace(
+        base,
+        clock=lambda: seen.append(12345.0) or 12345.0,
+        db_factory=_db_factory,
+    )
+
+    payload = run_h74_live_rehearsal(
+        H74LiveRehearsalConfig(kst_time="10:00", no_submit=True, source_artifact_path=_source_artifact(tmp_path)),
+        context=context,
+    )
+
+    assert payload["broker_submit_reached"] is True
+    assert seen
+    assert db_paths
 
 
 def test_h74_rehearsal_kst_10_allows_daily_participation_buy(tmp_path) -> None:
