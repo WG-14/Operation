@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
+from bithumb_bot import runtime_state
 from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
 from bithumb_bot.runtime.no_submit_diagnostic import diagnostic_for_stage
 from tests.test_runtime_cycle_artifact_assembler import _decision_result
 from bithumb_bot.runtime.execution_coordinator import ExecutionCycleResult
@@ -144,6 +147,70 @@ def test_submit_authority_block_records_submit_reason() -> None:
     assert diagnostic["upstream_hashes"]["execution_plan_bundle_hash"] == "sha256:bundle"
 
 
+def _pipeline_runner(*, now: float = 100.0):
+    class _Runner:
+        runtime_checkpoint = object()
+        runtime_events = object()
+
+        def __init__(self) -> None:
+            self.container = SimpleNamespace(
+                settings_obj=SimpleNamespace(PAIR="KRW-BTC", INTERVAL="1m"),
+                interval_parser=lambda _interval: 60,
+                clock=lambda: now,
+                runtime_dependency_manifest_hash="sha256:deps",
+            )
+            self.artifacts = []
+
+        def _record_artifact(self, cycle_id: str, **kwargs: object):
+            from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+
+            artifact = RuntimeCycleArtifact(
+                cycle_id=cycle_id,
+                runtime_dependency_manifest_hash=self.container.runtime_dependency_manifest_hash,
+                **kwargs,
+            )
+            self.artifacts.append(artifact)
+            return artifact
+
+    return _Runner()
+
+
+def test_trading_halted_exit_records_diagnostic_artifact(monkeypatch) -> None:
+    runner = _pipeline_runner()
+    monkeypatch.setattr(
+        runtime_state,
+        "snapshot",
+        lambda: SimpleNamespace(trading_enabled=False, retry_at_epoch_sec=float("inf")),
+    )
+
+    artifact = RuntimeCyclePipeline(runner).run_once()
+
+    assert artifact is not None
+    diagnostic = artifact.as_dict()["runtime_cycle_diagnostic"]
+    assert diagnostic["stage"] == "risk"
+    assert diagnostic["reason_code"] == "trading_halted_indefinitely"
+    assert "upstream_hashes" in diagnostic
+    assert diagnostic["missing_because"]["strategy_decision_hash"] == "risk"
+
+
+def test_failsafe_pause_records_diagnostic_artifact(monkeypatch) -> None:
+    runner = _pipeline_runner(now=100.0)
+    monkeypatch.setattr(
+        runtime_state,
+        "snapshot",
+        lambda: SimpleNamespace(trading_enabled=False, retry_at_epoch_sec=130.0),
+    )
+
+    artifact = RuntimeCyclePipeline(runner).run_once()
+
+    assert artifact is not None
+    diagnostic = artifact.as_dict()["runtime_cycle_diagnostic"]
+    assert diagnostic["stage"] == "risk"
+    assert diagnostic["reason_code"] == "failsafe_pause_retry_window_not_reached"
+    assert "upstream_hashes" in diagnostic
+    assert diagnostic["missing_because"]["runtime_data_availability_report_hash"] == "risk"
+
+
 def test_cycle_pipeline_record_artifact_calls_attach_diagnostic() -> None:
     path = Path("src/bithumb_bot/runtime/cycle_pipeline.py")
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -159,5 +226,19 @@ def test_cycle_pipeline_record_artifact_calls_attach_diagnostic() -> None:
             continue
         if not any(keyword.arg == "runtime_cycle_diagnostic" for keyword in node.keywords):
             missing.append(node.lineno)
+
+    assert missing == []
+
+
+def test_cycle_pipeline_has_no_bare_return_none_early_exit() -> None:
+    path = Path("src/bithumb_bot/runtime/cycle_pipeline.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    missing: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "run_once":
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Return) and isinstance(child.value, ast.Constant) and child.value.value is None:
+                missing.append(child.lineno)
 
     assert missing == []

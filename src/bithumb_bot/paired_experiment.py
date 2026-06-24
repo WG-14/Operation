@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Callable, Mapping
 
 from bithumb_bot.decision_equivalence import sha256_prefixed
 from bithumb_bot.paired_experiment_diff import PAIRED_EXPERIMENT_STAGE_ORDER, compare_paired_experiment_stages
+from bithumb_bot.research.backtest_stage_runner import run_stage_owned_decision_event_backtest
+from bithumb_bot.research.dataset_snapshot import Candle, DatasetSnapshot
+from bithumb_bot.research.decision_event import ResearchDecisionEvent
+from bithumb_bot.research.experiment_manifest import DateRange
+from bithumb_bot.runtime.data_cycle_preflight import RuntimeDataCyclePreflightProvider
+from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
 from bithumb_bot.runtime_data_access import select_latest_closed_candle
 from bithumb_bot.utils_time import parse_interval_sec
 
@@ -24,6 +31,9 @@ class PairedExperimentRun:
     shadow_initial_state_hash: str
     actual_state_snapshot_hash: str
     submit_enabled: bool = False
+    market: str = "KRW-BTC"
+    interval: str = "1m"
+    close: float | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -94,6 +104,9 @@ def make_paired_experiment_run(
         shadow_initial_state_hash=sha256_prefixed(dict(shadow_initial_state or {"ledger": "simulated"})),
         actual_state_snapshot_hash=sha256_prefixed(dict(actual_state_snapshot or {"state": "runtime_read_only"})),
         submit_enabled=submit_enabled,
+        market=snapshot.market,
+        interval=snapshot.interval,
+        close=snapshot.close,
     )
 
 
@@ -169,65 +182,50 @@ def run_closed_candle_paired_experiment(
 
 
 def shadow_backtest_lane(run: PairedExperimentRun) -> dict[str, object]:
-    """Simulated ledger lane: no runtime DB connection or live table writes."""
-    stages = {
-        stage: _stage(stage, {"lane": "shadow", "run_id": run.run_id, "candle_ts": run.candle_ts})
-        for stage in PAIRED_EXPERIMENT_STAGE_ORDER
-    }
-    stages["position_snapshot"] = _stage(
-        "position_snapshot",
-        {
-            "lane": "shadow",
-            "ledger": "simulated_backtest",
-            "shadow_initial_state_hash": run.shadow_initial_state_hash,
-        },
+    """Simulated ledger lane backed by the research stage-owned backtest runner."""
+    result, status, reason_code = _run_shadow_backtest_stage_runner(run)
+    stage_trace = _mapping(getattr(result, "resource_usage", None)).get("stage_trace_hash")
+    decisions = getattr(result, "decisions", ()) if result is not None else ()
+    decision_payload = dict(decisions[-1]) if decisions else {}
+    execution_summary = (
+        getattr(result, "execution_event_summary", {})
+        if result is not None
+        else {}
     )
-    stages["fill"] = _stage("fill", {"lane": "shadow", "simulated": True})
-    stages["accounting"] = _stage("accounting", {"lane": "shadow", "ledger": "simulated"})
+    stages = _shadow_stage_hashes(
+        run,
+        status=status,
+        reason_code=reason_code,
+        stage_trace_hash=None if stage_trace is None else str(stage_trace),
+        decision_payload=decision_payload,
+        execution_summary=_mapping(execution_summary),
+        result=result,
+    )
     return {
         "lane": "shadow_backtest",
         "run_id": run.run_id,
         "candle_ts": run.candle_ts,
         "simulated_ledger": True,
         "writes_live_db": False,
+        "stage_runner": "bithumb_bot.research.backtest_stage_runner.run_stage_owned_decision_event_backtest",
+        "stage_runner_status": status,
+        "stage_runner_reason_code": reason_code,
         "stages": stages,
     }
 
 
 def operational_runtime_lane(run: PairedExperimentRun) -> dict[str, object]:
-    stages = {
-        stage: _stage(
-            stage,
-            {
-                "lane": "operational",
-                "run_id": run.run_id,
-                "candle_ts": run.candle_ts,
-                "submit_enabled": bool(run.submit_enabled),
-            },
-        )
-        for stage in PAIRED_EXPERIMENT_STAGE_ORDER
-    }
-    stages["position_snapshot"] = _stage(
-        "position_snapshot",
-        {
-            "lane": "operational",
-            "actual_state_snapshot_hash": run.actual_state_snapshot_hash,
-        },
-    )
-    stages["submit_authority"] = _stage(
-        "submit_authority",
-        {
-            "lane": "operational",
-            "mode": "submit_capable" if run.submit_enabled else "read_only_no_submit",
-            "submit_enabled": bool(run.submit_enabled),
-        },
-    )
+    operational_result = _run_operational_runtime_path(run)
+    stages = _operational_stage_hashes(run, operational_result)
     return {
         "lane": "operational_runtime",
         "run_id": run.run_id,
         "candle_ts": run.candle_ts,
         "submit_enabled": bool(run.submit_enabled),
         "read_only": not bool(run.submit_enabled),
+        "runtime_path": operational_result["runtime_path"],
+        "runtime_path_status": operational_result["status"],
+        "runtime_path_reason_code": operational_result["reason_code"],
         "stages": stages,
     }
 
@@ -235,6 +233,292 @@ def operational_runtime_lane(run: PairedExperimentRun) -> dict[str, object]:
 def _stage(stage: str, payload: Mapping[str, object]) -> dict[str, object]:
     stage_payload = {"stage": stage, **dict(payload)}
     return {"status": "ok", "hash": sha256_prefixed(stage_payload), **stage_payload}
+
+
+def _run_shadow_backtest_stage_runner(run: PairedExperimentRun) -> tuple[object | None, str, str]:
+    dataset = _single_candle_dataset(run)
+    decision_event = ResearchDecisionEvent(
+        candle_ts=int(run.candle_ts),
+        decision_ts=int(run.candle_ts),
+        strategy_name="sma_with_filter",
+        strategy_version="paired_experiment_shadow_v1",
+        raw_signal="HOLD",
+        final_signal="HOLD",
+        reason="paired_experiment_closed_candle_shadow",
+        feature_snapshot={"market_snapshot_hash": run.market_snapshot_hash},
+        strategy_diagnostics={"paired_experiment_run_id": run.run_id},
+        extra_payload={"regime_snapshot": {"composite_regime": "paired_experiment_shadow"}},
+    )
+    try:
+        result = run_stage_owned_decision_event_backtest(
+            dataset=dataset,
+            strategy_name="sma_with_filter",
+            parameter_values={},
+            fee_rate=0.0004,
+            slippage_bps=0.0,
+            decision_events=(decision_event,),
+        )
+    except Exception as exc:
+        return None, "fail_closed", f"shadow_backtest_stage_runner_error:{type(exc).__name__}"
+    return result, "ok", "stage_owned_backtest_complete"
+
+
+def _single_candle_dataset(run: PairedExperimentRun) -> DatasetSnapshot:
+    close = float(run.close if run.close is not None else 0.0)
+    candle = Candle(
+        ts=int(run.candle_ts),
+        open=close,
+        high=close,
+        low=close,
+        close=close,
+        volume=0.0,
+    )
+    day = datetime.fromtimestamp(int(run.candle_ts) / 1000, tz=timezone.utc).date().isoformat()
+    return DatasetSnapshot(
+        snapshot_id=f"paired-experiment:{run.run_id}",
+        source="paired_experiment_closed_live_candle",
+        market=str(run.market),
+        interval=str(run.interval),
+        split_name="paired_closed_candle",
+        date_range=DateRange(start=day, end=day),
+        candles=(candle,),
+        source_content_hash=run.market_snapshot_hash,
+        locator={"run_id": run.run_id, "candle_ts": int(run.candle_ts)},
+    )
+
+
+def _shadow_stage_hashes(
+    run: PairedExperimentRun,
+    *,
+    status: str,
+    reason_code: str,
+    stage_trace_hash: str | None,
+    decision_payload: Mapping[str, object],
+    execution_summary: Mapping[str, object],
+    result: object | None,
+) -> dict[str, dict[str, object]]:
+    common = {
+        "lane": "shadow",
+        "run_id": run.run_id,
+        "candle_ts": run.candle_ts,
+        "stage_runner_status": status,
+        "stage_runner_reason_code": reason_code,
+        "stage_trace_hash": stage_trace_hash,
+    }
+    stages = {
+        "market_input": _stage_with_status(
+            "market_input",
+            {**common, "market_snapshot_hash": run.market_snapshot_hash},
+            status,
+            reason_code,
+        ),
+        "feature_projection": _stage_with_status(
+            "feature_projection",
+            {**common, "decision_payload_hash": sha256_prefixed(dict(decision_payload))},
+            status,
+            reason_code,
+        ),
+        "position_snapshot": _stage_with_status(
+            "position_snapshot",
+            {
+                **common,
+                "ledger": "simulated_backtest",
+                "shadow_initial_state_hash": run.shadow_initial_state_hash,
+            },
+            status,
+            reason_code,
+        ),
+        "daily_count_snapshot": _stage_with_status(
+            "daily_count_snapshot",
+            {**common, "source": "simulated_ledger"},
+            status,
+            reason_code,
+        ),
+        "strategy_decision": _stage_with_status(
+            "strategy_decision",
+            {**common, "decision_payload_hash": sha256_prefixed(dict(decision_payload))},
+            status,
+            reason_code,
+        ),
+        "risk_decision": _stage_with_status(
+            "risk_decision",
+            {**common, "decision_payload_hash": sha256_prefixed(dict(decision_payload))},
+            status,
+            reason_code,
+        ),
+        "portfolio_target": _stage_with_status(
+            "portfolio_target",
+            {
+                **common,
+                "final_cash": getattr(result, "final_cash", None),
+                "final_asset_qty": getattr(result, "final_asset_qty", None),
+            },
+            status,
+            reason_code,
+        ),
+        "execution_plan": _stage_with_status(
+            "execution_plan",
+            {**common, "execution_summary_hash": sha256_prefixed(dict(execution_summary))},
+            status,
+            reason_code,
+        ),
+        "submit_authority": _stage_with_status(
+            "submit_authority",
+            {**common, "simulated_submit_authority": True},
+            status,
+            reason_code,
+        ),
+        "broker_payload": _stage_with_status(
+            "broker_payload",
+            {**common, "simulated_broker_payload": True},
+            status,
+            reason_code,
+        ),
+        "fill": _stage_with_status(
+            "fill",
+            {
+                **common,
+                "simulated": True,
+                "execution_summary_hash": sha256_prefixed(dict(execution_summary)),
+            },
+            status,
+            reason_code,
+        ),
+        "accounting": _stage_with_status(
+            "accounting",
+            {
+                **common,
+                "ledger": "simulated",
+                "trades_hash": sha256_prefixed(list(getattr(result, "trades", ()) or ())),
+            },
+            status,
+            reason_code,
+        ),
+    }
+    return stages
+
+
+def _run_operational_runtime_path(run: PairedExperimentRun) -> dict[str, object]:
+    result = {
+        "runtime_path": (
+            "RuntimeDataCyclePreflightProvider.evaluate"
+            " -> DecisionCoordinator.decide_cycle"
+            " -> run_loop_execution_planner"
+        ),
+        "status": "fail_closed",
+        "reason_code": "runtime_container_not_injected",
+        "preflight_hash": None,
+        "decision_hash": None,
+        "execution_plan_bundle_hash": None,
+    }
+    container = getattr(run, "runtime_container", None)
+    strategy_set = getattr(run, "runtime_strategy_set", None)
+    runtime_checkpoint = getattr(run, "runtime_checkpoint", None)
+    runtime_events = getattr(run, "runtime_events", None)
+    if container is None or strategy_set is None or runtime_checkpoint is None or runtime_events is None:
+        return result
+    try:
+        preflight = RuntimeDataCyclePreflightProvider(
+            container=container,
+            runtime_checkpoint=runtime_checkpoint,
+            runtime_events=runtime_events,
+        ).evaluate(
+            strategy_set=strategy_set,
+            now_epoch_sec=float(container.clock()),
+            interval_sec=parse_interval_sec(str(run.interval)),
+        )
+        preflight_payload = preflight.as_dict()
+        decision = DecisionCoordinator(
+            settings_obj=container.settings_obj,
+            db_factory=container.db_factory,
+            broker_provider=lambda: None,
+        ).decide_cycle(
+            runtime_strategy_set=strategy_set,
+            candle_ts=int(run.candle_ts),
+            updated_ts=int(float(container.clock()) * 1000),
+            runtime_data_cycle_preflight_hash=str(preflight_payload["decision_hash"]),
+            runtime_data_availability_report_hash=preflight.runtime_data_availability_report_hash,
+            broker=None,
+        )
+    except Exception as exc:
+        result["reason_code"] = f"operational_runtime_path_error:{type(exc).__name__}"
+        return result
+    result.update(
+        {
+            "status": "ok",
+            "reason_code": "operational_runtime_path_complete",
+            "preflight_hash": preflight_payload["decision_hash"],
+            "decision_hash": decision.as_dict()["decision_hash"],
+            "execution_plan_bundle_hash": decision.execution_plan_bundle_hash,
+            "decision_result": decision.as_dict(),
+        }
+    )
+    return result
+
+
+def _operational_stage_hashes(
+    run: PairedExperimentRun,
+    operational_result: Mapping[str, object],
+) -> dict[str, dict[str, object]]:
+    status = str(operational_result.get("status") or "fail_closed")
+    reason_code = str(operational_result.get("reason_code") or "operational_runtime_path_unavailable")
+    common = {
+        "lane": "operational",
+        "run_id": run.run_id,
+        "candle_ts": run.candle_ts,
+        "submit_enabled": bool(run.submit_enabled),
+        "runtime_path_status": status,
+        "runtime_path_reason_code": reason_code,
+        "runtime_data_cycle_preflight_hash": operational_result.get("preflight_hash"),
+        "decision_hash": operational_result.get("decision_hash"),
+        "execution_plan_bundle_hash": operational_result.get("execution_plan_bundle_hash"),
+    }
+    stages = {
+        stage: _stage_with_status(stage, common, status, reason_code)
+        for stage in PAIRED_EXPERIMENT_STAGE_ORDER
+    }
+    stages["market_input"] = _stage_with_status(
+        "market_input",
+        {**common, "market_snapshot_hash": run.market_snapshot_hash},
+        status,
+        reason_code,
+    )
+    stages["position_snapshot"] = _stage_with_status(
+        "position_snapshot",
+        {**common, "actual_state_snapshot_hash": run.actual_state_snapshot_hash},
+        status,
+        reason_code,
+    )
+    stages["submit_authority"] = _stage_with_status(
+        "submit_authority",
+        {
+            **common,
+            "mode": "submit_capable" if run.submit_enabled else "read_only_no_submit",
+            "submit_enabled": bool(run.submit_enabled),
+        },
+        status,
+        reason_code,
+    )
+    return stages
+
+
+def _stage_with_status(
+    stage: str,
+    payload: Mapping[str, object],
+    status: str,
+    reason_code: str,
+) -> dict[str, object]:
+    stage_payload = {"stage": stage, **dict(payload)}
+    return {
+        "status": status,
+        "reason_code": "" if status == "ok" else reason_code,
+        "hash": sha256_prefixed(stage_payload),
+        **stage_payload,
+    }
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _actual_state_snapshot(conn: sqlite3.Connection, *, candle_ts: int) -> dict[str, object]:

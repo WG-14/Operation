@@ -65,7 +65,17 @@ class RuntimeCyclePipeline:
                     interval=c.settings_obj.INTERVAL,
                     reason="trading halted indefinitely",
                 )
-                return None
+                return r._record_artifact(
+                    "halted_exit",
+                    candle_ts=None,
+                    startup_state="READY",
+                    runtime_cycle_diagnostic=_diagnostic(
+                        cycle_id="halted_exit",
+                        candle_ts=None,
+                        stage="risk",
+                        reason_code="trading_halted_indefinitely",
+                    ),
+                )
             if now < state.retry_at_epoch_sec:
                 runner_module._log_loop_event(
                     logging.WARNING,
@@ -75,7 +85,17 @@ class RuntimeCyclePipeline:
                     wait_sec=max(0, int(state.retry_at_epoch_sec - now)),
                     reason="retry window not reached",
                 )
-                return None
+                return r._record_artifact(
+                    "failsafe_pause",
+                    candle_ts=None,
+                    startup_state="READY",
+                    runtime_cycle_diagnostic=_diagnostic(
+                        cycle_id="failsafe_pause",
+                        candle_ts=None,
+                        stage="risk",
+                        reason_code="failsafe_pause_retry_window_not_reached",
+                    ),
+                )
             runtime_state.enable_trading()
             c.notification_adapter.send_event(r.runtime_events.event("failsafe_retry_window_reached"))
 
