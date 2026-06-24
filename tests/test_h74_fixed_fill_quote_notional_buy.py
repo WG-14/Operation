@@ -92,6 +92,21 @@ def test_h74_fixed_fill_buy_payload_is_price_order_without_volume() -> None:
     }
 
 
+def test_h74_buy_submit_plan_requires_quote_notional_semantics() -> None:
+    plan = _plan_h74_quote_buy()
+
+    assert plan.submit_semantics == "quote_notional_market_buy"
+    assert plan.quote_notional_krw == pytest.approx(100_000.0)
+    assert plan.exchange_submit_field == "price"
+
+
+def test_h74_buy_submit_plan_rejects_base_qty_semantics() -> None:
+    plan = _plan_h74_quote_buy()
+
+    assert plan.submit_semantics != "base_qty"
+    assert plan.exchange_submit_volume is None
+
+
 def test_general_target_delta_buy_keeps_floor_sizing() -> None:
     rules = _rules()
     plan = build_submit_plan(

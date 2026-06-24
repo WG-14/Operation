@@ -2260,6 +2260,7 @@ def _build_execution_decision_summary_from_authority_payload(
                 "submit_semantics": (
                     H74_ENTRY_SUBMIT_SEMANTICS_NAME if is_h74_fixed_buy else "base_qty"
                 ),
+                "sizing_mode": "quote_notional" if is_h74_fixed_buy else "base_qty",
                 "submit_semantics_authority": (
                     H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY
                     if is_h74_fixed_buy
@@ -2280,6 +2281,8 @@ def _build_execution_decision_summary_from_authority_payload(
                     if is_h74_fixed_buy
                     else "canonical_target_delta_sizing"
                 ),
+                "fill_qty_authority": "broker_fill" if is_h74_fixed_buy else None,
+                "position_mode": configured_position_mode,
                 "entry_qty_preview_authoritative": False if is_h74_fixed_buy else None,
                 "entry_fill_qty_authority": "broker_fills" if is_h74_fixed_buy else None,
                 "invariant_status": (

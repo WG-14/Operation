@@ -5,13 +5,11 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from bithumb_bot.core.sma_policy import _stable_hash
 from bithumb_bot.strategy.daily_participation_events import (
     ParticipationEvent,
     SOURCE_CONTRACT_VERSION,
-    participation_event_set_hash,
-    source_contract_hash,
 )
+from bithumb_bot.strategy.daily_participation_reducer import DailyParticipationReducer
 from bithumb_bot.strategy.daily_participation_policy import (
     DailyParticipationCountSnapshot,
     DailyParticipationPolicyConfig,
@@ -50,6 +48,7 @@ def build_runtime_daily_count_snapshot_from_sqlite(
             end_ms=min(end_ms, int(decision_ts)),
         )
     except sqlite3.Error as exc:
+        detail = str(exc).strip() or type(exc).__name__
         return DailyParticipationCountSnapshot(
             count_basis=config.count_basis,
             timezone=config.timezone,
@@ -58,12 +57,11 @@ def build_runtime_daily_count_snapshot_from_sqlite(
             timestamp_field=TIMESTAMP_FIELD_BY_BASIS[config.count_basis],
             source=source,
             rows=(),
-            fail_closed_reason=f"daily_participation_runtime_count_source_unavailable:{type(exc).__name__}",
+            fail_closed_reason=f"daily_participation_runtime_count_source_unavailable:{type(exc).__name__}:{detail}",
             pair=pair,
             strategy_instance_id=strategy_instance_id,
             source_contract_version=source_version,
         )
-    rows = tuple(_event_row(event) for event in events)
     policy_hash = config.policy_hash()
     pending_claim_count = pending_daily_participation_claim_count(
         conn,
@@ -75,30 +73,17 @@ def build_runtime_daily_count_snapshot_from_sqlite(
         ),
         retry_terminal_failed_claims=bool(config.retry_terminal_failed_claims),
     )
-    return DailyParticipationCountSnapshot(
-        count_basis=config.count_basis,
-        timezone=config.timezone,
-        kst_day=day,
-        count_for_kst_day=len(events),
-        timestamp_field=TIMESTAMP_FIELD_BY_BASIS[config.count_basis],
+    return DailyParticipationReducer(
+        query_contract="daily_participation_sqlite_count.v1",
         source=source,
-        rows=rows,
+        source_contract_version=source_version,
+    ).reduce(
+        config=config,
+        decision_ts=decision_ts,
+        events=events,
         pair=pair,
         strategy_instance_id=strategy_instance_id,
-        event_set_hash=participation_event_set_hash(events),
-        source_contract_hash=source_contract_hash(source=source, source_contract_version=source_version),
-        query_contract_hash=_stable_hash(
-            {
-                "schema_version": 1,
-                "query_contract": "daily_participation_sqlite_count.v1",
-                "count_basis": config.count_basis,
-                "pair": pair,
-                "strategy_instance_id": strategy_instance_id,
-                "strategy_name": strategy_name,
-                "kst_day": day,
-            }
-        ),
-        source_contract_version=source_version,
+        strategy_name=strategy_name,
         pending_claim_count=pending_claim_count,
     )
 
@@ -256,19 +241,6 @@ def _runtime_events(
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return {str(row[1] if not hasattr(row, "keys") else row["name"]) for row in rows}
-
-
-def _row_dict(row: Any) -> dict[str, object]:
-    if hasattr(row, "keys"):
-        return {str(key): row[key] for key in row.keys()}
-    return {"ts": row[0]}
-
-
-def _event_row(event: ParticipationEvent) -> dict[str, object]:
-    payload = event.as_dict()
-    payload["basis"] = event.count_basis
-    payload["ts"] = int(event.event_ts)
-    return payload
 
 
 def _day_bounds_ms(day: str, timezone_name: str) -> tuple[int, int]:

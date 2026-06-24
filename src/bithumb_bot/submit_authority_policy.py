@@ -323,6 +323,18 @@ def evaluate_submit_authority_policy(
                     return decision(False, "h74_source_observation_invalid_authority")
                 if str(payload.get("submit_semantics") or "") != "quote_notional_market_buy":
                     return decision(False, "h74_source_observation_submit_semantics_missing")
+                if str(payload.get("sizing_mode") or "") != "quote_notional":
+                    return decision(False, "h74_source_observation_sizing_mode_missing")
+                try:
+                    quote_notional_krw = float(payload.get("quote_notional_krw") or 0.0)
+                except (TypeError, ValueError):
+                    quote_notional_krw = 0.0
+                if quote_notional_krw <= 0.0:
+                    return decision(False, "h74_source_observation_quote_notional_missing")
+                if str(payload.get("fill_qty_authority") or "") != "broker_fill":
+                    return decision(False, "h74_source_observation_fill_qty_authority_missing")
+                if str(payload.get("position_mode") or "") != "fixed_fill_qty_until_exit":
+                    return decision(False, "h74_source_observation_position_mode_missing")
                 if str(payload.get("exchange_order_type") or "") != "price":
                     return decision(False, "h74_source_observation_order_type_not_price")
                 if str(payload.get("exchange_submit_field") or "") != "price":

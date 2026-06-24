@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from bithumb_bot.core.sma_policy import (
@@ -21,6 +21,7 @@ from bithumb_bot.research.strategy_spec import (
     SMA_WITH_FILTER_SPEC,
     StrategyParameterSchema,
     StrategySpec,
+    materialized_strategy_parameters_hash,
     materialize_strategy_parameters,
 )
 from bithumb_bot.strategy.daily_participation_policy import (
@@ -33,6 +34,9 @@ from bithumb_bot.strategy.daily_participation_policy import (
 from bithumb_bot.runtime.daily_participation_count_provider import build_runtime_daily_count_snapshot_from_sqlite
 from bithumb_bot.strategy.exit_rules import ExitPolicyConfig
 from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decision
+from bithumb_bot.strategy_decision_input import StrategyDecisionInputBundle
+from bithumb_bot.strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
+from bithumb_bot.strategy_policy_contract import StrategyDecisionV2
 from bithumb_bot.strategy_authoring import (
     PromotionGradeStrategyExtension,
     build_live_eligible_strategy_plugin,
@@ -227,6 +231,87 @@ def runtime_decision_adapter_factory() -> DailyParticipationSmaRuntimeDecisionAd
     return DailyParticipationSmaRuntimeDecisionAdapter()
 
 
+@dataclass(frozen=True)
+class DailyParticipationSmaDecisionConfig:
+    base_config: SmaPolicyConfig | None
+    participation_config: DailyParticipationPolicyConfig
+    participation_state: DailyParticipationStateSnapshot
+    count_snapshot: Any
+    base_decision: StrategyDecisionV2 | None = None
+    signal_context_extra: dict[str, object] | None = None
+
+    def policy_input_payload(self) -> dict[str, object]:
+        base_payload = {}
+        if self.base_config is not None:
+            base_payload = (
+                self.base_config.policy_input_payload()
+                if hasattr(self.base_config, "policy_input_payload")
+                else dict(getattr(self.base_config, "__dict__", {}))
+            )
+        return {
+            "schema_version": 1,
+            "base_config": base_payload,
+            "participation_config": self.participation_config.policy_payload(),
+            "participation_state": self.participation_state.snapshot_payload(
+                config=self.participation_config
+            ),
+            "daily_count_snapshot": (
+                self.count_snapshot.as_dict()
+                if hasattr(self.count_snapshot, "as_dict")
+                else {}
+            ),
+            "base_decision_hash": (
+                self.base_decision.policy_decision_hash
+                if self.base_decision is not None
+                else ""
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class DailyParticipationSmaStrategy:
+    name: str = "daily_participation_sma"
+
+    def decide_snapshot(
+        self,
+        *,
+        market: object,
+        position: PositionSnapshot,
+        config: object,
+        execution_context: ExecutionConstraintSnapshot,
+        exit_policy_config: object | None = None,
+        rule_sources: dict[str, str] | None = None,
+    ) -> StrategyDecisionV2:
+        if not isinstance(config, DailyParticipationSmaDecisionConfig):
+            raise TypeError("daily_participation_sma_decision_config_invalid")
+        base = config.base_decision
+        if base is None:
+            base = evaluate_sma_final_decision(
+                market=market,  # type: ignore[arg-type]
+                position=position,
+                config=config.base_config,  # type: ignore[arg-type]
+                execution_context=execution_context,
+                exit_policy_config=exit_policy_config,  # type: ignore[arg-type]
+                signal_context_extra=config.signal_context_extra,
+                rule_sources=rule_sources,
+            )
+        return _compose_daily_participation_decision(
+            base=base,
+            market=market,
+            participation_config=config.participation_config,
+            participation_state=config.participation_state,
+            count_snapshot=config.count_snapshot,
+        )
+
+
+@dataclass(frozen=True)
+class _RuntimeDailyMarket:
+    pair: str
+
+    def policy_input_payload(self) -> dict[str, object]:
+        return {"schema_version": 1, "pair": self.pair, "source": "runtime_base_sma_result"}
+
+
 def evaluate_daily_participation_sma_decision(
     *,
     market: MarketWindow,
@@ -240,15 +325,32 @@ def evaluate_daily_participation_sma_decision(
     signal_context_extra: dict[str, object] | None = None,
     rule_sources: dict[str, str] | None = None,
 ):
-    base = evaluate_sma_final_decision(
+    strategy = DailyParticipationSmaStrategy()
+    composite_config = DailyParticipationSmaDecisionConfig(
+        base_config=config,
+        participation_config=participation_config,
+        participation_state=participation_state,
+        count_snapshot=count_snapshot,
+        signal_context_extra=signal_context_extra,
+    )
+    return strategy.decide_snapshot(
         market=market,
         position=position,
-        config=config,
+        config=composite_config,
         execution_context=execution_context,
         exit_policy_config=exit_policy_config,
-        signal_context_extra=signal_context_extra,
         rule_sources=rule_sources,
     )
+
+
+def _compose_daily_participation_decision(
+    *,
+    base: StrategyDecisionV2,
+    market: object,
+    participation_config: DailyParticipationPolicyConfig,
+    participation_state: DailyParticipationStateSnapshot,
+    count_snapshot: Any,
+) -> StrategyDecisionV2:
     base_entry_signal = "BUY" if base.final_signal == "BUY" else "HOLD"
     participation = evaluate_daily_participation_policy(config=participation_config, state=participation_state)
     final_signal = base.final_signal
@@ -277,7 +379,7 @@ def evaluate_daily_participation_sma_decision(
         execution_intent = EntryExecutionIntent(
             side="BUY",
             intent="enter_open_exposure",
-            pair=market.pair,
+            pair=str(getattr(market, "pair", "") or getattr(count_snapshot, "pair", "") or ""),
             requires_execution_sizing=True,
             budget_fraction_of_cash=float(participation_config.buy_fraction),
             max_budget_krw=float(participation_config.max_order_krw),
@@ -326,8 +428,6 @@ def evaluate_daily_participation_sma_decision(
             "participation_policy_hash": participation.participation_policy_hash,
             "participation_input_hash": participation.participation_input_hash,
             "execution_sizing": {
-                "base_buy_fraction": float(config.buy_fraction),
-                "base_max_order_krw": float(config.max_order_krw),
                 "participation_buy_fraction": float(participation_config.buy_fraction),
                 "participation_max_order_krw": float(participation_config.max_order_krw),
             },
@@ -345,14 +445,29 @@ def evaluate_daily_participation_sma_decision(
             "participation_decision_hash": participation.participation_decision_hash,
         }
     )
-    return replace(
-        base,
+    return StrategyDecisionV2(
         strategy_name="daily_participation_sma",
+        raw_signal=base.raw_signal,
+        raw_reason=base.raw_reason,
+        entry_signal=base.entry_signal,
+        entry_reason=base.entry_reason,
+        exit_signal=base.exit_signal,
+        exit_reason=base.exit_reason,
         final_signal=final_signal,
         final_reason=final_reason,
+        blocked_filters=tuple(base.blocked_filters),
+        entry_blocked=base.entry_blocked,
+        entry_block_reason=base.entry_block_reason,
+        exit_rule=base.exit_rule,
+        exit_evaluations=tuple(dict(item) for item in base.exit_evaluations),
+        protective_exit_overrode_entry=base.protective_exit_overrode_entry,
+        exit_filter_suppression_prevented=base.exit_filter_suppression_prevented,
+        position_snapshot=base.position_snapshot,
         execution_intent=execution_intent,
+        entry_decision=base.entry_decision,
         trace=trace,
         policy_hash=_stable_hash(trace),
+        policy_contract_hash=base.policy_contract_hash,
         policy_input_hash=policy_input_hash,
         policy_decision_hash=policy_decision_hash,
     )
@@ -426,33 +541,89 @@ def research_policy_decision_builder(
         entry_allowed=bool(position.entry_allowed),
         market_open=True,
     )
-    decision = evaluate_daily_participation_sma_decision(
-        market=projected.bundle.market,
-        position=position,
-        config=projected.bundle.config,
-        execution_context=projected.bundle.execution_constraints,
-        exit_policy_config=projected.bundle.exit_policy_config,
+    composite_config = DailyParticipationSmaDecisionConfig(
+        base_config=projected.bundle.config,
         participation_config=participation_config,
         participation_state=participation_state,
         count_snapshot=count_snapshot,
-        rule_sources=projected.rule_sources,
     )
-    decision.trace["strategy_evaluation_provenance"] = {
-        "decision_boundary": "StrategyDecisionService.evaluate",
-        "snapshot_builder": "DailyParticipationSmaResearchPolicyDecisionBuilder",
-        "base_snapshot_builder": "SmaWithFilterSnapshotProjector",
-        "candle_ts": int(event.candle_ts),
-        "daily_count_snapshot_source": count_snapshot.source,
-    }
-    decision.trace["replay_fingerprint_hash"] = _stable_hash(
-        {
-            "base_replay_fingerprint": projected.replay_fingerprint,
-            "participation_input_hash": decision.trace.get("participation_input_hash"),
-            "participation_decision_hash": decision.trace.get("participation_decision_hash"),
-        }
+    daily_bundle = StrategyDecisionInputBundle.build(
+        strategy_name="daily_participation_sma",
+        market=projected.bundle.market,
+        position=position,
+        config=composite_config,
+        execution_constraints=projected.bundle.execution_constraints,
+        exit_policy_config=projected.bundle.exit_policy_config,
+        materialized_parameters_hash=materialized_strategy_parameters_hash(dict(daily_values)),
+        snapshot_projector_version="daily_participation_sma_research_projector.v1",
+        snapshot_projector_hash=_stable_hash(
+            {
+                "projector": "daily_participation_sma_research_projector.v1",
+                "base_projector_hash": projected.bundle.snapshot_projector_hash,
+            }
+        ),
+        provenance={
+            **dict(projected.bundle.provenance),
+            "candle_ts": int(event.candle_ts),
+            "daily_count_snapshot_source": count_snapshot.source,
+        },
+        component_payloads={
+            "market": projected.bundle.component_payloads.get("market", {})
+            if projected.bundle.component_payloads
+            else projected.bundle.market.policy_input_payload(),
+            "market_feature": projected.bundle.component_payloads.get("market_feature", {})
+            if projected.bundle.component_payloads
+            else projected.bundle.market.policy_input_payload(),
+            "position": position.policy_input_payload(),
+            "config": composite_config.policy_input_payload(),
+            "execution_constraints": projected.bundle.execution_constraints.policy_input_payload(),
+            "exit_policy_config": projected.bundle.component_payloads.get("exit_policy_config", {})
+            if projected.bundle.component_payloads
+            else {},
+        },
     )
-    decision.trace.update(projected.bundle.observability_payload())
-    decision.trace.update(
+    result = StrategyDecisionService().evaluate(
+        StrategyEvaluationRequest(
+            strategy_name="daily_participation_sma",
+            strategy_instance_id="daily_participation_sma:research_promotion",
+            mode=mode.value,
+            strategy_policy=DailyParticipationSmaStrategy(),
+            market_snapshot=daily_bundle.market,
+            position_snapshot=daily_bundle.position,
+            strategy_config=daily_bundle.config,
+            execution_constraints=daily_bundle.execution_constraints,
+            exit_policy_config=daily_bundle.exit_policy_config,
+            rule_sources=projected.rule_sources,
+            approved_profile_hash=(
+                candidate_regime_policy.get("strategy_profile_hash")
+                if isinstance(candidate_regime_policy, dict)
+                else None
+            ),
+            runtime_contract_hash=None,
+            plugin_contract_hash=None,
+            request_hash=None,
+            provenance={
+                "snapshot_builder": "DailyParticipationSmaResearchPolicyDecisionBuilder",
+                "base_snapshot_builder": "SmaWithFilterSnapshotProjector",
+                "candle_ts": int(event.candle_ts),
+                "strategy_parameters_hash": materialized_strategy_parameters_hash(dict(daily_values)),
+                "replay_fingerprint": projected.replay_fingerprint,
+                "daily_count_snapshot_source": count_snapshot.source,
+                "approved_profile_hash_unavailable_reason": "research_candidate_profile_not_supplied"
+                if not (
+                    isinstance(candidate_regime_policy, dict)
+                    and candidate_regime_policy.get("strategy_profile_hash")
+                )
+                else "",
+                "plugin_contract_hash_unavailable_reason": "research_policy_decision_builder_no_plugin_contract",
+                "runtime_contract_hash_unavailable_reason": "research_policy_decision_builder_no_runtime_contract",
+                "runtime_decision_request_hash_unavailable_reason": "research_policy_decision_builder_no_runtime_request",
+            },
+            decision_input_bundle=daily_bundle,
+            decision_evidence_contract=DAILY_PARTICIPATION_DECISION_EVIDENCE_CONTRACT,
+        )
+    )
+    result.decision.trace.update(
         {
             "parameter_sources": dict(projected.materialized.sources),
             "runtime_comparable": bool(projected.materialized.runtime_comparable),
@@ -462,7 +633,7 @@ def research_policy_decision_builder(
             "daily_count_snapshot": count_snapshot.as_dict(),
         }
     )
-    return decision
+    return result.decision
 
 
 def build_runtime_replay_strategy(
@@ -549,169 +720,96 @@ def _daily_runtime_result_from_base(
 ) -> Any:
     base_decision = base_result.decision
     position = base_decision.position_snapshot
+    pair = str(count_snapshot.pair or base_result.base_context.get("pair") or "")
     participation_state = count_snapshot.state_snapshot(
         decision_ts=int(decision_ts),
         position_open=bool(position.in_position or position.has_executable_exposure),
         entry_allowed=bool(position.entry_allowed),
         market_open=True,
     )
-    participation = evaluate_daily_participation_policy(
-        config=participation_config,
-        state=participation_state,
+    composite_config = DailyParticipationSmaDecisionConfig(
+        base_config=None,
+        participation_config=participation_config,
+        participation_state=participation_state,
+        count_snapshot=count_snapshot,
+        base_decision=base_decision,
     )
-    base_entry_signal = "BUY" if str(base_decision.final_signal).upper() == "BUY" else "HOLD"
-    final_signal = base_decision.final_signal
-    final_reason = base_decision.final_reason
-    entry_signal_source = "sma_cross" if str(base_decision.final_signal).upper() == "BUY" else "hold"
-    entry_sizing_source = "base_sma" if str(base_decision.final_signal).upper() == "BUY" else "none"
-    execution_intent = base_decision.execution_intent
-    base_blocked_filters = list(base_decision.trace.get("blocked_filters") or ())
-    base_safety_passed = not bool(base_blocked_filters) and str(base_decision.final_reason or "").strip() not in {
-        "entry_filter_blocked",
-        "blocked",
+    runtime_market = _RuntimeDailyMarket(pair=pair)
+    component_payloads = {
+        "market": runtime_market.policy_input_payload(),
+        "market_feature": {
+            "base_context": dict(base_result.base_context),
+            "base_replay_fingerprint": dict(base_result.replay_fingerprint),
+        },
+        "position": position.policy_input_payload(),
+        "config": composite_config.policy_input_payload(),
+        "execution_constraints": {"schema_version": 1, "source": "base_sma_runtime_result"},
+        "exit_policy_config": {},
     }
-    fallback_eligible = bool(participation.allowed)
-    fallback_block_reason = ""
-    if participation_config.fallback_mode == "disabled":
-        fallback_eligible = False
-        fallback_block_reason = "daily_participation_fallback_disabled"
-    elif participation_config.fallback_mode == "requires_base_safety_filter" and not base_safety_passed:
-        fallback_eligible = False
-        fallback_block_reason = "daily_participation_base_safety_filter_blocked"
-    if str(base_decision.final_signal).upper() != "BUY" and fallback_eligible:
-        final_signal = "BUY"
-        final_reason = participation.reason_code
-        entry_signal_source = "daily_participation_fallback"
-        entry_sizing_source = "daily_participation_policy"
-        execution_intent = EntryExecutionIntent(
-            side="BUY",
-            intent="enter_open_exposure",
-            pair=str(base_result.base_context.get("pair") or ""),
-            requires_execution_sizing=True,
-            budget_fraction_of_cash=float(participation_config.buy_fraction),
-            max_budget_krw=float(participation_config.max_order_krw),
-        )
-    elif str(base_decision.final_signal).upper() != "BUY" and participation.allowed and fallback_block_reason:
-        final_signal = "HOLD"
-        final_reason = fallback_block_reason
-    execution_payload = execution_intent.as_dict() if execution_intent is not None else None
-    trace = dict(base_decision.trace)
-    trace.update(
-        {
-            "strategy_family": "daily_participation_sma",
-            "base_strategy": "sma_with_filter",
-            "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
-            "pair": str(count_snapshot.pair or base_result.base_context.get("pair") or ""),
-            "entry_signal_source": entry_signal_source,
-            "entry_sizing_source": entry_sizing_source,
-            "base_entry_signal": base_entry_signal,
-            "base_final_reason": base_decision.final_reason,
-            "base_blocked_filters": base_blocked_filters,
-            "participation_entry_signal": "BUY" if participation.allowed else "HOLD",
-            "daily_participation_decision": participation.as_dict(),
-            "fallback_mode": participation_config.fallback_mode,
-            "fallback_block_reason": fallback_block_reason,
-            "timezone": participation_config.timezone,
-            "count_basis": participation.count_basis,
-            "kst_day": participation.kst_day,
-            "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
-            "daily_count_snapshot_event_set_hash": str(count_snapshot.event_set_hash or ""),
-            "participation_policy_hash": participation.participation_policy_hash,
-            "participation_input_hash": participation.participation_input_hash,
-            "participation_decision_hash": participation.participation_decision_hash,
-            "fail_closed_reason": participation.fail_closed_reason,
-            "not_a_fill_guarantee": True,
-            "execution_intent": execution_payload,
-            "daily_count_snapshot": count_snapshot.as_dict(),
-        }
+    strategy_parameters_hash = str(
+        (provenance_extra or {}).get("strategy_parameters_hash")
+        or base_result.base_context.get("strategy_parameters_hash")
+        or _stable_hash({"runtime_daily_participation_parameters": participation_config.policy_payload()})
     )
-    provenance = dict(trace.get("strategy_evaluation_provenance") or {})
-    provenance.update(
-        {
-            "decision_boundary": "StrategyDecisionService.evaluate",
-            "snapshot_builder": "DailyParticipationSmaRuntimeFeatureSnapshotAdapter",
-            "base_snapshot_builder": "SmaWithFilterRuntimeFeatureSnapshotAdapter",
-            "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
-            "pair": str(count_snapshot.pair or base_result.base_context.get("pair") or ""),
-            "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
-            "daily_count_snapshot_event_set_hash": str(count_snapshot.event_set_hash or ""),
-            "participation_policy_hash": participation.participation_policy_hash,
-            "participation_input_hash": participation.participation_input_hash,
-            "participation_decision_hash": participation.participation_decision_hash,
-            "entry_signal_source": entry_signal_source,
-            "fallback_mode": participation_config.fallback_mode,
-            "decision_input_bundle_hash": str(trace.get("decision_input_bundle_hash") or _stable_hash({"daily_runtime_decision_input": count_snapshot.as_dict()})),
-            "decision_input_contract_hash": str(trace.get("decision_input_contract_hash") or _stable_hash({"contract": "daily_participation_runtime_feature_snapshot_v1"})),
-            "decision_input_bundle_payload_hash": str(trace.get("decision_input_bundle_payload_hash") or _stable_hash({"daily_runtime_decision_payload": count_snapshot.as_dict()})),
-            "market_feature_hash": str(trace.get("market_feature_hash") or base_result.base_context.get("feature_snapshot_hash") or ""),
-            "final_exit_decision_input_hash": str(trace.get("final_exit_decision_input_hash") or ""),
-            "snapshot_projector_version": str(trace.get("snapshot_projector_version") or "daily_participation_sma_runtime_feature_snapshot_v1"),
-            "snapshot_projector_hash": str(trace.get("snapshot_projector_hash") or _stable_hash({"snapshot_projector": "daily_participation_sma_runtime_feature_snapshot_v1"})),
-        }
-    )
-    if provenance_extra:
-        provenance.update({key: value for key, value in provenance_extra.items() if str(value or "").strip()})
-    trace["strategy_evaluation_provenance"] = provenance
-    policy_input_hash = _stable_hash(
-        {
-            "base_policy_input_hash": base_decision.policy_input_hash,
-            "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
-            "entry_signal_source": entry_signal_source,
-            "entry_sizing_source": entry_sizing_source,
-            "fallback_mode": participation_config.fallback_mode,
-            "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
-            "participation_policy_hash": participation.participation_policy_hash,
-            "participation_input_hash": participation.participation_input_hash,
-            "execution_sizing": {
-                "participation_buy_fraction": float(participation_config.buy_fraction),
-                "participation_max_order_krw": float(participation_config.max_order_krw),
-            },
-        }
-    )
-    policy_decision_hash = _stable_hash(
-        {
-            "strategy_name": "daily_participation_sma",
-            "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
-            "final_signal": final_signal,
-            "final_reason": final_reason,
-            "entry_signal_source": entry_signal_source,
-            "entry_sizing_source": entry_sizing_source,
-            "fallback_mode": participation_config.fallback_mode,
-            "execution_intent": execution_payload,
-            "participation_decision_hash": participation.participation_decision_hash,
-        }
-    )
-    daily_decision = replace(
-        base_decision,
+    daily_bundle = StrategyDecisionInputBundle.build(
         strategy_name="daily_participation_sma",
-        final_signal=final_signal,
-        final_reason=final_reason,
-        execution_intent=execution_intent,
-        trace=trace,
-        policy_hash=_stable_hash(trace),
-        policy_input_hash=policy_input_hash,
-        policy_decision_hash=policy_decision_hash,
+        market=runtime_market,
+        position=position,
+        config=composite_config,
+        execution_constraints=ExecutionConstraintSnapshot(fee_rate_for_decision=0.0),
+        exit_policy_config=None,
+        materialized_parameters_hash=strategy_parameters_hash,
+        snapshot_projector_version="sma_with_filter_snapshot_projector_v1",
+        snapshot_projector_hash=_stable_hash({"snapshot_projector": "daily_participation_sma_runtime_feature_snapshot_v1"}),
+        provenance=dict(provenance_extra or {}),
+        component_payloads=component_payloads,
     )
-    replay_fingerprint = dict(base_result.replay_fingerprint)
-    replay_fingerprint.update(
-        {
-            "strategy_name": "daily_participation_sma",
-            "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
-            "count_basis": participation.count_basis,
-            "kst_day": participation.kst_day,
-            "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
-            "daily_count_snapshot_event_set_hash": str(count_snapshot.event_set_hash or ""),
-            "participation_policy_hash": participation.participation_policy_hash,
-            "participation_input_hash": participation.participation_input_hash,
-            "participation_decision_hash": participation.participation_decision_hash,
-            "fallback_mode": participation_config.fallback_mode,
-            "policy_input_hash": policy_input_hash,
-            "policy_decision_hash": policy_decision_hash,
-        }
+    request_provenance = {
+        **dict(base_result.base_context),
+        "snapshot_builder": "DailyParticipationSmaRuntimeFeatureSnapshotAdapter",
+        "base_snapshot_builder": "SmaWithFilterRuntimeFeatureSnapshotAdapter",
+        "strategy_parameters_hash": strategy_parameters_hash,
+        "strategy_instance_id": str(count_snapshot.strategy_instance_id or ""),
+        "pair": pair,
+        "replay_fingerprint": dict(base_result.replay_fingerprint),
+        "plugin_contract_hash_unavailable_reason": "daily_runtime_base_result_direct_call"
+        if not base_result.base_context.get("plugin_contract_hash")
+        else "",
+        "runtime_contract_hash_unavailable_reason": "daily_runtime_base_result_direct_call"
+        if not base_result.base_context.get("runtime_contract_hash")
+        else "",
+        "runtime_decision_request_hash_unavailable_reason": "daily_runtime_base_result_direct_call"
+        if not base_result.base_context.get("runtime_decision_request_hash")
+        else "",
+        "approved_profile_hash_unavailable_reason": "daily_runtime_base_result_no_approved_profile_hash"
+        if not base_result.base_context.get("approved_profile_hash")
+        else "",
+    }
+    if provenance_extra:
+        request_provenance.update({key: value for key, value in provenance_extra.items() if str(value or "").strip()})
+    result = StrategyDecisionService().evaluate(
+        StrategyEvaluationRequest(
+            strategy_name="daily_participation_sma",
+            strategy_instance_id=str(count_snapshot.strategy_instance_id or ""),
+            mode="runtime_replay",
+            strategy_policy=DailyParticipationSmaStrategy(),
+            market_snapshot=daily_bundle.market,
+            position_snapshot=daily_bundle.position,
+            strategy_config=daily_bundle.config,
+            execution_constraints=daily_bundle.execution_constraints,
+            exit_policy_config=daily_bundle.exit_policy_config,
+            rule_sources={},
+            approved_profile_hash=str(base_result.base_context.get("approved_profile_hash") or "") or None,
+            runtime_contract_hash=str(base_result.base_context.get("runtime_contract_hash") or "") or None,
+            plugin_contract_hash=str(base_result.base_context.get("plugin_contract_hash") or "") or None,
+            request_hash=str(base_result.base_context.get("runtime_decision_request_hash") or "") or None,
+            provenance=request_provenance,
+            decision_input_bundle=daily_bundle,
+            decision_evidence_contract=DAILY_PARTICIPATION_DECISION_EVIDENCE_CONTRACT,
+        )
     )
-    replay_fingerprint["replay_fingerprint_hash"] = _stable_hash(
-        {key: value for key, value in replay_fingerprint.items() if key != "replay_fingerprint_hash"}
-    )
+    daily_decision = result.decision
+    replay_fingerprint = dict(result.replay_fingerprint)
     base_context = dict(base_result.base_context)
     base_context.update(
         {
@@ -722,15 +820,18 @@ def _daily_runtime_result_from_base(
             "policy_decision_hash": daily_decision.policy_decision_hash,
             "pure_policy_trace": daily_decision.as_trace(),
             "replay_fingerprint": replay_fingerprint,
-            "count_basis": participation.count_basis,
-            "kst_day": participation.kst_day,
-            "daily_count_snapshot_hash": participation.daily_count_snapshot_hash,
+            "count_basis": participation_config.count_basis,
+            "kst_day": count_snapshot.kst_day,
+            "daily_count_snapshot_hash": daily_decision.trace.get("daily_count_snapshot_hash"),
             "daily_count_snapshot_event_set_hash": str(count_snapshot.event_set_hash or ""),
-            "participation_policy_hash": participation.participation_policy_hash,
-            "participation_input_hash": participation.participation_input_hash,
-            "participation_decision_hash": participation.participation_decision_hash,
+            "participation_policy_hash": daily_decision.trace.get("participation_policy_hash"),
+            "participation_input_hash": daily_decision.trace.get("participation_input_hash"),
+            "participation_decision_hash": daily_decision.trace.get("participation_decision_hash"),
             "fallback_mode": participation_config.fallback_mode,
             "daily_count_snapshot": count_snapshot.as_dict(),
+            "strategy_evaluation_receipt": dict(result.receipt),
+            "strategy_evaluation_provenance": dict(result.provenance),
+            "replay_fingerprint_hash": result.replay_fingerprint_hash,
         }
     )
     return replace(

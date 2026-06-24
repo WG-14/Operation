@@ -115,3 +115,29 @@ def test_quote_notional_buy_forbids_volume_payload() -> None:
                 "volume": "0.0009",
             }
         )
+
+
+def test_quote_notional_market_buy_unit_is_not_asset_qty() -> None:
+    rules = _rules()
+    plan = _plan(
+        OrderIntent(
+            client_order_id="quote-notional-unit",
+            market="KRW-BTC",
+            side="BUY",
+            normalized_side="bid",
+            qty=100_000.0 / 100_000_120.0,
+            price=None,
+            created_ts=1,
+            submit_contract=_buy_contract(rules),
+            quote_notional_krw=100_000.0,
+            quote_notional_authority="h74_fixed_fill_quote_notional_buy",
+            submit_semantics="quote_notional_market_buy",
+            submit_semantics_authority="h74_fixed_fill_quote_notional_buy",
+            market_price_hint=100_000_120.0,
+        )
+    )
+    payload = build_order_payload_from_plan(plan=plan).payload
+
+    assert payload["price"] == "100000"
+    assert "volume" not in payload
+    assert plan.exchange_submit_volume is None

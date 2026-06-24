@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .lifecycle_artifacts import RuntimeCycleArtifact
+from .no_submit_diagnostic import diagnostic_for_stage
 
 if TYPE_CHECKING:
     from .decision_coordinator import DecisionCycleResult
@@ -30,6 +31,38 @@ class RuntimeCycleArtifactAssembler:
                 if execution_value:
                     return execution_value
             return getattr(decision_result, field_name)
+
+        stage = "strategy"
+        reason_code = str(getattr(decision_result, "reason", "") or getattr(decision_result, "failure_reason_code", "") or "")
+        submit_reason = None
+        if execution_result is not None:
+            submit_reason = str(
+                getattr(execution_result, "submit_authority_reason", "")
+                or getattr(execution_result, "planning_status", "")
+                or ""
+            )
+            if submit_reason:
+                stage = "submit"
+                reason_code = submit_reason
+        if execution_result is None and str(getattr(decision_result, "signal", "") or "").upper() == "HOLD":
+            stage = "strategy"
+            reason_code = reason_code or "strategy_hold"
+        decision_context = (
+            getattr(decision_result, "decision_context", {}) or {}
+            if isinstance(getattr(decision_result, "decision_context", None), dict)
+            else {}
+        )
+        diagnostic = diagnostic_for_stage(
+            cycle_id=cycle_id,
+            candle_ts=decision_result.candle_ts,
+            stage=stage,
+            reason_code=reason_code or cycle_id,
+            runtime_data_availability_report_hash=decision_context.get("runtime_data_availability_report_hash"),
+            strategy_decision_hash=decision_result.strategy_decision_hash,
+            daily_count_snapshot_hash=decision_context.get("daily_count_snapshot_hash"),
+            execution_plan_bundle_hash=decision_result.execution_plan_bundle_hash,
+            submit_authority_reason=submit_reason,
+        )
 
         return RuntimeCycleArtifact(
             cycle_id=cycle_id,
@@ -89,6 +122,7 @@ class RuntimeCycleArtifactAssembler:
             lock_wait_elapsed_ms=decision_result.lock_wait_elapsed_ms,
             last_lock_error=str((decision_result.persistence_failure_metadata or {}).get("last_lock_error") or "")
             or None,
+            runtime_cycle_diagnostic=diagnostic.as_dict(),
         )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
@@ -13,6 +13,8 @@ from .strategy_policy_contract import (
 from .strategy_decision_input import StrategyDecisionInputBundle
 from .strategy_evidence_contract import DecisionEvidenceContract
 from .strategy_evidence_contract import GENERIC_DECISION_EVIDENCE_CONTRACT
+from .strategy_evaluation_receipt import build_strategy_evaluation_receipt
+from .strategy_evaluation_receipt import validate_strategy_evaluation_receipt
 
 
 class StrategyPolicyLike(Protocol):
@@ -78,6 +80,7 @@ class StrategyEvaluationRequest:
 @dataclass(frozen=True)
 class StrategyEvaluationResult:
     decision: StrategyDecisionV2
+    receipt: Mapping[str, object]
     policy_input_hash: str
     policy_decision_hash: str
     policy_contract_hash: str
@@ -94,6 +97,7 @@ class StrategyEvaluationResult:
             raise ValueError("strategy_evaluation_policy_contract_hash_missing")
         if not self.replay_fingerprint_hash:
             raise ValueError("strategy_evaluation_replay_fingerprint_hash_missing")
+        object.__setattr__(self, "receipt", MappingProxyType(dict(self.receipt or {})))
         object.__setattr__(self, "replay_fingerprint", MappingProxyType(dict(self.replay_fingerprint or {})))
         object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance or {})))
 
@@ -213,12 +217,16 @@ class StrategyDecisionService:
             if key in provenance:
                 continue
             value = replay_payload.get(key)
+            if not str(value or "").strip():
+                value = decision_trace.get(key)
             if str(value or "").strip():
                 provenance[key] = value
         for key in request.decision_evidence_contract.required_live_real_order_fields:
             if key in provenance:
                 continue
             value = replay_payload.get(key)
+            if not str(value or "").strip():
+                value = decision_trace.get(key)
             if str(value or "").strip():
                 provenance[key] = value
         for group in request.decision_evidence_contract.required_live_real_order_one_of_field_groups:
@@ -226,16 +234,54 @@ class StrategyDecisionService:
                 if key in provenance:
                     continue
                 value = replay_payload.get(key)
+                if not str(value or "").strip():
+                    value = decision_trace.get(key)
                 if str(value or "").strip():
                     provenance[key] = value
         if request.mode in self._PROMOTION_COMPARABLE_MODES and bool(
             provenance.get("compatibility_fallback")
         ):
             raise ValueError(f"strategy_evaluation_compatibility_fallback_rejected:{request.strategy_name}")
+        decision_input_bundle_hash = str(
+            provenance.get("decision_input_bundle_hash")
+            or (bundle.decision_input_bundle_hash if bundle is not None else "")
+            or sha256_prefixed(
+                {
+                    "strategy_name": request.strategy_name,
+                    "mode": request.mode,
+                    "policy_input_hash": decision.policy_input_hash,
+                }
+            )
+        )
+        receipt = build_strategy_evaluation_receipt(
+            decision_input_bundle_hash=decision_input_bundle_hash,
+            policy_decision_hash=decision.policy_decision_hash,
+            strategy_name=request.strategy_name,
+            mode=request.mode,
+        )
+        provenance["strategy_evaluation_receipt"] = receipt.as_dict()
         self._validate_snapshot_projector_contract(request=request, provenance=provenance)
         self._validate_promotion_provenance(request=request, provenance=provenance)
+        validate_strategy_evaluation_receipt(
+            receipt=receipt.as_dict(),
+            decision=decision,
+            expected_input_bundle_hash=decision_input_bundle_hash,
+            expected_strategy_name=request.strategy_name,
+            expected_mode=request.mode,
+        )
+        decision = replace(
+            decision,
+            trace={
+                **dict(decision.trace),
+                "strategy_evaluation_receipt": receipt.as_dict(),
+                "strategy_evaluation_provenance": provenance,
+                "replay_fingerprint_hash": replay_payload["replay_fingerprint_hash"],
+                **(bundle.observability_payload() if bundle is not None else {}),
+            },
+        )
         return StrategyEvaluationResult(
             decision=decision,
+            receipt=receipt.as_dict(),
             policy_input_hash=decision.policy_input_hash,
             policy_decision_hash=decision.policy_decision_hash,
             policy_contract_hash=decision.policy_contract_hash,
@@ -268,6 +314,7 @@ class StrategyDecisionService:
             "replay_fingerprint_hash",
             "strategy_evaluation_mode",
             "decision_boundary",
+            "strategy_evaluation_receipt",
         ]
         required_decision_fields.extend(
             request.decision_evidence_contract.required_promotion_provenance_fields

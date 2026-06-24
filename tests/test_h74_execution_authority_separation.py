@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import inspect
+from types import SimpleNamespace
 
 import pytest
 
+from bithumb_bot.broker import live
 from bithumb_bot.broker import order_rules
 from bithumb_bot.execution_models import OrderIntent
 from bithumb_bot.execution_planner import build_submit_plan
 from bithumb_bot.h74_live_rehearsal import H74LiveRehearsalConfig, run_h74_live_rehearsal
+from bithumb_bot.submit_authority_policy import evaluate_submit_authority_policy
 
 
 pytestmark = pytest.mark.fast_regression
@@ -118,3 +122,39 @@ def test_h74_source_observation_rejects_canonical_target_delta_only_authority(tm
     assert payload["would_submit"] is False
     assert payload["primary_block_gate"] == "submit_semantics"
     assert "h74_quote_notional_authority_missing" in payload["primary_block_reason"]
+
+
+def test_broker_does_not_branch_on_h74_strategy_name() -> None:
+    source = inspect.getsource(live)
+
+    assert 'strategy_name == "daily_participation_sma"' not in source
+    assert "strategy_name == 'daily_participation_sma'" not in source
+
+
+def test_submit_authority_rejects_h74_source_without_typed_semantics() -> None:
+    decision = evaluate_submit_authority_policy(
+        {
+            "side": "BUY",
+            "source": "h74_source_observation",
+            "authority": "h74_fixed_fill_quote_notional_buy",
+            "submit_expected": True,
+            "pre_submit_proof_status": "passed",
+            "portfolio_target_authoritative": True,
+            "portfolio_target_hash": "sha256:portfolio",
+            "allocation_decision_hash": "sha256:allocation",
+            "strategy_contribution_hash": "sha256:contribution",
+        },
+        settings_obj=SimpleNamespace(
+            MODE="live",
+            LIVE_DRY_RUN=False,
+            LIVE_REAL_ORDER_ARMED=True,
+            EXECUTION_ENGINE="target_delta",
+            TARGET_DELTA_LIVE_REAL_ORDER_ENABLED=True,
+            H74_SOURCE_OBSERVATION_AUTHORITY_PATH="/runtime/h74-authority.json",
+        ),
+        plan_kind="target",
+        require_final_payload=False,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "h74_source_observation_submit_semantics_missing"

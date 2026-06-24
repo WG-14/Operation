@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import inspect
+
 from bithumb_bot.runtime_adapters.daily_participation_sma import DailyParticipationSmaRuntimeDecisionAdapter
+from bithumb_bot.strategy_plugins import daily_participation_sma
 from bithumb_bot.runtime_data_provider import RuntimeFeatureSnapshot
 from bithumb_bot.runtime_strategy_decision import get_runtime_decision_adapter
 
@@ -68,3 +71,10 @@ def test_get_runtime_decision_adapter_daily_participation_sma_returns_adapter() 
     adapter = get_runtime_decision_adapter("daily_participation_sma")
 
     assert isinstance(adapter, DailyParticipationSmaRuntimeDecisionAdapter)
+
+
+def test_runtime_adapter_does_not_replace_base_sma_decision_for_final_h74_signal() -> None:
+    source = inspect.getsource(daily_participation_sma._daily_runtime_result_from_base)
+
+    assert "replace(\n        base_decision" not in source
+    assert "StrategyDecisionService().evaluate(" in source

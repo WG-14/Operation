@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from bithumb_bot.canonical_decision import canonical_payload_hash
+from bithumb_bot.strategy_evaluation_receipt import validate_strategy_evaluation_receipt
 from bithumb_bot.strategy_policy_contract import StrategyDecisionV2
 
 from .backtest_stages import ReplayTick, StrategyEvaluationEnvelope
@@ -107,6 +108,7 @@ class DefaultStrategyEvaluator:
             trace = policy_decision.as_trace()
             replay_hash = str(trace.get("replay_fingerprint_hash") or "")
             service_provenance = trace.get("strategy_evaluation_provenance")
+            service_receipt = trace.get("strategy_evaluation_receipt")
             missing = [
                 name
                 for name in (
@@ -119,10 +121,19 @@ class DefaultStrategyEvaluator:
             ]
             if not replay_hash:
                 missing.append("replay_fingerprint_hash")
-            if not isinstance(service_provenance, dict):
-                missing.append("strategy_evaluation_provenance")
-            elif service_provenance.get("decision_boundary") != "StrategyDecisionService.evaluate":
-                missing.append("strategy_evaluation_provenance.decision_boundary")
+            if not isinstance(service_receipt, dict):
+                missing.append("strategy_evaluation_receipt")
+            else:
+                try:
+                    validate_strategy_evaluation_receipt(
+                        receipt=service_receipt,
+                        decision=policy_decision,
+                        expected_input_bundle_hash=str(trace.get("decision_input_bundle_hash") or ""),
+                        expected_strategy_name=strategy_name,
+                        expected_mode=policy_materialization_mode,
+                    )
+                except ValueError as exc:
+                    missing.append(str(exc))
             if promotion_grade_policy_required and missing:
                 raise ValueError("research_strategy_decision_promotion_fields_missing:" + ",".join(missing))
             entry_decision = policy_decision.entry_decision
@@ -179,6 +190,11 @@ class DefaultStrategyEvaluator:
             "strategy_evaluation_provenance": (
                 dict(service_provenance)
                 if policy_decision is not None and isinstance(service_provenance, dict)
+                else None
+            ),
+            "strategy_evaluation_receipt": (
+                dict(service_receipt)
+                if policy_decision is not None and isinstance(service_receipt, dict)
                 else None
             ),
             "compatibility_fallback": policy_decision is None,

@@ -1101,6 +1101,9 @@ def run_live_pipeline_smoke(
             orders_submitted=orders_submitted,
         )
     return {
+        "artifact_type": "BrokerPipelineSmokeEvidence",
+        "claims_scope": "operator_pipeline_only",
+        "full_lifecycle_equivalence_supported": False,
         "status": "passed",
         "execution_mode": "live_pipeline_smoke",
         "readiness_scope": "operator_pipeline_only",

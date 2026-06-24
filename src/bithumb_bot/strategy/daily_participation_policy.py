@@ -7,11 +7,8 @@ from zoneinfo import ZoneInfo
 
 from bithumb_bot.core.sma_policy import _stable_hash
 from bithumb_bot.strategy.daily_participation_events import (
-    ParticipationEvent,
     SOURCE_CONTRACT_VERSION,
     normalize_research_participation_events,
-    participation_event_set_hash,
-    source_contract_hash,
 )
 
 
@@ -360,31 +357,19 @@ def build_research_daily_count_snapshot(
         )
         if event.event_ts < int(decision_ts) and kst_day(event.event_ts, config.timezone) == day
     )
-    rows = [_event_row(event) for event in events]
-    return DailyParticipationCountSnapshot(
-        count_basis=config.count_basis,
-        timezone=config.timezone,
-        kst_day=day,
-        count_for_kst_day=len(rows),
-        timestamp_field=TIMESTAMP_FIELD_BY_BASIS[config.count_basis],
+    from bithumb_bot.strategy.daily_participation_reducer import DailyParticipationReducer
+
+    return DailyParticipationReducer(
+        query_contract="daily_participation_research_count.v1",
         source=source,
-        rows=tuple(rows),
+        source_contract_version=source_version,
+    ).reduce(
+        config=config,
+        decision_ts=decision_ts,
+        events=events,
         pair=pair,
         strategy_instance_id=strategy_instance_id,
-        event_set_hash=participation_event_set_hash(events),
-        source_contract_hash=source_contract_hash(source=source, source_contract_version=source_version),
-        query_contract_hash=_stable_hash(
-            {
-                "schema_version": 1,
-                "query_contract": "daily_participation_research_count.v1",
-                "count_basis": config.count_basis,
-                "pair": pair,
-                "strategy_instance_id": strategy_instance_id,
-                "strategy_name": strategy_name,
-                "kst_day": day,
-            }
-        ),
-        source_contract_version=source_version,
+        strategy_name=strategy_name,
     )
 
 
@@ -403,13 +388,6 @@ def require_runtime_comparable_daily_count_snapshot(snapshot: DailyParticipation
         ]
         if missing_identity:
             raise ValueError("daily_count_snapshot_event_identity_missing:" + ",".join(missing_identity))
-
-
-def _event_row(event: ParticipationEvent) -> dict[str, object]:
-    payload = event.as_dict()
-    payload["basis"] = event.count_basis
-    payload["ts"] = int(event.event_ts)
-    return payload
 
 
 def _entry_source_from_record(record: dict[str, Any]) -> str:

@@ -1018,8 +1018,11 @@ def run_h74_live_rehearsal(config: H74LiveRehearsalConfig | None = None) -> dict
     daily_window_end = int(_h74_runtime_strategy_parameters()["DAILY_PARTICIPATION_WINDOW_END_HOUR_KST"])
     daily_entry_authorized = daily_reason == "daily_participation_fallback_allowed"
     payload: dict[str, Any] = {
-        "artifact_type": "h74_live_rehearsal",
+        "artifact_type": "SyntheticGateEvidence",
         "schema_version": 1,
+        "claim_scope": "synthetic_gate",
+        "claims_scope": "synthetic_gate",
+        "full_lifecycle_equivalence_supported": False,
         "readiness_scope": "h74_normal_path",
         "MODE": "live",
         "LIVE_DRY_RUN": False,

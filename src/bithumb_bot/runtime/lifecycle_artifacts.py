@@ -453,6 +453,7 @@ class RuntimeCycleArtifact:
     lock_wait_elapsed_ms: float | None = None
     last_lock_error: str | None = None
     hard_gate_trace_entries: Sequence[ExecutionGateTraceEntry | Mapping[str, Any]] = ()
+    runtime_cycle_diagnostic: Mapping[str, Any] = field(default_factory=dict)
 
     def gate_trace(self) -> ExecutionGateTrace:
         explicit_trace = ExecutionGateTrace.from_entries(
@@ -548,6 +549,7 @@ class RuntimeCycleArtifact:
             "gate_trace": gate_trace.as_list(),
             "primary_block_gate": primary_block_gate,
             "primary_block_reason": primary_block_reason,
+            "runtime_cycle_diagnostic": dict(self.runtime_cycle_diagnostic),
         }
         payload["input_hash"] = _stable_hash(
             {
