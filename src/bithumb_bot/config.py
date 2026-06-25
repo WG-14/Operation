@@ -516,18 +516,18 @@ def validate_runtime_profile_bindings_for_live_startup(
         h74_source_authority_verified = False
         h74_source_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
         if profile_required and not profile_path and h74_source_authority_path:
-            from .h74_observation import H74_STRATEGY_NAME, verify_h74_source_observation_authority_file
-
-            if str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME).strip().lower() == H74_STRATEGY_NAME:
-                try:
-                    verify_h74_source_observation_authority_file(h74_source_authority_path, settings_obj=cfg)
-                    h74_source_authority_verified = True
+            try:
+                h74_source_authority = _h74_source_observation_authority_selection(
+                    cfg,
+                    strategy_name=str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME),
+                    approved_profile_path=profile_path,
+                )
+                h74_source_authority_verified = bool(h74_source_authority.verified)
+                if h74_source_authority_verified:
+                    h74_source_authority_path = str(h74_source_authority.path or h74_source_authority_path)
                     profile_required = False
-                except Exception as exc:
-                    issues.append(
-                        "h74_source_observation_authority_validation_failed: "
-                        f"path={h74_source_authority_path!r}; reason={type(exc).__name__}:{exc}"
-                    )
+            except LiveModeValidationError as exc:
+                issues.append(str(exc))
         if expected_profile_modes is None:
             expected_modes, mode_reason = expected_profile_modes_for_runtime(runtime_contract)
         else:
