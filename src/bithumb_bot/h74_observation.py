@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .research.hashing import sha256_prefixed
 from .storage_io import write_json_atomic
@@ -212,6 +212,47 @@ def verify_h74_observation_experiment_envelope(payload: dict[str, Any]) -> None:
         raise H74ObservationAuthorityError("h74_observation_experiment_envelope_hash_mismatch")
 
 
+def _required_h74_source_envelope_fields(envelope: Mapping[str, object]) -> dict[str, object]:
+    verify_h74_observation_experiment_envelope(dict(envelope))
+    required = {
+        "experiment_run_id": str(envelope.get("experiment_run_id") or "").strip(),
+        "env_hash": str(envelope.get("env_hash") or "").strip(),
+        "strategy_revision_id": str(envelope.get("strategy_revision_id") or "").strip(),
+        "risk_scope_id": str(envelope.get("risk_scope_id") or "").strip(),
+        "starting_broker_position": dict(envelope.get("starting_broker_position") or {}),
+        "starting_local_position": dict(envelope.get("starting_local_position") or {}),
+        "db_snapshot_hash": str(envelope.get("db_snapshot_hash") or "").strip(),
+        "db_snapshot_locator": str(envelope.get("db_snapshot_locator") or "").strip(),
+        "included_history_policy": str(envelope.get("included_history_policy") or "").strip(),
+        "experiment_envelope_hash": str(envelope.get("experiment_envelope_hash") or "").strip(),
+        "risk_baseline_certificate_hash": str(envelope.get("risk_baseline_certificate_hash") or "").strip(),
+    }
+    missing = [
+        key
+        for key in (
+            "experiment_run_id",
+            "env_hash",
+            "strategy_revision_id",
+            "risk_scope_id",
+            "included_history_policy",
+            "experiment_envelope_hash",
+            "risk_baseline_certificate_hash",
+        )
+        if not required[key]
+    ]
+    if not required["starting_broker_position"]:
+        missing.append("starting_broker_position")
+    if not required["starting_local_position"]:
+        missing.append("starting_local_position")
+    if not required["db_snapshot_hash"] and not required["db_snapshot_locator"]:
+        missing.append("db_snapshot_hash_or_locator")
+    if missing:
+        raise H74ObservationAuthorityError(
+            "h74_source_observation_authority_experiment_envelope_missing:" + ",".join(missing)
+        )
+    return required
+
+
 def build_h74_capital_scaled_variant() -> dict[str, Any]:
     source_parameters = dict(H74_OBSERVATION_PARAMETERS)
     source_parameters["DAILY_PARTICIPATION_MAX_ORDER_KRW"] = H74_SOURCE_MAX_ORDER_KRW
@@ -294,6 +335,8 @@ def build_h74_source_observation_authority_payload(
     validation_run_hash: str | None = None,
     code_commit_sha: str | None = None,
     experiment_envelope_hash: str | None = None,
+    experiment_envelope_payload: Mapping[str, object] | None = None,
+    experiment_envelope_locator: str | None = None,
     risk_baseline_certificate_hash: str | None = None,
     included_history_policy: str | None = None,
     db_snapshot_hash: str | None = None,
@@ -311,31 +354,40 @@ def build_h74_source_observation_authority_payload(
     risk_policy = h74_source_observation_risk_policy()
     risk_policy_hash = h74_source_observation_risk_policy_hash(risk_policy)
     commit = str(code_commit_sha or runtime_code_provenance().get("commit_sha") or "unavailable")
-    baseline_hash = str(risk_baseline_certificate_hash or "").strip() or sha256_prefixed(
-        {
-            "risk_policy_hash": risk_policy_hash,
-            "risk_capital_basis": H74_SOURCE_OBSERVATION_RISK_CAPITAL_BASIS,
-            "risk_capital_krw": H74_SOURCE_OBSERVATION_RISK_CAPITAL_KRW,
-        }
-    )
-    history_policy = str(included_history_policy or "declared_live_history_scope").strip()
-    snapshot_hash = str(db_snapshot_hash or "").strip() or sha256_prefixed(
-        {
-            "db_snapshot_hash": "not_captured_at_authority_generation",
-            "included_history_policy": history_policy,
-            "source_candidate_artifact_hash": str(source_candidate_artifact_hash or "").strip(),
-        }
-    )
-    envelope_hash = str(experiment_envelope_hash or "").strip() or sha256_prefixed(
-        {
-            "artifact_type": "h74_observation_experiment_envelope_reference",
-            "risk_policy_hash": risk_policy_hash,
-            "risk_baseline_certificate_hash": baseline_hash,
-            "included_history_policy": history_policy,
-            "db_snapshot_hash": snapshot_hash,
-            "code_commit_sha": commit,
-        }
-    )
+    if experiment_envelope_payload is None:
+        raise H74ObservationAuthorityError(
+            "h74_source_observation_authority_experiment_envelope_payload_required"
+        )
+    envelope_fields = _required_h74_source_envelope_fields(experiment_envelope_payload)
+    envelope_hash = str(envelope_fields["experiment_envelope_hash"])
+    if experiment_envelope_hash is not None and str(experiment_envelope_hash or "").strip() != envelope_hash:
+        raise H74ObservationAuthorityError("h74_source_observation_authority_experiment_envelope_hash_mismatch")
+    baseline_hash = str(envelope_fields["risk_baseline_certificate_hash"])
+    if risk_baseline_certificate_hash is not None and str(risk_baseline_certificate_hash or "").strip() != baseline_hash:
+        raise H74ObservationAuthorityError("h74_source_observation_authority_risk_baseline_hash_mismatch")
+    history_policy = str(envelope_fields["included_history_policy"])
+    if included_history_policy is not None and str(included_history_policy or "").strip() != history_policy:
+        raise H74ObservationAuthorityError("h74_source_observation_authority_included_history_policy_mismatch")
+    snapshot_hash = str(envelope_fields["db_snapshot_hash"])
+    if db_snapshot_hash is not None and str(db_snapshot_hash or "").strip() != snapshot_hash:
+        raise H74ObservationAuthorityError("h74_source_observation_authority_db_snapshot_hash_mismatch")
+    snapshot_locator = str(envelope_fields["db_snapshot_locator"])
+    envelope_summary = {
+        key: envelope_fields[key]
+        for key in (
+            "experiment_run_id",
+            "env_hash",
+            "strategy_revision_id",
+            "risk_scope_id",
+            "starting_broker_position",
+            "starting_local_position",
+            "db_snapshot_hash",
+            "db_snapshot_locator",
+            "included_history_policy",
+            "experiment_envelope_hash",
+            "risk_baseline_certificate_hash",
+        )
+    }
     hash_bound = {
         **{
             k: H74_SOURCE_OBSERVATION_PARAMETERS[k]
@@ -359,10 +411,18 @@ def build_h74_source_observation_authority_payload(
         "production_approval": False,
         "approved_profile_evidence": False,
         "risk_policy_hash": risk_policy_hash,
+        "experiment_run_id": str(envelope_fields["experiment_run_id"]),
+        "env_hash": str(envelope_fields["env_hash"]),
+        "strategy_revision_id": str(envelope_fields["strategy_revision_id"]),
+        "risk_scope_id": str(envelope_fields["risk_scope_id"]),
+        "starting_broker_position": dict(envelope_fields["starting_broker_position"]),
+        "starting_local_position": dict(envelope_fields["starting_local_position"]),
         "experiment_envelope_hash": envelope_hash,
+        "experiment_envelope_locator": str(experiment_envelope_locator or ""),
         "risk_baseline_certificate_hash": baseline_hash,
         "included_history_policy": history_policy,
         "db_snapshot_hash": snapshot_hash,
+        "db_snapshot_locator": snapshot_locator,
         "risk_capital_basis": H74_SOURCE_OBSERVATION_RISK_CAPITAL_BASIS,
         "risk_capital_krw": H74_SOURCE_OBSERVATION_RISK_CAPITAL_KRW,
         "position_mode": H74_POSITION_MODE,
@@ -390,10 +450,19 @@ def build_h74_source_observation_authority_payload(
         "hash_bound_parameters": hash_bound,
         "risk_policy": risk_policy,
         "risk_policy_hash": risk_policy_hash,
+        "experiment_run_id": str(envelope_fields["experiment_run_id"]),
+        "env_hash": str(envelope_fields["env_hash"]),
+        "strategy_revision_id": str(envelope_fields["strategy_revision_id"]),
+        "risk_scope_id": str(envelope_fields["risk_scope_id"]),
+        "starting_broker_position": dict(envelope_fields["starting_broker_position"]),
+        "starting_local_position": dict(envelope_fields["starting_local_position"]),
         "experiment_envelope_hash": envelope_hash,
+        "experiment_envelope_locator": str(experiment_envelope_locator or ""),
+        "experiment_envelope_summary": envelope_summary,
         "risk_baseline_certificate_hash": baseline_hash,
         "included_history_policy": history_policy,
         "db_snapshot_hash": snapshot_hash,
+        "db_snapshot_locator": snapshot_locator,
         "risk_profile_source": H74_SOURCE_OBSERVATION_RISK_POLICY_SOURCE,
         "risk_enforcement_mode": "enforced",
         "position_mode": H74_POSITION_MODE,
@@ -533,20 +602,36 @@ def verify_h74_source_observation_authority(
         "interval",
         "code_commit_sha",
         "risk_policy_hash",
+        "experiment_run_id",
+        "env_hash",
+        "strategy_revision_id",
+        "risk_scope_id",
+        "starting_broker_position",
+        "starting_local_position",
         "experiment_envelope_hash",
+        "experiment_envelope_locator",
         "risk_baseline_certificate_hash",
         "included_history_policy",
         "db_snapshot_hash",
+        "db_snapshot_locator",
     ):
         if required_key not in bound or bound.get(required_key) in (None, ""):
-            raise H74ObservationAuthorityError(
-                f"h74_source_observation_authority_required_field_missing:{required_key}"
-            )
+            if required_key not in {"experiment_envelope_locator", "db_snapshot_hash", "db_snapshot_locator"}:
+                raise H74ObservationAuthorityError(
+                    f"h74_source_observation_authority_required_field_missing:{required_key}"
+                )
+    if not bound.get("db_snapshot_hash") and not bound.get("db_snapshot_locator"):
+        raise H74ObservationAuthorityError(
+            "h74_source_observation_authority_required_field_missing:db_snapshot_hash_or_locator"
+        )
     for required_key in (
+        "experiment_run_id",
+        "env_hash",
+        "strategy_revision_id",
+        "risk_scope_id",
         "experiment_envelope_hash",
         "risk_baseline_certificate_hash",
         "included_history_policy",
-        "db_snapshot_hash",
     ):
         if payload.get(required_key) in (None, ""):
             raise H74ObservationAuthorityError(
@@ -556,6 +641,23 @@ def verify_h74_source_observation_authority(
             raise H74ObservationAuthorityError(
                 f"h74_source_observation_authority_envelope_field_mismatch:{required_key}"
             )
+    for required_key in ("starting_broker_position", "starting_local_position"):
+        if not payload.get(required_key):
+            raise H74ObservationAuthorityError(
+                f"h74_source_observation_authority_required_field_missing:{required_key}"
+            )
+        if payload.get(required_key) != bound.get(required_key):
+            raise H74ObservationAuthorityError(
+                f"h74_source_observation_authority_envelope_field_mismatch:{required_key}"
+            )
+    if str(payload.get("db_snapshot_hash") or "") != str(bound.get("db_snapshot_hash") or ""):
+        raise H74ObservationAuthorityError("h74_source_observation_authority_envelope_field_mismatch:db_snapshot_hash")
+    if str(payload.get("db_snapshot_locator") or "") != str(bound.get("db_snapshot_locator") or ""):
+        raise H74ObservationAuthorityError("h74_source_observation_authority_envelope_field_mismatch:db_snapshot_locator")
+    if not payload.get("db_snapshot_hash") and not payload.get("db_snapshot_locator"):
+        raise H74ObservationAuthorityError(
+            "h74_source_observation_authority_required_field_missing:db_snapshot_hash_or_locator"
+        )
     if int(bound.get("observation_window_days")) != H74_OBSERVATION_WINDOW_DAYS:
         raise H74ObservationAuthorityError("h74_source_observation_authority_window_days_invalid")
     if float(bound.get("max_entry_notional_krw") or 0.0) > H74_SOURCE_MAX_ORDER_KRW:
@@ -604,10 +706,18 @@ def verify_h74_source_observation_authority(
             "approved_profile_evidence",
             "production_approval",
             "risk_policy_hash",
+            "experiment_run_id",
+            "env_hash",
+            "strategy_revision_id",
+            "risk_scope_id",
+            "starting_broker_position",
+            "starting_local_position",
             "experiment_envelope_hash",
+            "experiment_envelope_locator",
             "risk_baseline_certificate_hash",
             "included_history_policy",
             "db_snapshot_hash",
+            "db_snapshot_locator",
             "entry_submit_semantics",
             "entry_submit_semantics_name",
             "submit_semantics_hash",
@@ -888,12 +998,19 @@ def cmd_h74_source_observation_authority_generate(
     backtest_report_hash: str | None = None,
     validation_run_hash: str | None = None,
     code_commit_sha: str | None = None,
+    experiment_envelope_path: str,
 ) -> int:
+    with Path(experiment_envelope_path).expanduser().open("r", encoding="utf-8") as handle:
+        experiment_envelope = json.load(handle)
+    if not isinstance(experiment_envelope, dict):
+        raise H74ObservationAuthorityError("h74_source_observation_experiment_envelope_payload_not_object")
     payload = build_h74_source_observation_authority_payload(
         source_candidate_artifact_hash=source_candidate_artifact_hash,
         backtest_report_hash=backtest_report_hash,
         validation_run_hash=validation_run_hash,
         code_commit_sha=code_commit_sha,
+        experiment_envelope_payload=experiment_envelope,
+        experiment_envelope_locator=str(Path(experiment_envelope_path).expanduser().resolve()),
     )
     if out_path:
         write_json_atomic(Path(out_path).expanduser(), payload)

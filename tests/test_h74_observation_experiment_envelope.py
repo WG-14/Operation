@@ -55,11 +55,13 @@ def test_h74_envelope_records_included_history_policy() -> None:
 
 
 def test_h74_source_authority_requires_experiment_envelope_hash() -> None:
+    envelope = _envelope()
     payload = build_h74_source_observation_authority_payload(
         source_candidate_artifact_hash="sha256:source-candidate",
         backtest_report_hash="sha256:backtest",
         validation_run_hash="sha256:validation",
         code_commit_sha="test-commit",
+        experiment_envelope_payload=envelope,
     )
     verify_h74_source_observation_authority(payload, runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS)
 
@@ -78,6 +80,38 @@ def test_h74_source_authority_requires_experiment_envelope_hash() -> None:
     )
     with pytest.raises(H74ObservationAuthorityError, match="experiment_envelope_hash"):
         verify_h74_source_observation_authority(broken, runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS)
+
+
+def test_h74_source_authority_requires_full_experiment_envelope_payload_or_locator() -> None:
+    envelope = _envelope()
+    payload = build_h74_source_observation_authority_payload(
+        source_candidate_artifact_hash="sha256:source-candidate",
+        backtest_report_hash="sha256:backtest",
+        validation_run_hash="sha256:validation",
+        code_commit_sha="test-commit",
+        experiment_envelope_payload=envelope,
+        experiment_envelope_locator="s3://operator-controlled/h74/envelope.json",
+    )
+
+    verify_h74_source_observation_authority(payload, runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS)
+
+    assert payload["experiment_run_id"] == envelope["experiment_run_id"]
+    assert payload["env_hash"] == envelope["env_hash"]
+    assert payload["strategy_revision_id"] == envelope["strategy_revision_id"]
+    assert payload["risk_scope_id"] == envelope["risk_scope_id"]
+    assert payload["starting_broker_position"] == envelope["starting_broker_position"]
+    assert payload["starting_local_position"] == envelope["starting_local_position"]
+    assert payload["db_snapshot_hash"] == envelope["db_snapshot_hash"]
+    assert payload["experiment_envelope_locator"] == "s3://operator-controlled/h74/envelope.json"
+
+
+def test_h74_source_authority_rejects_synthetic_envelope_hash_without_run_fields() -> None:
+    with pytest.raises(H74ObservationAuthorityError, match="experiment_envelope_payload_required"):
+        build_h74_source_observation_authority_payload(
+            source_candidate_artifact_hash="sha256:source-candidate",
+            code_commit_sha="test-commit",
+            experiment_envelope_hash="sha256:" + "9" * 64,
+        )
 
 
 def test_h74_risk_decision_references_experiment_envelope_hash(tmp_path) -> None:

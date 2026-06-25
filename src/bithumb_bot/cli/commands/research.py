@@ -187,6 +187,7 @@ def _h74_source_observation_authority_generate(args: argparse.Namespace, _contex
             backtest_report_hash=args.backtest_report_hash,
             validation_run_hash=args.validation_run_hash,
             code_commit_sha=args.code_commit_sha,
+            experiment_envelope_path=args.experiment_envelope,
         )
     )
 
@@ -234,6 +235,7 @@ def _build_h74_source_observation_authority_generate(parser: argparse.ArgumentPa
     parser.add_argument("--backtest-report-hash")
     parser.add_argument("--validation-run-hash")
     parser.add_argument("--code-commit-sha")
+    parser.add_argument("--experiment-envelope", required=True)
 
 
 def _build_manifest_calibration(parser: argparse.ArgumentParser) -> None:

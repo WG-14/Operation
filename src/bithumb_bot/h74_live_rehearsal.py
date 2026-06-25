@@ -32,6 +32,7 @@ from .h74_observation import (
     H74_STRATEGY_NAME,
     H74_SOURCE_OBSERVATION_PARAMETERS,
     H74_POSITION_MODE,
+    build_h74_observation_experiment_envelope,
     build_h74_source_observation_authority_payload,
 )
 from .quantity_kernel import OrderRuleSnapshot
@@ -138,9 +139,33 @@ def _write_h74_source_authority_file(
     source_hash = str(equivalence_manifest.get("source_artifact_hash") or "").strip()
     if not source_hash:
         source_hash = "sha256:h74_rehearsal_missing_source_blocks_equivalence"
+    envelope = build_h74_observation_experiment_envelope(
+        experiment_run_id="h74-rehearsal",
+        runtime_git_commit_sha=str(equivalence_manifest.get("runtime_commit") or "rehearsal"),
+        runtime_git_clean=True,
+        env_hash=sha256_prefixed({"h74_rehearsal": "env"}),
+        strategy_revision_id=sha256_prefixed(
+            {"h74_rehearsal": "strategy_revision", "source_hash": source_hash}
+        ),
+        risk_scope_id=sha256_prefixed({"h74_rehearsal": "risk_scope", "source_hash": source_hash}),
+        risk_baseline_certificate_hash=sha256_prefixed(
+            {
+                "h74_rehearsal": "risk_baseline",
+                "risk_capital_krw": 100_000,
+            }
+        ),
+        starting_broker_position={"qty": 0},
+        starting_local_position={"qty": 0},
+        db_snapshot_hash=sha256_prefixed({"h74_rehearsal": "db_snapshot"}),
+        included_history_policy="rehearsal_temp_db_scope",
+    )
+    envelope_path = Path(tmp_dir) / "h74-source-observation-experiment-envelope.json"
+    write_json_atomic(envelope_path, envelope)
     payload = build_h74_source_observation_authority_payload(
         source_candidate_artifact_hash=source_hash,
         backtest_report_hash=str(equivalence_manifest.get("source_backtest_report_hash") or "").strip() or None,
+        experiment_envelope_payload=envelope,
+        experiment_envelope_locator=str(envelope_path),
     )
     authority_path = Path(tmp_dir) / "h74-source-observation-authority.json"
     write_json_atomic(authority_path, payload)

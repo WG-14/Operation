@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from .bootstrap import get_last_explicit_env_load_summary
 from .canonical_decision import canonical_payload_hash
 from .oms import collect_risky_order_state
 from .risk import (
@@ -44,6 +45,24 @@ def _table_content_hash(conn: sqlite3.Connection, table: str) -> str:
         else:
             payload_rows.append({str(index): value for index, value in enumerate(row)})
     return canonical_payload_hash({"table": table, "rows": payload_rows})
+
+
+def _default_env_hash() -> str:
+    return canonical_payload_hash(get_last_explicit_env_load_summary().as_dict())
+
+
+def _replay_input_material_hash(evidence: dict[str, object]) -> str:
+    material = {
+        "schema_version": 1,
+        "db_snapshot_hash": str(evidence.get("db_snapshot_hash") or ""),
+        "env_hash": str(evidence.get("env_hash") or ""),
+        "runtime_scope_id": str(evidence.get("runtime_scope_id") or ""),
+        "risk_scope_id": str(evidence.get("risk_scope_id") or ""),
+        "candle_ts": int(evidence.get("candle_ts") or 0),
+        "mark_price": float(evidence.get("mark_price") or 0.0),
+        "included_tables_hashes": dict(evidence.get("included_tables_hashes") or {}),
+    }
+    return canonical_payload_hash(material)
 
 
 def _strategy_decision_ids_for_risk_scope(
@@ -563,6 +582,8 @@ class StrategyRiskStateProvider:
         risk_baseline_certificate_hash: str | None = None,
         included_history_policy: str | None = None,
         db_snapshot_hash: str | None = None,
+        env_hash: str | None = None,
+        runtime_scope_id: str | None = None,
     ) -> RiskSnapshot:
         effective_risk_scope_id = str(risk_scope_id or strategy_instance_id)
         daily = evaluate_daily_loss_state(
@@ -676,8 +697,8 @@ class StrategyRiskStateProvider:
             "risk_baseline_certificate_hash": str(risk_baseline_certificate_hash or ""),
             "included_history_policy": str(included_history_policy or ""),
             "db_snapshot_hash": effective_db_snapshot_hash,
-            "env_hash": "",
-            "runtime_scope_id": str(strategy_instance_id),
+            "env_hash": str(env_hash or "").strip() or _default_env_hash(),
+            "runtime_scope_id": str(runtime_scope_id or strategy_instance_id),
             "candle_ts": int(as_of_ts_ms),
             "included_tables_hashes": included_tables_hashes,
             "strategy_name": str(strategy_name),
@@ -686,8 +707,8 @@ class StrategyRiskStateProvider:
             "as_of_ts_ms": int(as_of_ts_ms),
             "mark_price": float(mark_price),
             "mark_price_source": str(mark_price_source),
-            "scope": "strategy_instance",
-            "strategy_instance_scope": {
+            "scope": "risk_scope",
+            "risk_scope_via_decision_ids": {
                 "source_table": "strategy_decisions",
                 "source_columns": ["id", "context_json", "decision_ts"],
                 "filters": {
@@ -699,6 +720,9 @@ class StrategyRiskStateProvider:
                 },
                 "decision_ids": (
                     None if strategy_decision_ids is None else list(strategy_decision_ids)
+                ),
+                "legacy_strategy_instance_id_fallback_evidence": (
+                    "used_only_when_decision_context_lacks_risk_scope_id"
                 ),
                 "missing_state_behavior": "fail_closed" if enforced else "telemetry",
             },
@@ -724,10 +748,11 @@ class StrategyRiskStateProvider:
                     "value_available": loss_today is not None,
                 },
                 "daily_order_count": {
-                    "scope": "strategy_instance",
+                    "scope": "risk_scope_via_decision_ids",
                     "table": "orders",
                     "columns": ["created_ts", "entry_decision_id", "exit_decision_id"],
                     "filters": {
+                        "risk_scope_id": effective_risk_scope_id,
                         "entry_or_exit_decision_id_in_strategy_decision_ids": True,
                         "pair_matches_when_present": True,
                         "day_start_lte_created_ts_lte_as_of": True,
@@ -735,10 +760,11 @@ class StrategyRiskStateProvider:
                     "value_available": daily_order_count is not None,
                 },
                 "daily_trade_count": {
-                    "scope": "strategy_instance",
+                    "scope": "risk_scope_via_decision_ids",
                     "table": "trades",
                     "columns": ["ts", "pair", "entry_decision_id", "exit_decision_id"],
                     "filters": {
+                        "risk_scope_id": effective_risk_scope_id,
                         "pair": str(pair),
                         "entry_or_exit_decision_id_in_strategy_decision_ids": True,
                         "day_start_lte_ts_lte_as_of": True,
@@ -746,10 +772,11 @@ class StrategyRiskStateProvider:
                     "value_available": daily_trade_count is not None,
                 },
                 "current_asset_qty": {
-                    "scope": "strategy_instance",
+                    "scope": "risk_scope_via_decision_ids",
                     "table": "open_position_lots",
                     "columns": ["pair", "position_state", "qty_open", "entry_decision_id"],
                     "filters": {
+                        "risk_scope_id": effective_risk_scope_id,
                         "pair": str(pair),
                         "position_state": "open_exposure",
                         "entry_decision_id_in_strategy_decision_ids": True,
@@ -757,10 +784,11 @@ class StrategyRiskStateProvider:
                     "value_available": asset_qty is not None,
                 },
                 "position_entry_price": {
-                    "scope": "strategy_instance",
+                    "scope": "risk_scope_via_decision_ids",
                     "table": "open_position_lots",
                     "columns": ["pair", "position_state", "qty_open", "entry_price", "entry_decision_id"],
                     "filters": {
+                        "risk_scope_id": effective_risk_scope_id,
                         "pair": str(pair),
                         "position_state": "open_exposure",
                         "entry_decision_id_in_strategy_decision_ids": True,
@@ -817,6 +845,8 @@ class StrategyRiskStateProvider:
                 "evaluated_once": True,
             },
         }
+        evidence["replay_input_bundle_hash"] = _replay_input_material_hash(evidence)
+        evidence["risk_input_hash"] = evidence["replay_input_bundle_hash"]
         snapshot = RiskSnapshot(
             evaluation_ts_ms=int(as_of_ts_ms),
             mark_price=float(mark_price),

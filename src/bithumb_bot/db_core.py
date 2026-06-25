@@ -921,11 +921,11 @@ def _backfill_trade_lifecycle_strategy_scope(conn: sqlite3.Connection) -> None:
         )
 
 
-def _owner_scope_from_decision_context(context_json: str | None) -> tuple[str | None, str | None, str | None]:
+def _owner_scope_from_decision_context(context_json: str | None) -> tuple[str | None, str | None, str | None, str]:
     try:
         context = _json_loads_object(context_json)
     except json.JSONDecodeError:
-        return (None, None, None)
+        return (None, None, None, "legacy_strategy_instance_id_compatibility_fallback")
     owner_name = str(context.get("owner_strategy_name") or context.get("strategy_name") or "").strip()
     owner_instance = str(
         context.get("owner_strategy_instance_id") or context.get("strategy_instance_id") or ""
@@ -934,10 +934,14 @@ def _owner_scope_from_decision_context(context_json: str | None) -> tuple[str | 
         context.get("owner_risk_scope_id")
         or context.get("risk_scope_id")
         or context.get("position_owner_id")
-        or owner_instance
         or ""
     ).strip()
-    return (owner_name or None, owner_instance or None, owner_scope or None)
+    if owner_scope:
+        scope_source = "decision_context_risk_scope_id"
+    else:
+        owner_scope = owner_instance
+        scope_source = "legacy_strategy_instance_id_compatibility_fallback"
+    return (owner_name or None, owner_instance or None, owner_scope or None, scope_source)
 
 
 def _looks_operator_flatten(value: object) -> bool:
@@ -967,7 +971,7 @@ def _backfill_trade_lifecycle_owner_actor_scope(conn: sqlite3.Connection) -> Non
         """
     ).fetchall()
     for row in rows:
-        context_owner_name, context_owner_instance, context_scope = _owner_scope_from_decision_context(
+        context_owner_name, context_owner_instance, context_scope, context_scope_source = _owner_scope_from_decision_context(
             row["context_json"]
         )
         legacy_strategy_name = str(row["strategy_name"] or "").strip()
@@ -988,6 +992,7 @@ def _backfill_trade_lifecycle_owner_actor_scope(conn: sqlite3.Connection) -> Non
                 owner_strategy_instance_id = COALESCE(NULLIF(owner_strategy_instance_id, ''), ?),
                 owner_risk_scope_id = COALESCE(NULLIF(owner_risk_scope_id, ''), ?),
                 risk_scope_id = COALESCE(NULLIF(risk_scope_id, ''), ?),
+                risk_scope_source = COALESCE(NULLIF(risk_scope_source, ''), ?),
                 entry_actor = COALESCE(NULLIF(entry_actor, ''), 'strategy'),
                 exit_actor = COALESCE(NULLIF(exit_actor, ''), ?),
                 exit_authority = COALESCE(NULLIF(exit_authority, ''), ?),
@@ -1000,6 +1005,7 @@ def _backfill_trade_lifecycle_owner_actor_scope(conn: sqlite3.Connection) -> Non
                 owner_instance or legacy_instance,
                 owner_scope or legacy_instance,
                 owner_scope or legacy_instance,
+                context_scope_source,
                 exit_actor,
                 exit_authority,
                 1 if operator_flatten else 0,
@@ -3467,6 +3473,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "trade_lifecycles", "owner_strategy_instance_id", "owner_strategy_instance_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "owner_risk_scope_id", "owner_risk_scope_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "risk_scope_id", "risk_scope_id TEXT")
+    _ensure_column(conn, "trade_lifecycles", "risk_scope_source", "risk_scope_source TEXT")
     _ensure_column(conn, "trade_lifecycles", "entry_actor", "entry_actor TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_actor", "exit_actor TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_authority", "exit_authority TEXT")
@@ -4061,6 +4068,21 @@ def record_execution_plan(
             else sha256_prefixed(submit_payload)
         )
         submit_payload = {**submit_payload, "submit_plan_hash": submit_hash}
+        persistence_context = getattr(execution_plan_bundle, "persistence_context", {})
+        if isinstance(persistence_context, Mapping):
+            strategy_risk_decision = persistence_context.get("strategy_risk_decision")
+            if isinstance(strategy_risk_decision, Mapping):
+                strategy_evidence = strategy_risk_decision.get("evidence")
+                if isinstance(strategy_evidence, Mapping):
+                    replay_hash = str(strategy_evidence.get("replay_input_bundle_hash") or "").strip()
+                    if replay_hash:
+                        submit_payload["replay_input_bundle_hash"] = replay_hash
+                        submit_payload["risk_input_hash"] = str(
+                            strategy_evidence.get("risk_input_hash") or replay_hash
+                        )
+                        submit_payload["strategy_risk_decision_hash"] = str(
+                            strategy_risk_decision.get("risk_decision_hash") or ""
+                        )
     status = getattr(execution_plan_bundle, "status", None)
     status_text = ""
     if status is not None and hasattr(status, "status"):

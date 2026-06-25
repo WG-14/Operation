@@ -80,9 +80,13 @@ def build_risk_replay_input_artifact(
 ) -> dict[str, object]:
     if not _valid_hash(db_snapshot_hash):
         raise ValueError("risk_replay_db_snapshot_hash_missing")
+    if not _valid_hash(env_hash):
+        raise ValueError("risk_replay_env_hash_missing")
     included_tables_hashes = {
         str(table): _table_content_hash(conn, str(table)) for table in included_tables
     }
+    if not included_tables_hashes:
+        raise ValueError("risk_replay_included_tables_hashes_missing")
     payload = {
         "schema_version": 1,
         "db_snapshot_hash": str(db_snapshot_hash),
@@ -94,6 +98,7 @@ def build_risk_replay_input_artifact(
         "included_tables_hashes": included_tables_hashes,
     }
     payload["risk_input_hash"] = sha256_prefixed(payload)
+    payload["replay_input_bundle_hash"] = payload["risk_input_hash"]
     payload["risk_decision_hash"] = sha256_prefixed(
         {
             "schema_version": 1,
@@ -113,6 +118,44 @@ def build_risk_replay_input_artifact(
         }
     )
     return payload
+
+
+def replay_input_bundle_hash_from_evidence(evidence: Mapping[str, object]) -> tuple[str, list[str]]:
+    missing: list[str] = []
+    db_snapshot_hash = str(evidence.get("db_snapshot_hash") or "").strip()
+    env_hash = str(evidence.get("env_hash") or "").strip()
+    runtime_scope_id = str(evidence.get("runtime_scope_id") or "").strip()
+    risk_scope_id = str(evidence.get("risk_scope_id") or "").strip()
+    candle_ts = evidence.get("candle_ts")
+    mark_price = evidence.get("mark_price")
+    included_tables_hashes = evidence.get("included_tables_hashes")
+    if not _valid_hash(db_snapshot_hash):
+        missing.append("db_snapshot_hash")
+    if not _valid_hash(env_hash):
+        missing.append("env_hash")
+    if not runtime_scope_id:
+        missing.append("runtime_scope_id")
+    if not risk_scope_id:
+        missing.append("risk_scope_id")
+    if candle_ts is None:
+        missing.append("candle_ts")
+    if mark_price is None:
+        missing.append("mark_price")
+    if not isinstance(included_tables_hashes, Mapping) or not included_tables_hashes:
+        missing.append("included_tables_hashes")
+    if missing:
+        return "", missing
+    payload = {
+        "schema_version": 1,
+        "db_snapshot_hash": db_snapshot_hash,
+        "env_hash": env_hash,
+        "runtime_scope_id": runtime_scope_id,
+        "risk_scope_id": risk_scope_id,
+        "candle_ts": int(candle_ts or 0),
+        "mark_price": float(mark_price or 0.0),
+        "included_tables_hashes": dict(included_tables_hashes),
+    }
+    return sha256_prefixed(payload), []
 
 
 def _generic_risk_actual(decision: Mapping[str, object]) -> tuple[str, str]:
@@ -164,10 +207,61 @@ def _stable_submit_plan_hash(payload: Mapping[str, object]) -> str:
             "authority_label",
             "content_hash",
             "submit_plan_hash",
+            "execution_submit_plan_hash",
+            "replay_input_bundle_hash",
+            "risk_input_hash",
+            "strategy_risk_decision_hash",
         }
         and not str(key).startswith("pre_submit_risk_")
     }
     return sha256_prefixed(hash_input)
+
+
+def _verify_execution_plan_layer(
+    submit_payload: Mapping[str, object],
+    *,
+    expected_replay_input_bundle_hash: str,
+) -> dict[str, object]:
+    if not submit_payload:
+        return _layer_result(
+            layer="execution_plan",
+            replay_status="not_applicable",
+            reason="execution_submit_plan_not_recorded",
+        )
+    expected_hash = str(
+        submit_payload.get("submit_plan_hash")
+        or submit_payload.get("execution_submit_plan_hash")
+        or ""
+    ).strip()
+    actual_hash = _stable_submit_plan_hash(submit_payload)
+    replay_hash = str(submit_payload.get("replay_input_bundle_hash") or "").strip()
+    mismatch = ""
+    status = "pass"
+    missing: list[str] = []
+    if not _valid_hash(expected_hash):
+        status = "fail"
+        mismatch = "execution_submit_plan_hash_missing_or_malformed"
+        missing.append("execution_submit_plan_hash")
+    elif expected_hash != actual_hash:
+        status = "fail"
+        mismatch = "execution_submit_plan_hash_mismatch"
+    elif not _valid_hash(replay_hash):
+        status = "fail"
+        mismatch = "execution_replay_input_bundle_hash_missing"
+        missing.append("replay_input_bundle_hash")
+    elif replay_hash != expected_replay_input_bundle_hash:
+        status = "fail"
+        mismatch = "execution_replay_input_bundle_hash_mismatch"
+    return _layer_result(
+        layer="execution_plan",
+        replay_status=status,
+        reason="matched" if status == "pass" else "mismatch",
+        expected_hash=expected_hash,
+        actual_hash=actual_hash,
+        input_hash=replay_hash,
+        mismatch_reason=mismatch,
+        missing_source_material=missing,
+    )
 
 
 def _layer_result(
@@ -226,12 +320,23 @@ def _verify_generic_layer(layer: str, decision: Mapping[str, object] | None) -> 
     policy_hash = str(decision.get("risk_policy_hash") or "").strip()
     input_hash = str(decision.get("risk_input_hash") or "").strip()
     stored_evidence_hash = str(decision.get("risk_evidence_hash") or "").strip()
+    evidence = dict(decision.get("evidence") or {})
     actual, actual_evidence_hash = _generic_risk_actual(decision)
+    replay_input_hash = ""
+    replay_missing: list[str] = []
+    if layer == "strategy":
+        replay_input_hash, replay_missing = replay_input_bundle_hash_from_evidence(evidence)
     mismatch = ""
     status = "pass"
     if not _valid_hash(expected):
         status = "fail"
         mismatch = "stored_decision_hash_missing_or_malformed"
+    elif replay_missing:
+        status = "fail"
+        mismatch = "replay_input_material_missing:" + ",".join(replay_missing)
+    elif layer == "strategy" and str(evidence.get("replay_input_bundle_hash") or "") != replay_input_hash:
+        status = "fail"
+        mismatch = "replay_input_bundle_hash_mismatch"
     elif expected != actual:
         status = "fail"
         mismatch = "decision_hash_mismatch"
@@ -254,6 +359,7 @@ def _verify_generic_layer(layer: str, decision: Mapping[str, object] | None) -> 
         risk_status=str(decision.get("status") or ""),
         reason_code=str(decision.get("reason_code") or ""),
         mismatch_reason=mismatch,
+        missing_source_material=replay_missing,
     )
 
 
@@ -401,6 +507,13 @@ def _reconstruct_strategy_layer(
             mark_price=float(mark_price),
             policy=policy,
             enforced=str(profile.get("risk_enforcement_mode") or "") == "enforced",
+            risk_scope_id=str(evidence.get("risk_scope_id") or ""),
+            experiment_envelope_hash=str(evidence.get("experiment_envelope_hash") or ""),
+            risk_baseline_certificate_hash=str(evidence.get("risk_baseline_certificate_hash") or ""),
+            included_history_policy=str(evidence.get("included_history_policy") or ""),
+            db_snapshot_hash=str(evidence.get("db_snapshot_hash") or ""),
+            env_hash=str(evidence.get("env_hash") or ""),
+            runtime_scope_id=str(evidence.get("runtime_scope_id") or ""),
         )
     rebuilt = RiskPolicyEngine(policy).evaluate_pre_decision(snapshot).as_dict()
     return (
@@ -565,9 +678,19 @@ def verify_risk_layer_replay(
             strategy["final_layer_status"] = "not_applicable"
     portfolio = _verify_portfolio_layer(context, target_payload)
     pre_submit = _verify_pre_submit_layer(submit_payload)
+    expected_replay_hash = ""
+    if isinstance(strategy_decision, Mapping):
+        strategy_evidence = strategy_decision.get("evidence")
+        if isinstance(strategy_evidence, Mapping):
+            expected_replay_hash = str(strategy_evidence.get("replay_input_bundle_hash") or "").strip()
+    execution_plan = _verify_execution_plan_layer(
+        submit_payload,
+        expected_replay_input_bundle_hash=expected_replay_hash,
+    )
     layers = {
         "strategy": strategy,
         "portfolio": portfolio,
+        "execution_plan": execution_plan,
         "pre_submit": pre_submit,
     }
     applicable = [item for item in layers.values() if item["replay_status"] != "not_applicable"]
@@ -580,6 +703,7 @@ def verify_risk_layer_replay(
         "read_only": True,
         "strategy_risk_replay_status": strategy["replay_status"],
         "portfolio_risk_replay_status": portfolio["replay_status"],
+        "execution_plan_replay_status": execution_plan["replay_status"],
         "pre_submit_risk_replay_status": pre_submit["replay_status"],
         "layers": layers,
     }

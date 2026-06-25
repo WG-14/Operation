@@ -43,28 +43,39 @@ LOT_SEMANTIC_VERSION_V1 = 1
 def _strategy_scope_for_decision_id(
     conn: sqlite3.Connection,
     decision_id: int | None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str]:
     if decision_id is None:
-        return (None, None)
+        return (None, None, None, "legacy_strategy_instance_id_compatibility_fallback")
     row = conn.execute(
         "SELECT context_json FROM strategy_decisions WHERE id=?",
         (int(decision_id),),
     ).fetchone()
     if row is None:
-        return (None, None)
+        return (None, None, None, "legacy_strategy_instance_id_compatibility_fallback")
     try:
         context = json.loads(str(row["context_json"] or "{}"))
     except json.JSONDecodeError:
-        return (None, None)
+        return (None, None, None, "legacy_strategy_instance_id_compatibility_fallback")
     if not isinstance(context, dict):
-        return (None, None)
+        return (None, None, None, "legacy_strategy_instance_id_compatibility_fallback")
     instance_id = str(context.get("strategy_instance_id") or "").strip()
     manifest_hash = str(context.get("runtime_strategy_set_manifest_hash") or "").strip()
     if not instance_id:
         ids = context.get("allocation_selected_strategy_instance_ids")
         if isinstance(ids, list) and len(ids) == 1:
             instance_id = str(ids[0] or "").strip()
-    return (instance_id or None, manifest_hash or None)
+    risk_scope_id = str(
+        context.get("owner_risk_scope_id")
+        or context.get("risk_scope_id")
+        or context.get("position_owner_id")
+        or ""
+    ).strip()
+    if risk_scope_id:
+        risk_scope_source = "decision_context_risk_scope_id"
+    else:
+        risk_scope_id = instance_id
+        risk_scope_source = "legacy_strategy_instance_id_compatibility_fallback"
+    return (instance_id or None, manifest_hash or None, risk_scope_id or None, risk_scope_source)
 
 
 @dataclass(frozen=True)
@@ -1501,13 +1512,13 @@ def apply_fill_lifecycle(
         effective_entry_decision_id = (
             entry_decision_id if entry_decision_id is not None else _row_value(lot, "entry_decision_id", 12)
         )
-        strategy_instance_id, manifest_hash = _strategy_scope_for_decision_id(
+        strategy_instance_id, manifest_hash, risk_scope_id, risk_scope_source = _strategy_scope_for_decision_id(
             conn,
             int(effective_entry_decision_id) if effective_entry_decision_id is not None else None,
         )
         owner_strategy_name = str(strategy_name or _row_value(lot, "strategy_name", 11) or "")
         owner_strategy_instance_id = str(strategy_instance_id or "")
-        owner_risk_scope_id = owner_strategy_instance_id
+        owner_risk_scope_id = str(risk_scope_id or "")
         exit_actor = "operator" if str(exit_reason or "").strip().lower() == "operator_flatten" or "operator_flatten" in str(client_order_id).lower() else "strategy"
         exit_authority = "operator_flatten" if exit_actor == "operator" else (exit_rule_name or "strategy_exit")
 
@@ -1536,6 +1547,7 @@ def apply_fill_lifecycle(
                 owner_strategy_instance_id,
                 owner_risk_scope_id,
                 risk_scope_id,
+                risk_scope_source,
                 entry_actor,
                 exit_actor,
                 exit_authority,
@@ -1547,7 +1559,7 @@ def apply_fill_lifecycle(
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(pair),
@@ -1572,6 +1584,7 @@ def apply_fill_lifecycle(
                 owner_strategy_instance_id,
                 owner_risk_scope_id,
                 owner_risk_scope_id,
+                risk_scope_source,
                 "strategy",
                 exit_actor,
                 exit_authority,
@@ -1612,10 +1625,10 @@ def apply_fill_lifecycle(
     if remaining_lots > 0:
         remaining_qty = lot_count_to_qty(lot_count=remaining_lots, lot_size=float(lot_rules.lot_size))
         fallback_exit_fee = float(fee) * (remaining_qty / total_exit_qty) if total_exit_qty > eps else 0.0
-        strategy_instance_id, manifest_hash = _strategy_scope_for_decision_id(conn, entry_decision_id)
+        strategy_instance_id, manifest_hash, risk_scope_id, risk_scope_source = _strategy_scope_for_decision_id(conn, entry_decision_id)
         owner_strategy_name = str(strategy_name or "")
         owner_strategy_instance_id = str(strategy_instance_id or "")
-        owner_risk_scope_id = owner_strategy_instance_id
+        owner_risk_scope_id = str(risk_scope_id or "")
         exit_actor = "operator" if str(exit_reason or "").strip().lower() == "operator_flatten" or "operator_flatten" in str(client_order_id).lower() else "strategy"
         exit_authority = "operator_flatten" if exit_actor == "operator" else (exit_rule_name or "strategy_exit")
         conn.execute(
@@ -1643,6 +1656,7 @@ def apply_fill_lifecycle(
                 owner_strategy_instance_id,
                 owner_risk_scope_id,
                 risk_scope_id,
+                risk_scope_source,
                 entry_actor,
                 exit_actor,
                 exit_authority,
@@ -1654,7 +1668,7 @@ def apply_fill_lifecycle(
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(pair),
@@ -1679,6 +1693,7 @@ def apply_fill_lifecycle(
                 owner_strategy_instance_id,
                 owner_risk_scope_id,
                 owner_risk_scope_id,
+                risk_scope_source,
                 "strategy",
                 exit_actor,
                 exit_authority,

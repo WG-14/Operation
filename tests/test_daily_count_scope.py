@@ -9,10 +9,29 @@ from bithumb_bot.runtime.daily_participation_count_provider import (
 )
 from bithumb_bot.runtime_risk_engine import RuntimeRiskEngineAdapter
 from bithumb_bot.strategy.daily_participation_policy import DailyParticipationPolicyConfig
-from bithumb_bot.h74_observation import build_h74_source_observation_authority_payload
+from bithumb_bot.h74_observation import (
+    build_h74_observation_experiment_envelope,
+    build_h74_source_observation_authority_payload,
+)
 
 
 DECISION_TS = 1_704_046_800_000
+
+
+def _h74_source_envelope() -> dict[str, object]:
+    return build_h74_observation_experiment_envelope(
+        experiment_run_id="test-h74-source",
+        runtime_git_commit_sha="unit",
+        runtime_git_clean=True,
+        env_hash="sha256:" + "1" * 64,
+        strategy_revision_id="sha256:" + "2" * 64,
+        risk_scope_id="sha256:" + "3" * 64,
+        risk_baseline_certificate_hash="sha256:" + "4" * 64,
+        starting_broker_position={"qty": 0},
+        starting_local_position={"qty": 0},
+        db_snapshot_hash="sha256:" + "5" * 64,
+        included_history_policy="declared_live_history_scope",
+    )
 
 
 def _daily_config() -> DailyParticipationPolicyConfig:
@@ -126,6 +145,7 @@ def test_h74_policy_records_daily_count_scopes() -> None:
         backtest_report_hash="sha256:backtest",
         validation_run_hash="sha256:validation",
         code_commit_sha="unit",
+        experiment_envelope_payload=_h74_source_envelope(),
     )
 
     bound = payload["hash_bound_parameters"]

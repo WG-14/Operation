@@ -252,7 +252,7 @@ def test_strategy_risk_state_provider_derives_reproducible_snapshot_and_blocks_c
     assert first.input_hash() == second.input_hash()
     assert first.state_source == "runtime_db_strategy_instance_ledger"
     assert str(first.evidence["risk_state_evidence_hash"]).startswith("sha256:")
-    assert first.evidence["scope"] == "strategy_instance"
+    assert first.evidence["scope"] == "risk_scope"
     assert decision.reason_code == "MAX_DAILY_ORDER_COUNT"
     assert decision.status == "BLOCK"
 
@@ -367,7 +367,7 @@ def test_strategy_risk_state_provider_does_not_share_same_pair_instance_state(tm
     assert beta.current_drawdown_metric.state == "undefined"
     assert alpha.loss_today == pytest.approx(10.0)
     assert beta.loss_today == pytest.approx(0.0)
-    assert alpha.evidence["state_derivation"]["position_entry_price"]["scope"] == "strategy_instance"
+    assert alpha.evidence["state_derivation"]["position_entry_price"]["scope"] == "risk_scope_via_decision_ids"
     assert alpha.evidence["state_derivation"]["current_drawdown_pct"]["scope"] == "risk_scope"
 
 

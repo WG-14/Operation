@@ -18,6 +18,7 @@ from bithumb_bot.decision_envelope import DecisionEnvelope
 from bithumb_bot.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
 from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
+    build_h74_observation_experiment_envelope,
     build_h74_source_observation_authority_payload,
 )
 from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
@@ -261,6 +262,22 @@ def _h74_source_parameters(**overrides: object) -> dict[str, object]:
     return params
 
 
+def _h74_source_envelope() -> dict[str, object]:
+    return build_h74_observation_experiment_envelope(
+        experiment_run_id="test-h74-source",
+        runtime_git_commit_sha="test-commit",
+        runtime_git_clean=True,
+        env_hash="sha256:" + "1" * 64,
+        strategy_revision_id="sha256:" + "2" * 64,
+        risk_scope_id="sha256:" + "3" * 64,
+        risk_baseline_certificate_hash="sha256:" + "4" * 64,
+        starting_broker_position={"qty": 0},
+        starting_local_position={"qty": 0},
+        db_snapshot_hash="sha256:" + "5" * 64,
+        included_history_policy="declared_live_history_scope",
+    )
+
+
 def _write_h74_source_authority(tmp_path: Path) -> Path:
     authority_path = tmp_path / "h74-source-authority.json"
     authority_path.write_text(
@@ -270,6 +287,7 @@ def _write_h74_source_authority(tmp_path: Path) -> Path:
                 backtest_report_hash="sha256:backtest",
                 validation_run_hash="sha256:validation",
                 code_commit_sha="test-commit",
+                experiment_envelope_payload=_h74_source_envelope(),
             )
         ),
         encoding="utf-8",

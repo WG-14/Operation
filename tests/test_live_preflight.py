@@ -33,11 +33,28 @@ from bithumb_bot import operator_notification_service
 from bithumb_bot.markets import MarketInfo, MarketRegistry
 from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
+    build_h74_observation_experiment_envelope,
     build_h74_source_observation_authority_payload,
 )
 from tests.support.live_auth import TEST_BITHUMB_API_KEY, TEST_BITHUMB_API_SECRET
 
 _REAL_GET_EFFECTIVE_ORDER_RULES = order_rules.get_effective_order_rules
+
+
+def _h74_source_envelope() -> dict[str, object]:
+    return build_h74_observation_experiment_envelope(
+        experiment_run_id="test-h74-source",
+        runtime_git_commit_sha="test-commit",
+        runtime_git_clean=True,
+        env_hash="sha256:" + "1" * 64,
+        strategy_revision_id="sha256:" + "2" * 64,
+        risk_scope_id="sha256:" + "3" * 64,
+        risk_baseline_certificate_hash="sha256:" + "4" * 64,
+        starting_broker_position={"qty": 0},
+        starting_local_position={"qty": 0},
+        db_snapshot_hash="sha256:" + "5" * 64,
+        included_history_policy="declared_live_history_scope",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -995,6 +1012,7 @@ def test_live_dry_run_preflight_accepts_h74_source_runtime_strategy_set_without_
         backtest_report_hash="sha256:backtest",
         validation_run_hash="sha256:validation",
         code_commit_sha="test-commit",
+        experiment_envelope_payload=_h74_source_envelope(),
     )
     authority_path = tmp_path / "h74-source-authority.json"
     write_json_atomic(authority_path, authority)
@@ -1030,6 +1048,7 @@ def test_live_real_order_preflight_accepts_h74_source_runtime_strategy_set_with_
         backtest_report_hash="sha256:backtest",
         validation_run_hash="sha256:validation",
         code_commit_sha="test-commit",
+        experiment_envelope_payload=_h74_source_envelope(),
     )
     authority_path = tmp_path / "h74-source-authority.json"
     smoke_path = tmp_path / "h74-source-smoke.json"

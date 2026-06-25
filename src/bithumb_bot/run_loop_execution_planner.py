@@ -167,6 +167,18 @@ def _h74_authority_planning_fields(settings_obj: object) -> dict[str, object]:
         "experiment_envelope_hash": str(
             authority.get("experiment_envelope_hash") or bound.get("experiment_envelope_hash") or ""
         ),
+        "experiment_run_id": str(authority.get("experiment_run_id") or bound.get("experiment_run_id") or ""),
+        "env_hash": str(authority.get("env_hash") or bound.get("env_hash") or ""),
+        "strategy_revision_id": str(
+            authority.get("strategy_revision_id") or bound.get("strategy_revision_id") or ""
+        ),
+        "risk_scope_id": str(authority.get("risk_scope_id") or bound.get("risk_scope_id") or ""),
+        "starting_broker_position": (
+            dict(authority.get("starting_broker_position") or bound.get("starting_broker_position") or {})
+        ),
+        "starting_local_position": (
+            dict(authority.get("starting_local_position") or bound.get("starting_local_position") or {})
+        ),
         "risk_baseline_certificate_hash": str(
             authority.get("risk_baseline_certificate_hash")
             or bound.get("risk_baseline_certificate_hash")
@@ -176,6 +188,9 @@ def _h74_authority_planning_fields(settings_obj: object) -> dict[str, object]:
             authority.get("included_history_policy") or bound.get("included_history_policy") or ""
         ),
         "db_snapshot_hash": str(authority.get("db_snapshot_hash") or bound.get("db_snapshot_hash") or ""),
+        "db_snapshot_locator": str(
+            authority.get("db_snapshot_locator") or bound.get("db_snapshot_locator") or ""
+        ),
         "source_artifact_hash": str(
             bound.get("source_candidate_artifact_hash") or bound.get("source_artifact_hash") or ""
         ),
@@ -183,10 +198,18 @@ def _h74_authority_planning_fields(settings_obj: object) -> dict[str, object]:
             "artifact_type": authority.get("artifact_type"),
             "authority_content_hash": authority.get("authority_content_hash"),
             "authority_parameter_hash": authority.get("authority_parameter_hash"),
+            "experiment_run_id": authority.get("experiment_run_id"),
+            "env_hash": authority.get("env_hash"),
+            "strategy_revision_id": authority.get("strategy_revision_id"),
+            "risk_scope_id": authority.get("risk_scope_id"),
+            "starting_broker_position": authority.get("starting_broker_position"),
+            "starting_local_position": authority.get("starting_local_position"),
             "experiment_envelope_hash": authority.get("experiment_envelope_hash"),
+            "experiment_envelope_locator": authority.get("experiment_envelope_locator"),
             "risk_baseline_certificate_hash": authority.get("risk_baseline_certificate_hash"),
             "included_history_policy": authority.get("included_history_policy"),
             "db_snapshot_hash": authority.get("db_snapshot_hash"),
+            "db_snapshot_locator": authority.get("db_snapshot_locator"),
             "hash_bound_parameters": bound,
         },
         "strategy_instance_id": str(authority.get("strategy_instance_id") or bound.get("strategy_instance_id") or ""),
@@ -1787,6 +1810,8 @@ class ExecutionPlanner:
                                     context.get("included_history_policy") or ""
                                 ),
                                 db_snapshot_hash=str(context.get("db_snapshot_hash") or ""),
+                                env_hash=str(context.get("env_hash") or ""),
+                                runtime_scope_id=str(context.get("runtime_scope_id") or strategy_instance_id),
                             )
                             missing_state = missing_required_risk_state(risk_profile.policy, snapshot)
                         if enforced and missing_state:

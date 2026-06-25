@@ -25,6 +25,7 @@ from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
     H74ObservationAuthorityError,
     build_h74_observation_authority_payload,
+    build_h74_observation_experiment_envelope,
     build_h74_source_observation_authority_payload,
     h74_source_observation_risk_policy_hash,
     h74_source_runtime_values_from_settings,
@@ -141,12 +142,32 @@ def _rehash_source_risk_policy(payload: dict) -> dict:
     return _rehash_authority(payload)
 
 
+def _source_envelope(**overrides: object) -> dict[str, object]:
+    payload = {
+        "experiment_run_id": "exp-source-1",
+        "runtime_git_commit_sha": "test-commit",
+        "runtime_git_clean": True,
+        "env_hash": "sha256:" + "1" * 64,
+        "strategy_revision_id": "sha256:" + "2" * 64,
+        "risk_scope_id": "sha256:" + "3" * 64,
+        "risk_baseline_certificate_hash": "sha256:" + "4" * 64,
+        "starting_broker_position": {"qty": 0},
+        "starting_local_position": {"qty": 0},
+        "db_snapshot_hash": "sha256:" + "5" * 64,
+        "included_history_policy": "declared_live_history_scope",
+    }
+    payload.update(overrides)
+    return build_h74_observation_experiment_envelope(**payload)  # type: ignore[arg-type]
+
+
 def _source_authority() -> dict:
+    envelope = _source_envelope()
     return build_h74_source_observation_authority_payload(
         source_candidate_artifact_hash="sha256:source-candidate",
         backtest_report_hash="sha256:backtest",
         validation_run_hash="sha256:validation",
         code_commit_sha="test-commit",
+        experiment_envelope_payload=envelope,
     )
 
 
@@ -692,6 +713,7 @@ def test_h74_source_observation_rejects_expired_authority() -> None:
         source_candidate_artifact_hash="sha256:source-candidate",
         expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         code_commit_sha="test-commit",
+        experiment_envelope_payload=_source_envelope(),
     )
 
     with pytest.raises(H74ObservationAuthorityError, match="expired"):
@@ -783,6 +805,7 @@ def test_h74_source_observation_selection_rejects_expired_authority(
         source_candidate_artifact_hash="sha256:source-candidate",
         expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         code_commit_sha="test-commit",
+        experiment_envelope_payload=_source_envelope(),
     )
     path = tmp_path / "source-authority.json"
     path.write_text(json.dumps(authority), encoding="utf-8")
@@ -1364,3 +1387,21 @@ def test_h74_real_observation_records_included_history_policy() -> None:
     assert payload["hash_bound_parameters"]["included_history_policy"] == "declared_live_history_scope"
     assert str(payload["experiment_envelope_hash"]).startswith("sha256:")
     assert str(payload["risk_baseline_certificate_hash"]).startswith("sha256:")
+
+
+def test_h74_real_observation_records_full_experiment_envelope_fields() -> None:
+    payload = _source_authority()
+    bound = payload["hash_bound_parameters"]
+
+    assert payload["experiment_run_id"] == "exp-source-1"
+    assert payload["env_hash"] == "sha256:" + "1" * 64
+    assert payload["strategy_revision_id"] == "sha256:" + "2" * 64
+    assert payload["risk_scope_id"] == "sha256:" + "3" * 64
+    assert payload["starting_broker_position"] == {"qty": 0}
+    assert payload["starting_local_position"] == {"qty": 0}
+    assert payload["db_snapshot_hash"] == "sha256:" + "5" * 64
+    assert payload["risk_baseline_certificate_hash"] == "sha256:" + "4" * 64
+    assert bound["experiment_run_id"] == payload["experiment_run_id"]
+    assert bound["env_hash"] == payload["env_hash"]
+    assert bound["starting_broker_position"] == payload["starting_broker_position"]
+    assert bound["starting_local_position"] == payload["starting_local_position"]
