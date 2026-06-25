@@ -2,7 +2,7 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:ecb5fcd370bbff1c9d1b49cd7eff57e91f28a21319b2f43955c6fecd050e9cfb`
+Spec hash: `sha256:ce8fcc87a6ee9de3069b450ec834425269d4194764a18ab16d097807866e5f7e`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -25,6 +25,7 @@ Spec hash: `sha256:ecb5fcd370bbff1c9d1b49cd7eff57e91f28a21319b2f43955c6fecd050e9
 | `BITHUMB_ENV_FILE` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE runtime configuration. |
 | `BITHUMB_ENV_FILE_LIVE` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE_LIVE runtime configuration. |
 | `BITHUMB_ENV_FILE_PAPER` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE_PAPER runtime configuration. |
+| `BITHUMB_OPERATOR_DIRTY_RUNTIME_ACK` | string | internal |  | no | no | no | internal |  | BITHUMB_OPERATOR_DIRTY_RUNTIME_ACK runtime configuration. |
 | `BITHUMB_ORDER_RPS_LIMIT` | string | common |  | no | no | no | P1 |  | BITHUMB_ORDER_RPS_LIMIT runtime configuration. |
 | `BITHUMB_PRIVATE_RPS_LIMIT` | string | common |  | no | no | no | P1 |  | BITHUMB_PRIVATE_RPS_LIMIT runtime configuration. |
 | `BITHUMB_PYTEST_RUN_ID` | string | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_RUN_ID runtime configuration. |
@@ -34,6 +35,9 @@ Spec hash: `sha256:ecb5fcd370bbff1c9d1b49cd7eff57e91f28a21319b2f43955c6fecd050e9
 | `BITHUMB_RESEARCH_ALLOW_UNSAFE_FORK` | bool | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_ALLOW_UNSAFE_FORK runtime configuration. |
 | `BITHUMB_RESEARCH_MAX_WORKERS` | number | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_MAX_WORKERS runtime configuration. |
 | `BITHUMB_RESEARCH_MP_START_METHOD` | string | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_MP_START_METHOD runtime configuration. |
+| `BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH runtime configuration. |
+| `BITHUMB_RUNTIME_GIT_DIFF_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_HASH runtime configuration. |
+| `BITHUMB_SOURCE_ARCHIVE_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_SOURCE_ARCHIVE_HASH runtime configuration. |
 | `BITHUMB_TOTAL_PROCESS_BUDGET` | number | internal |  | no | no | no | internal |  | BITHUMB_TOTAL_PROCESS_BUDGET runtime configuration. |
 | `BITHUMB_WS_MYASSET_ENABLED` | bool | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_ENABLED runtime configuration. |
 | `BITHUMB_WS_MYASSET_RECV_TIMEOUT_SEC` | number | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_RECV_TIMEOUT_SEC runtime configuration. |

@@ -6,8 +6,33 @@ import sqlite3
 from bithumb_bot.execution_service import ExecutionSubmitPlan
 from bithumb_bot.portfolio_target import PortfolioTarget
 from bithumb_bot.risk_contract import RiskPolicy, RiskSnapshot, SubmitPlan
-from bithumb_bot.risk_layer_replay import verify_risk_layer_replay, verify_risk_layer_replay_db
+from bithumb_bot.risk_layer_replay import (
+    replay_input_bundle_hash_from_evidence,
+    verify_risk_layer_replay,
+    verify_risk_layer_replay_db,
+)
 from bithumb_bot.risk_policy_engine import RiskPolicyEngine
+
+
+def _strategy_replay_evidence() -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "strategy_instance_id": "sma:unit",
+        "strategy_name": "sma_with_filter",
+        "pair": "KRW-BTC",
+        "interval": "1m",
+        "as_of_ts_ms": 1_800_000_000_000,
+        "db_snapshot_hash": "sha256:" + "a" * 64,
+        "env_hash": "sha256:" + "b" * 64,
+        "runtime_scope_id": "runtime:unit",
+        "risk_scope_id": "risk:unit",
+        "candle_ts": 1_800_000_000_000,
+        "mark_price": 100.0,
+        "included_tables_hashes": {"trade_lifecycles": "sha256:" + "c" * 64},
+    }
+    replay_hash, missing = replay_input_bundle_hash_from_evidence(evidence)
+    assert missing == []
+    evidence["replay_input_bundle_hash"] = replay_hash
+    return evidence
 
 
 def _policy() -> RiskPolicy:
@@ -27,7 +52,7 @@ def _snapshot() -> RiskSnapshot:
         loss_today=0.0,
         daily_order_count=0,
         state_source="runtime_db_ledger",
-        evidence={"strategy_instance_id": "sma:unit", "pair": "KRW-BTC"},
+        evidence=_strategy_replay_evidence(),
     )
 
 
@@ -63,6 +88,9 @@ def _cycle_payload() -> tuple[dict[str, object], dict[str, object]]:
         extra_payload={"pre_submit_risk_required": True},
     )
     submit_payload = plan.as_final_payload()
+    submit_payload["replay_input_bundle_hash"] = str(
+        strategy_decision["evidence"]["replay_input_bundle_hash"]  # type: ignore[index]
+    )
     plan_hash = str(submit_payload["submit_plan_hash"])
     pre_submit_decision = RiskPolicyEngine(policy).evaluate_pre_submit(
         SubmitPlan(

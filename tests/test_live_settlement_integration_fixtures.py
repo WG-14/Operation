@@ -16,7 +16,7 @@ from bithumb_bot.broker.live_submit_orchestrator import (
     LIVE_STANDARD_SUBMIT_CONTRACT_PROFILE,
     StandardSubmitPipelineRequest,
 )
-from bithumb_bot.config import settings
+from bithumb_bot.config import runtime_code_provenance, settings
 from bithumb_bot.db_core import ensure_db, init_portfolio
 from bithumb_bot.execution_models import OrderIntent, SubmitPlan, SubmitPriceTickPolicy
 from bithumb_bot.fee_observation import fee_accounting_status
@@ -69,7 +69,17 @@ class _ScriptedBithumbBroker(BithumbBroker):
         return deepcopy(self.payloads[key])
 
 
+@pytest.fixture(autouse=True)
+def _clear_runtime_code_provenance_cache():
+    runtime_code_provenance.cache_clear()
+    yield
+    runtime_code_provenance.cache_clear()
+
+
 def _configure_live_fixture(tmp_path, monkeypatch):
+    runtime_code_provenance.cache_clear()
+    monkeypatch.setenv("BITHUMB_DEPLOY_COMMIT_SHA", "test-live-settlement-clean")
+    monkeypatch.setenv("BITHUMB_DEPLOY_DIRTY", "false")
     db_path = tmp_path / "live_equivalent.sqlite"
     object.__setattr__(settings, "DB_PATH", str(db_path))
     object.__setattr__(settings, "MODE", "live")

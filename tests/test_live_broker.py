@@ -1261,6 +1261,16 @@ def _fake_market_data(monkeypatch):
     monkeypatch.setattr(live_module, "fetch_orderbook_top", fake.fetch_orderbook_top)
     return fake
 
+
+@pytest.fixture(autouse=True)
+def _stable_runtime_code_provenance(monkeypatch):
+    config_module.runtime_code_provenance.cache_clear()
+    monkeypatch.setenv("BITHUMB_DEPLOY_COMMIT_SHA", "test-live-broker-clean")
+    monkeypatch.setenv("BITHUMB_DEPLOY_DIRTY", "false")
+    yield
+    config_module.runtime_code_provenance.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _reset_pretrade_guards():
     from bithumb_bot.broker import order_rules as _order_rules

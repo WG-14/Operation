@@ -153,4 +153,8 @@ def test_runtime_code_provenance_accepts_explicit_deploy_commit_env(monkeypatch)
         "working_tree_dirty": True,
         "source": "env",
         "git_available": False,
+        "runtime_git_diff_hash": "",
+        "runtime_git_diff_artifact_path": "",
+        "source_archive_hash": "",
+        "operator_dirty_runtime_ack": "",
     }

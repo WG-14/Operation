@@ -61,11 +61,13 @@ def _h74_source_envelope() -> dict[str, object]:
 def _restore_settings():
     old_values = {field.name: getattr(settings, field.name) for field in fields(type(settings))}
     old_cache = dict(order_rules._cached_rules)
+    config.runtime_code_provenance.cache_clear()
     yield
     for key, value in old_values.items():
         object.__setattr__(settings, key, value)
     order_rules._cached_rules.clear()
     order_rules._cached_rules.update(old_cache)
+    config.runtime_code_provenance.cache_clear()
 
 
 
@@ -100,6 +102,9 @@ def _set_valid_live_defaults(
     db_path: str | None = None,
     stub_order_rules: bool = True,
 ) -> None:
+    config.runtime_code_provenance.cache_clear()
+    monkeypatch.setenv("BITHUMB_DEPLOY_COMMIT_SHA", "test-live-preflight-clean")
+    monkeypatch.setenv("BITHUMB_DEPLOY_DIRTY", "false")
     data_root = Path(os.environ["DATA_ROOT"])
     run_root = Path(os.environ["RUN_ROOT"])
     resolved_db_path = str(
