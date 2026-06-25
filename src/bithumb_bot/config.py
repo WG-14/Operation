@@ -463,6 +463,8 @@ def _h74_source_observation_authority_selection(
         payload = load_h74_authority_payload(authority_path)
         authority_type = str(payload.get("authority_type") or payload.get("artifact_type") or "")
         if authority_type == H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
+            alignment = validate_h74_authority_file_env_alignment(authority_path, settings_obj=cfg)
+            authority_type = str(alignment.authority_type)
             verify_h74_source_observation_authority_file(authority_path, settings_obj=cfg)
         else:
             alignment = validate_h74_authority_file_env_alignment(authority_path, settings_obj=cfg)
@@ -514,12 +516,11 @@ def validate_runtime_profile_bindings_for_live_startup(
         h74_source_authority_verified = False
         h74_source_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
         if profile_required and not profile_path and h74_source_authority_path:
-            from .h74_authority_alignment import validate_h74_authority_file_env_alignment
-            from .h74_observation import H74_STRATEGY_NAME
+            from .h74_observation import H74_STRATEGY_NAME, verify_h74_source_observation_authority_file
 
             if str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME).strip().lower() == H74_STRATEGY_NAME:
                 try:
-                    validate_h74_authority_file_env_alignment(h74_source_authority_path, settings_obj=cfg)
+                    verify_h74_source_observation_authority_file(h74_source_authority_path, settings_obj=cfg)
                     h74_source_authority_verified = True
                     profile_required = False
                 except Exception as exc:

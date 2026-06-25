@@ -16,6 +16,7 @@ import pytest
 from bithumb_bot.db_core import ensure_schema
 from bithumb_bot.decision_envelope import DecisionEnvelope
 from bithumb_bot.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
+from bithumb_bot.decision_equivalence import sha256_prefixed
 from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
     build_h74_observation_experiment_envelope,
@@ -278,18 +279,29 @@ def _h74_source_envelope() -> dict[str, object]:
     )
 
 
-def _write_h74_source_authority(tmp_path: Path) -> Path:
+def _write_h74_source_authority(
+    tmp_path: Path,
+    *,
+    behavior_overrides: dict[str, object] | None = None,
+) -> Path:
     authority_path = tmp_path / "h74-source-authority.json"
+    payload = build_h74_source_observation_authority_payload(
+        source_candidate_artifact_hash="sha256:source-candidate",
+        backtest_report_hash="sha256:backtest",
+        validation_run_hash="sha256:validation",
+        code_commit_sha="test-commit",
+        experiment_envelope_payload=_h74_source_envelope(),
+    )
+    if behavior_overrides:
+        bound = dict(payload["hash_bound_parameters"])
+        bound.update(behavior_overrides)
+        payload["hash_bound_parameters"] = bound
+        payload["authority_parameter_hash"] = sha256_prefixed(bound)
+        payload["authority_content_hash"] = sha256_prefixed(
+            {k: v for k, v in payload.items() if k != "authority_content_hash"}
+        )
     authority_path.write_text(
-        json.dumps(
-            build_h74_source_observation_authority_payload(
-                source_candidate_artifact_hash="sha256:source-candidate",
-                backtest_report_hash="sha256:backtest",
-                validation_run_hash="sha256:validation",
-                code_commit_sha="test-commit",
-                experiment_envelope_payload=_h74_source_envelope(),
-            )
-        ),
+        json.dumps(payload),
         encoding="utf-8",
     )
     return authority_path
@@ -2793,8 +2805,11 @@ def test_compute_legacy_signal_live_single_strategy_uses_structured_runtime_spec
     tmp_path: Path,
     _clear_runtime_strategy_source_env: None,
 ) -> None:
-    authority_path = _write_h74_source_authority(tmp_path)
     structured_parameters = _h74_source_parameters(DAILY_PARTICIPATION_BUY_FRACTION=0.17)
+    authority_path = _write_h74_source_authority(
+        tmp_path,
+        behavior_overrides={"DAILY_PARTICIPATION_BUY_FRACTION": 0.17},
+    )
     runtime_strategy_set_json = json.dumps(
         {
             "market_scope": {"mode": "single_pair", "pair": "KRW-BTC", "interval": "1m"},
@@ -2827,6 +2842,11 @@ def test_compute_legacy_signal_live_single_strategy_uses_structured_runtime_spec
         "RUNTIME_STRATEGY_SET_JSON": settings.RUNTIME_STRATEGY_SET_JSON,
         "ACTIVE_STRATEGIES": settings.ACTIVE_STRATEGIES,
         "H74_SOURCE_OBSERVATION_AUTHORITY_PATH": settings.H74_SOURCE_OBSERVATION_AUTHORITY_PATH,
+        "DAILY_PARTICIPATION_BUY_FRACTION": getattr(
+            settings,
+            "DAILY_PARTICIPATION_BUY_FRACTION",
+            H74_SOURCE_OBSERVATION_PARAMETERS["DAILY_PARTICIPATION_BUY_FRACTION"],
+        ),
     }
     captured: list[RuntimeDecisionRequest] = []
 
@@ -2860,6 +2880,7 @@ def test_compute_legacy_signal_live_single_strategy_uses_structured_runtime_spec
     monkeypatch.setattr(runtime_strategy_decision, "get_runtime_decision_adapter", lambda _name: _Adapter())
     monkeypatch.setattr(RuntimeStrategyDecisionCollector, "collect", _collect)
     monkeypatch.setenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", str(authority_path))
+    monkeypatch.setenv("DAILY_PARTICIPATION_BUY_FRACTION", "0.17")
     try:
         object.__setattr__(settings, "MODE", "live")
         object.__setattr__(settings, "LIVE_DRY_RUN", True)
@@ -2879,6 +2900,7 @@ def test_compute_legacy_signal_live_single_strategy_uses_structured_runtime_spec
         for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
             if key.isupper():
                 object.__setattr__(settings, key, value)
+        object.__setattr__(settings, "DAILY_PARTICIPATION_BUY_FRACTION", 0.17)
 
         payload = runtime_strategy_decision.compute_legacy_signal_for_diagnostics(
             _conn(),
