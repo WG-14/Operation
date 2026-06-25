@@ -445,17 +445,17 @@ def _h74_source_observation_authority_selection(
     if not authority_path:
         return H74SourceObservationAuthoritySelection(verified=False)
 
+    from .h74_authority_alignment import validate_h74_authority_file_env_alignment
     from .h74_observation import (
         H74_SOURCE_OBSERVATION_RISK_POLICY_SOURCE,
         H74_STRATEGY_NAME,
-        verify_h74_source_observation_authority_file,
     )
 
     if str(strategy_name or "").strip().lower() != H74_STRATEGY_NAME:
         return H74SourceObservationAuthoritySelection(verified=False)
 
     try:
-        verify_h74_source_observation_authority_file(authority_path, settings_obj=cfg)
+        validate_h74_authority_file_env_alignment(authority_path, settings_obj=cfg)
     except Exception as exc:
         raise LiveModeValidationError(
             "h74_source_observation_authority_validation_failed: "
@@ -502,11 +502,12 @@ def validate_runtime_profile_bindings_for_live_startup(
         h74_source_authority_verified = False
         h74_source_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
         if profile_required and not profile_path and h74_source_authority_path:
-            from .h74_observation import H74_STRATEGY_NAME, verify_h74_source_observation_authority_file
+            from .h74_authority_alignment import validate_h74_authority_file_env_alignment
+            from .h74_observation import H74_STRATEGY_NAME
 
             if str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME).strip().lower() == H74_STRATEGY_NAME:
                 try:
-                    verify_h74_source_observation_authority_file(h74_source_authority_path, settings_obj=cfg)
+                    validate_h74_authority_file_env_alignment(h74_source_authority_path, settings_obj=cfg)
                     h74_source_authority_verified = True
                     profile_required = False
                 except Exception as exc:
@@ -1721,6 +1722,8 @@ def validate_live_real_order_execution_preflight(cfg: Settings) -> None:
 
 def validate_live_dry_run_loop_startup_contract(cfg: Settings) -> None:
     """Validate that the live dry-run loop is explicitly unarmed and no-submit."""
+    from .live_dry_run_isolation import validate_live_dry_run_state_isolation
+
     issues: list[str] = []
     if cfg.MODE != "live":
         issues.append(f"MODE=live is required for live-dry-run (got MODE={cfg.MODE})")
@@ -1732,6 +1735,10 @@ def validate_live_dry_run_loop_startup_contract(cfg: Settings) -> None:
         raise LiveModeValidationError(
             "live dry-run loop startup contract failed: " + "; ".join(issues)
         )
+    try:
+        validate_live_dry_run_state_isolation(cfg)
+    except Exception as exc:
+        raise LiveModeValidationError(f"live dry-run loop startup contract failed: {exc}") from exc
     validate_live_mode_preflight(cfg)
     profile_report = validate_runtime_profile_bindings_for_live_startup(
         cfg,
@@ -2155,6 +2162,16 @@ def live_execution_contract_summary(
         approved_profile_summary = profile_result.audit_fields()
     config_contract = config_contract_metadata(cfg)
     submit_authority_policy = submit_authority_policy_from_settings(cfg)
+    h74_authority_env_alignment: dict[str, object] = {"ok": None, "reason_code": "not_configured"}
+    h74_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
+    if h74_authority_path:
+        from .h74_authority_alignment import validate_h74_authority_file_env_alignment
+
+        h74_authority_env_alignment = validate_h74_authority_file_env_alignment(
+            h74_authority_path,
+            settings_obj=cfg,
+            raise_on_mismatch=False,
+        ).as_dict()
     code_provenance = runtime_code_provenance()
     provenance_gate = validate_runtime_code_provenance_for_live_real_order(
         cfg,
@@ -2184,6 +2201,7 @@ def live_execution_contract_summary(
         "runtime_code_provenance_gate": provenance_gate,
         "approved_profile": approved_profile_summary,
         "runtime_profile_binding": profile_binding_summary,
+        "h74_authority_env_alignment": h74_authority_env_alignment,
         "runtime_selection_kind": profile_binding_summary.get("runtime_selection_kind"),
         "runtime_strategy_set_source": profile_binding_summary.get("runtime_strategy_set_source"),
         "profile_binding_kind": profile_binding_summary.get("profile_binding_kind"),
@@ -2228,6 +2246,11 @@ def log_live_execution_contract(
     )
     config_contract = summary.get("config_contract") if isinstance(summary.get("config_contract"), dict) else {}
     lint_findings = summary.get("live_env_contract_lint_findings") or []
+    h74_authority_env_alignment = (
+        summary.get("h74_authority_env_alignment")
+        if isinstance(summary.get("h74_authority_env_alignment"), dict)
+        else {}
+    )
     lint_reason_codes = [
         str(item.get("reason_code"))
         for item in lint_findings
@@ -2301,6 +2324,12 @@ def log_live_execution_contract(
             env_file_hash_prefix=explicit_env_file.get("content_hash_prefix"),
             live_env_contract_lints=",".join(str(item) for item in summary.get("live_env_contract_lints") or []) or "none",
             live_env_contract_lint_reason_codes=",".join(lint_reason_codes) or "none",
+            h74_authority_env_alignment_ok=h74_authority_env_alignment.get("ok"),
+            h74_authority_env_alignment_reason_code=h74_authority_env_alignment.get("reason_code"),
+            h74_authority_env_alignment_mismatched_keys=",".join(
+                str(item) for item in h74_authority_env_alignment.get("mismatched_keys") or []
+            )
+            or "none",
             config_schema_version=config_contract.get("config_schema_version"),
             config_spec_hash=config_contract.get("config_spec_hash"),
             settings_effective_hash=config_contract.get("settings_effective_hash"),

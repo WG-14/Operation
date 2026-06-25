@@ -20,6 +20,7 @@ from .h74_submit_semantics import (
 
 H74_OBSERVATION_AUTHORITY_ARTIFACT_TYPE = "h74_live_observation_authority"
 H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE = "h74_source_live_observation_authority"
+H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE = "h74_source_variant_live_probe_authority"
 H74_SOURCE_OBSERVATION_AUTHORITY_ENV = "H74_SOURCE_OBSERVATION_AUTHORITY_PATH"
 H74_SOURCE_OBSERVATION_SMOKE_EVIDENCE_ENV = "H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH"
 H74_STRATEGY_NAME = "daily_participation_sma"
@@ -475,6 +476,83 @@ def build_h74_source_observation_authority_payload(
     return payload
 
 
+def build_h74_source_variant_observation_authority_payload(
+    *,
+    base_authority: Mapping[str, object],
+    variant_overrides: Mapping[str, object],
+    experiment_envelope_payload: Mapping[str, object],
+    variant_id: str = "h74_no_window_execution_path_probe_v1",
+    variant_reason: str = "remove_entry_window_for_buy_sell_execution_path_probe",
+    expires_at: datetime | None = None,
+) -> dict[str, Any]:
+    from .h74_variant_contract import allowed_variant_override_keys, validate_h74_variant_overrides
+
+    verify_h74_source_observation_authority(
+        dict(base_authority),
+        runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS,
+    )
+    overrides = validate_h74_variant_overrides(variant_overrides)
+    start = int(overrides.get("DAILY_PARTICIPATION_WINDOW_START_HOUR_KST", -1))
+    end = int(overrides.get("DAILY_PARTICIPATION_WINDOW_END_HOUR_KST", -1))
+    if (start, end) != (0, 24):
+        raise H74ObservationAuthorityError("h74_source_variant_authority_no_window_override_required")
+    variant_id_text = str(variant_id or "").strip()
+    if not variant_id_text:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_variant_id_missing")
+    envelope_fields = _required_h74_source_envelope_fields(experiment_envelope_payload)
+    base_bound = dict(base_authority.get("hash_bound_parameters") or {})
+    variant_bound = {**base_bound, **overrides}
+    expiry = expires_at or (datetime.now(timezone.utc) + timedelta(days=H74_OBSERVATION_WINDOW_DAYS))
+    variant_bound["expires_at"] = expiry.astimezone(timezone.utc).isoformat()
+    variant_bound["base_candidate_id"] = H74_SOURCE_CANDIDATE_ID
+    variant_bound["variant_id"] = variant_id_text
+    variant_bound["variant_overrides"] = dict(overrides)
+    variant_bound["probe_scope"] = "buy_sell_path_only"
+    base_behavior_parameter_hash = h74_parameter_hash(base_bound)
+    variant_behavior_parameter_hash = h74_parameter_hash(variant_bound)
+    equivalent = base_behavior_parameter_hash == variant_behavior_parameter_hash
+    if equivalent:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_behavior_hash_unchanged")
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "artifact_type": H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
+        "authority_type": H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
+        "base_candidate_id": H74_SOURCE_CANDIDATE_ID,
+        "candidate_id": None,
+        "base_source_authority_hash": str(base_authority.get("authority_content_hash") or "").strip(),
+        "variant_id": variant_id_text,
+        "variant_reason": str(variant_reason or "").strip(),
+        "variant_overrides": dict(overrides),
+        "allowed_variant_override_keys": list(allowed_variant_override_keys()),
+        "equivalence_to_source_candidate": False,
+        "production_approval": False,
+        "research_promotion_evidence": False,
+        "research_promotion_evidence_status": False,
+        "promotion_grade": False,
+        "approved_profile_evidence": False,
+        "research_equivalence_status": "NOT_APPLICABLE",
+        "acceptance_track": "execution_path_probe",
+        "probe_scope": "buy_sell_path_only",
+        "contract_scope": "h74_source_variant_live_probe_buy_sell_path_only",
+        "hash_bound_parameters": variant_bound,
+        "base_behavior_parameter_hash": base_behavior_parameter_hash,
+        "variant_behavior_parameter_hash": variant_behavior_parameter_hash,
+        "risk_policy": dict(base_authority.get("risk_policy") or {}),
+        "risk_policy_hash": str(base_authority.get("risk_policy_hash") or "").strip(),
+        "runtime_bound_behavior_parameter_names": list(base_authority.get("runtime_bound_behavior_parameter_names") or []),
+        "experiment_run_id": str(envelope_fields["experiment_run_id"]),
+        "env_hash": str(envelope_fields["env_hash"]),
+        "experiment_envelope_hash": str(envelope_fields["experiment_envelope_hash"]),
+        "db_snapshot_hash": str(envelope_fields["db_snapshot_hash"]),
+        "db_snapshot_locator": str(envelope_fields["db_snapshot_locator"]),
+        "authority_parameter_hash": sha256_prefixed(variant_bound),
+    }
+    payload["authority_content_hash"] = sha256_prefixed(
+        {k: v for k, v in payload.items() if k != "authority_content_hash"}
+    )
+    return payload
+
+
 def verify_h74_observation_authority(
     payload: dict[str, Any],
     *,
@@ -731,6 +809,86 @@ def verify_h74_source_observation_authority(
         raise H74ObservationAuthorityError("h74_source_observation_authority_expired")
 
 
+def verify_h74_source_variant_observation_authority(
+    payload: dict[str, Any],
+    *,
+    runtime_values: dict[str, object],
+    now: datetime | None = None,
+) -> None:
+    if str(payload.get("artifact_type") or "") != H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_artifact_type_invalid")
+    if str(payload.get("authority_type") or "") != H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_authority_type_invalid")
+    if str(payload.get("base_candidate_id") or "") != H74_SOURCE_CANDIDATE_ID:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_base_candidate_id_invalid")
+    if not str(payload.get("variant_id") or "").strip():
+        raise H74ObservationAuthorityError("h74_source_variant_authority_variant_id_missing")
+    for key in ("promotion_grade", "research_promotion_evidence", "approved_profile_evidence", "production_approval", "equivalence_to_source_candidate"):
+        if bool(payload.get(key)) is not False:
+            raise H74ObservationAuthorityError(f"h74_source_variant_authority_{key}_must_be_false")
+    expected_hash = str(payload.get("authority_content_hash") or "")
+    actual_hash = sha256_prefixed({k: v for k, v in payload.items() if k != "authority_content_hash"})
+    if expected_hash != actual_hash:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_hash_mismatch")
+    overrides = dict(payload.get("variant_overrides") or {})
+    from .h74_variant_contract import validate_h74_variant_overrides
+
+    validate_h74_variant_overrides(overrides)
+    bound = dict(payload.get("hash_bound_parameters") or {})
+    if int(bound.get("DAILY_PARTICIPATION_WINDOW_START_HOUR_KST")) != 0:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_window_start_invalid")
+    if int(bound.get("DAILY_PARTICIPATION_WINDOW_END_HOUR_KST")) != 24:
+        raise H74ObservationAuthorityError("h74_source_variant_authority_window_end_invalid")
+    if str(payload.get("base_behavior_parameter_hash") or "") == str(payload.get("variant_behavior_parameter_hash") or ""):
+        raise H74ObservationAuthorityError("h74_source_variant_authority_behavior_hash_not_distinct")
+    for expected_key, expected_value in overrides.items():
+        if bound.get(expected_key) != expected_value:
+            raise H74ObservationAuthorityError(f"h74_source_variant_authority_override_not_bound:{expected_key}")
+    for key, expected in bound.items():
+        if key in {
+            "expires_at",
+            "observation_window_days",
+            "candidate_id",
+            "base_candidate_id",
+            "source_candidate_artifact_hash",
+            "backtest_report_hash",
+            "validation_run_hash",
+            "code_commit_sha",
+            "approved_profile_evidence",
+            "production_approval",
+            "risk_policy_hash",
+            "experiment_run_id",
+            "env_hash",
+            "strategy_revision_id",
+            "risk_scope_id",
+            "starting_broker_position",
+            "starting_local_position",
+            "experiment_envelope_hash",
+            "experiment_envelope_locator",
+            "risk_baseline_certificate_hash",
+            "included_history_policy",
+            "db_snapshot_hash",
+            "db_snapshot_locator",
+            "entry_submit_semantics",
+            "entry_submit_semantics_name",
+            "submit_semantics_hash",
+            "variant_id",
+            "variant_overrides",
+            "probe_scope",
+        }:
+            continue
+        actual = runtime_values.get(key)
+        if not _values_match(key, actual, expected):
+            raise H74ObservationAuthorityError(f"h74_source_variant_authority_runtime_mismatch:{key}")
+    for key, expected in overrides.items():
+        actual = runtime_values.get(key)
+        if not _values_match(key, actual, expected):
+            raise H74ObservationAuthorityError(f"h74_source_variant_authority_runtime_mismatch:{key}")
+    expires_at = datetime.fromisoformat(str(bound.get("expires_at")).replace("Z", "+00:00"))
+    if expires_at <= (now or datetime.now(timezone.utc)).astimezone(timezone.utc):
+        raise H74ObservationAuthorityError("h74_source_variant_authority_expired")
+
+
 def _verify_h74_source_observation_risk_policy(policy_payload: dict[str, object]) -> None:
     policy = risk_policy_from_mapping(policy_payload)
     if policy.policy_status != "enabled":
@@ -854,6 +1012,17 @@ def verify_h74_source_observation_authority_file(path: str | Path, *, settings_o
         verify_h74_source_live_pipeline_smoke_evidence_file(smoke_evidence_path)
 
 
+def verify_h74_source_variant_observation_authority_file(path: str | Path, *, settings_obj: object) -> None:
+    with Path(path).expanduser().open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise H74ObservationAuthorityError("h74_source_variant_authority_payload_not_object")
+    verify_h74_source_variant_observation_authority(
+        payload,
+        runtime_values=h74_source_runtime_values_from_settings(settings_obj),
+    )
+
+
 def h74_source_observation_risk_profile_payload_from_settings(
     settings_obj: object,
 ) -> dict[str, object] | None:
@@ -867,7 +1036,9 @@ def h74_source_observation_risk_profile_payload_from_settings(
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise H74ObservationAuthorityError("h74_source_observation_authority_payload_not_object")
-    verify_h74_source_observation_authority_file(authority_path, settings_obj=settings_obj)
+    from .h74_authority_alignment import validate_h74_authority_file_env_alignment
+
+    validate_h74_authority_file_env_alignment(authority_path, settings_obj=settings_obj)
     risk_policy = payload.get("risk_policy")
     if not isinstance(risk_policy, dict):
         raise H74ObservationAuthorityError("h74_source_observation_authority_risk_policy_missing")

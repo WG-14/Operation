@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+import sqlite3
+from types import SimpleNamespace
+
+import pytest
+
+from bithumb_bot.live_dry_run_isolation import LiveDryRunIsolationError, validate_live_dry_run_state_isolation
+
+
+def test_live_dry_run_refuses_live_sqlite_without_copy() -> None:
+    cfg = SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, DB_PATH="/var/lib/bithumb-bot/data/live/trades/live.sqlite")
+    with pytest.raises(LiveDryRunIsolationError, match="refuses_direct_live_sqlite"):
+        validate_live_dry_run_state_isolation(cfg)
+
+
+def test_live_dry_run_does_not_modify_target_position_state() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE target_position_state(pair TEXT)")
+    before = conn.execute("SELECT COUNT(*) FROM target_position_state").fetchone()[0]
+    cfg = SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, DB_PATH="/var/lib/bithumb-bot/data/live/reports/dryrun.sqlite")
+    validate_live_dry_run_state_isolation(cfg)
+    after = conn.execute("SELECT COUNT(*) FROM target_position_state").fetchone()[0]
+    assert after == before
+
+
+def test_live_dry_run_does_not_leave_authoritative_virtual_open() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE strategy_virtual_target_state(lifecycle_state TEXT)")
+    cfg = SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, DB_PATH="/var/lib/bithumb-bot/data/live/reports/dryrun.sqlite")
+    validate_live_dry_run_state_isolation(cfg)
+    assert conn.execute("SELECT COUNT(*) FROM strategy_virtual_target_state WHERE lifecycle_state='virtual_open'").fetchone()[0] == 0
+
+
+def test_live_dry_run_artifacts_are_namespaced() -> None:
+    cfg = SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, DB_PATH="/var/lib/bithumb-bot/data/live/reports/dryrun.sqlite")
+    validate_live_dry_run_state_isolation(cfg)
+    assert "/reports/" in cfg.DB_PATH

@@ -7,6 +7,7 @@ from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
     build_h74_observation_experiment_envelope,
     build_h74_source_observation_authority_payload,
+    build_h74_source_variant_observation_authority_payload,
     h74_source_observation_risk_policy,
     verify_h74_observation_experiment_envelope,
     verify_h74_source_observation_authority,
@@ -112,6 +113,26 @@ def test_h74_source_authority_rejects_synthetic_envelope_hash_without_run_fields
             code_commit_sha="test-commit",
             experiment_envelope_hash="sha256:" + "9" * 64,
         )
+
+
+def test_h74_source_variant_does_not_verify_as_plain_source_authority() -> None:
+    envelope = _envelope()
+    source = build_h74_source_observation_authority_payload(
+        source_candidate_artifact_hash="sha256:source-candidate",
+        code_commit_sha="test-commit",
+        experiment_envelope_payload=envelope,
+    )
+    variant = build_h74_source_variant_observation_authority_payload(
+        base_authority=source,
+        variant_overrides={
+            "DAILY_PARTICIPATION_WINDOW_START_HOUR_KST": 0,
+            "DAILY_PARTICIPATION_WINDOW_END_HOUR_KST": 24,
+        },
+        experiment_envelope_payload=envelope,
+    )
+
+    with pytest.raises(H74ObservationAuthorityError, match="artifact_type_invalid"):
+        verify_h74_source_observation_authority(variant, runtime_values=H74_SOURCE_OBSERVATION_PARAMETERS)
 
 
 def test_h74_risk_decision_references_experiment_envelope_hash(tmp_path) -> None:
