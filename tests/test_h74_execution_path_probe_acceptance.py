@@ -20,6 +20,22 @@ def _pass_report() -> dict[str, object]:
         "sell_client_order_id": "sell-1",
         "sell_fill_id": 9,
         "lifecycle_id": 10,
+        "buy_leg": {
+            "decision_id": 1,
+            "execution_plan_id": 2,
+            "order_id": 3,
+            "client_order_id": "buy-1",
+            "fill_id": 4,
+            "open_lot_id": 5,
+        },
+        "sell_leg": {
+            "decision_id": 6,
+            "execution_plan_id": 7,
+            "order_id": 8,
+            "client_order_id": "sell-1",
+            "fill_id": 9,
+            "lifecycle_id": 10,
+        },
         "accounting": {"validated": True},
         "final_flat_or_documented_dust": True,
         "research_equivalence": False,
@@ -37,6 +53,7 @@ def test_acceptance_consumes_probe_report_schema() -> None:
 def test_acceptance_rejects_report_without_lifecycle_id() -> None:
     report = _pass_report()
     report["lifecycle_id"] = None
+    report["sell_leg"]["lifecycle_id"] = None
     result = evaluate_h74_execution_path_probe_acceptance(report)
     assert result["execution_path_probe_status"] != "PASS"
     assert "lifecycle_id" in result["missing_evidence"]

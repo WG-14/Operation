@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,57 @@ def test_live_dry_run_does_not_leave_live_h74_virtual_open() -> None:
     with pytest.raises(LiveDryRunIsolationError):
         validate_live_dry_run_state_isolation(cfg)
     assert conn.execute("SELECT COUNT(*) FROM strategy_virtual_target_state WHERE lifecycle_state='virtual_open'").fetchone()[0] == 0
+
+
+def test_cmd_live_dry_run_does_not_modify_live_target_position_state(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "live" / "trades" / "live.sqlite"
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE target_position_state(pair TEXT)")
+    conn.commit()
+    before = conn.execute("SELECT COUNT(*) FROM target_position_state").fetchone()[0]
+    conn.close()
+    monkeypatch.setattr(
+        operator_commands,
+        "settings",
+        SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, LIVE_REAL_ORDER_ARMED=False, DB_PATH=str(db_path)),
+    )
+
+    with pytest.raises(LiveDryRunIsolationError):
+        operator_commands.cmd_live_dry_run()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        after = conn.execute("SELECT COUNT(*) FROM target_position_state").fetchone()[0]
+    finally:
+        conn.close()
+    assert after == before
+
+
+def test_cmd_live_dry_run_does_not_leave_live_h74_virtual_open(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "live" / "trades" / "live.sqlite"
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE strategy_virtual_target_state(lifecycle_state TEXT)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        operator_commands,
+        "settings",
+        SimpleNamespace(MODE="live", LIVE_DRY_RUN=True, LIVE_REAL_ORDER_ARMED=False, DB_PATH=str(db_path)),
+    )
+
+    with pytest.raises(LiveDryRunIsolationError):
+        operator_commands.cmd_live_dry_run()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM strategy_virtual_target_state WHERE lifecycle_state='virtual_open'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
 
 
 def test_live_dry_run_artifacts_are_namespaced() -> None:

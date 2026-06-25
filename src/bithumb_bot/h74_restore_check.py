@@ -8,7 +8,6 @@ from .h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
     H74ObservationAuthorityError,
     h74_parameter_hash,
-    h74_source_runtime_values_from_settings,
 )
 from .runtime_strategy_set import h74_runtime_adapter_materialized_values_from_settings
 from .research.hashing import sha256_prefixed
@@ -25,6 +24,15 @@ RESTORE_REQUIRED_KEYS = (
 )
 
 
+def _restore_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        try:
+            return float(actual) == float(expected)
+        except (TypeError, ValueError):
+            return False
+    return str(actual) == str(expected)
+
+
 def verify_h74_restore_original_window(
     *,
     authority_payload: Mapping[str, object],
@@ -34,15 +42,15 @@ def verify_h74_restore_original_window(
     if str(authority_payload.get("authority_type") or authority_payload.get("artifact_type") or "") != H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
         raise H74ObservationAuthorityError("restore_original_window_requires_source_authority")
     alignment = validate_h74_authority_env_alignment(authority_payload, settings_obj=settings_obj)
-    effective = {
-        **h74_source_runtime_values_from_settings(settings_obj),
-        **h74_runtime_adapter_materialized_values_from_settings(settings_obj),
-    }
+    effective = h74_runtime_adapter_materialized_values_from_settings(settings_obj)
+    raw = dict(alignment.raw_settings_parameters)
     expected = {key: H74_SOURCE_OBSERVATION_PARAMETERS.get(key) for key in RESTORE_REQUIRED_KEYS}
     expected["MAX_DAILY_ORDER_COUNT"] = H74_SOURCE_OBSERVATION_PARAMETERS.get("max_daily_order_count")
-    actual = {key: effective.get(key) for key in RESTORE_REQUIRED_KEYS}
-    actual["MAX_DAILY_ORDER_COUNT"] = effective.get("max_daily_order_count")
-    mismatched = [key for key in RESTORE_REQUIRED_KEYS if str(actual.get(key)) != str(expected.get(key))]
+    actual = {key: effective.get(key, raw.get(key)) for key in RESTORE_REQUIRED_KEYS}
+    actual["MAX_DAILY_ORDER_COUNT"] = effective.get("max_daily_order_count", raw.get("max_daily_order_count"))
+    mismatched = [
+        key for key in RESTORE_REQUIRED_KEYS if not _restore_value_matches(actual.get(key), expected.get(key))
+    ]
     if mismatched:
         raise H74ObservationAuthorityError("restore_original_window_behavior_mismatch:" + ",".join(mismatched))
     artifact = {

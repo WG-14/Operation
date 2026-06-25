@@ -19,11 +19,45 @@ REQUIRED_REPORT_FIELDS = (
 )
 
 
+def _nested_missing(report: Mapping[str, object]) -> list[str]:
+    missing: list[str] = []
+    buy_leg = report.get("buy_leg")
+    sell_leg = report.get("sell_leg")
+    if not isinstance(buy_leg, Mapping):
+        missing.append("buy_leg")
+    else:
+        for key in (
+            "decision_id",
+            "execution_plan_id",
+            "order_id",
+            "client_order_id",
+            "fill_id",
+            "open_lot_id",
+        ):
+            if not buy_leg.get(key):
+                missing.append(f"buy_leg.{key}")
+    if not isinstance(sell_leg, Mapping):
+        missing.append("sell_leg")
+    else:
+        for key in (
+            "decision_id",
+            "execution_plan_id",
+            "order_id",
+            "client_order_id",
+            "fill_id",
+            "lifecycle_id",
+        ):
+            if not sell_leg.get(key):
+                missing.append(f"sell_leg.{key}")
+    return missing
+
+
 def evaluate_h74_execution_path_probe_acceptance(report: Mapping[str, object]) -> dict[str, object]:
     if str(report.get("artifact_type") or "") != "h74_execution_path_probe_report":
         missing = ["h74_execution_path_probe_report_schema"]
     else:
         missing = [key for key in REQUIRED_REPORT_FIELDS if not report.get(key)]
+        missing.extend(_nested_missing(report))
     accounting = report.get("accounting")
     if not isinstance(accounting, Mapping) or not bool(accounting.get("validated")):
         missing.append("accounting.validated")

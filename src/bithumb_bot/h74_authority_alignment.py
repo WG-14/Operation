@@ -71,10 +71,13 @@ def validate_h74_authority_env_alignment(
     payload = dict(authority_payload)
     authority_type = str(payload.get("authority_type") or payload.get("artifact_type") or "")
     raw_settings_values = h74_source_runtime_values_from_settings(settings_obj)
-    materialized_behavior_values = h74_runtime_adapter_materialized_values_from_settings(settings_obj)
-    runtime_values = {**raw_settings_values, **materialized_behavior_values}
+    effective_behavior_values = h74_runtime_adapter_materialized_values_from_settings(settings_obj)
     bound = dict(payload.get("hash_bound_parameters") or {})
-    structural_runtime_values = {**runtime_values, **{key: value for key, value in bound.items() if key in runtime_values}}
+    structural_runtime_values = {
+        **raw_settings_values,
+        **effective_behavior_values,
+        **{key: value for key, value in bound.items() if key in raw_settings_values or key in effective_behavior_values},
+    }
     if authority_type == H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
         verify_h74_source_observation_authority(payload, runtime_values=structural_runtime_values)
     elif authority_type == H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
@@ -82,8 +85,8 @@ def validate_h74_authority_env_alignment(
     else:
         raise H74ObservationAuthorityError("h74_authority_type_invalid")
 
-    behavior_keys = [key for key in bound if key in runtime_values]
-    mismatched = tuple(sorted(key for key in behavior_keys if not _match(runtime_values.get(key), bound.get(key))))
+    behavior_keys = [key for key in bound if key in effective_behavior_values]
+    mismatched = tuple(sorted(key for key in behavior_keys if not _match(effective_behavior_values.get(key), bound.get(key))))
     ok = not mismatched
     result = H74AuthorityEnvAlignment(
         ok=ok,
@@ -91,7 +94,7 @@ def validate_h74_authority_env_alignment(
         authority_type=authority_type,
         mismatched_keys=mismatched,
         raw_settings_parameters={key: raw_settings_values.get(key) for key in sorted(raw_settings_values)},
-        effective_behavior_parameters={key: runtime_values.get(key) for key in sorted(runtime_values)},
+        effective_behavior_parameters={key: effective_behavior_values.get(key) for key in sorted(effective_behavior_values)},
     )
     if not ok and raise_on_mismatch:
         raise H74ObservationAuthorityError(

@@ -139,15 +139,10 @@ def _accounting_ok(
     return buy_trade is not None and sell_trade is not None
 
 
-def _final_asset_qty(conn: sqlite3.Connection, *, probe_run_id: str, pair: str) -> float:
+def _final_asset_qty(conn: sqlite3.Connection, *, probe_run_id: str, pair: str) -> float | None:
     row = _first_row(conn, "portfolio", probe_run_id=probe_run_id, pair=pair)
-    if row is None and _table_exists(conn, "portfolio"):
-        cols = _columns(conn, "portfolio")
-        if RUN_CORRELATION_COLUMNS[0] not in cols and "id" in cols:
-            fetched = conn.execute("SELECT * FROM portfolio WHERE id=1").fetchone()
-            if fetched is not None:
-                keys = fetched.keys() if hasattr(fetched, "keys") else [desc[0] for desc in conn.execute("SELECT * FROM portfolio WHERE id=1").description]
-                row = dict(zip(keys, tuple(fetched)))
+    if row is None:
+        return None
     value = _field(row, "asset_qty", "qty", "base_qty")
     return 0.0 if value in (None, "") else float(value)
 
@@ -233,6 +228,7 @@ def generate_h74_execution_path_probe_report(
 
     buy_complete = all((buy_decision, buy_plan, buy_order, buy_event, buy_fill, open_lot, buy_client_order_id))
     sell_complete = all((sell_decision, sell_plan, sell_order, sell_event, sell_fill, sell_client_order_id))
+    final_flat_or_documented_dust = final_qty is not None and abs(final_qty) <= float(min_executable_qty)
     if not buy_complete:
         status = "INCOMPLETE_BUY" if buy_plan is not None else "BLOCKED"
     elif not sell_complete:
@@ -241,7 +237,7 @@ def generate_h74_execution_path_probe_report(
         status = "FAILED_LIFECYCLE"
     elif not accounting_ok:
         status = "FAILED_ACCOUNTING"
-    elif abs(final_qty) > float(min_executable_qty):
+    elif not final_flat_or_documented_dust:
         status = "FINAL_POSITION_NOT_FLAT"
     else:
         status = "PASS"
@@ -290,7 +286,7 @@ def generate_h74_execution_path_probe_report(
         "sell_leg": sell_leg,
         "accounting": {"validated": accounting_ok},
         "final_asset_qty": final_qty,
-        "final_flat_or_documented_dust": abs(final_qty) <= float(min_executable_qty),
+        "final_flat_or_documented_dust": final_flat_or_documented_dust,
         "research_equivalence": False,
         "research_equivalence_status": "NOT_APPLICABLE",
         "production_approval": False,
