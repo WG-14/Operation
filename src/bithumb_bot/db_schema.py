@@ -32,8 +32,8 @@ def init_portfolio(conn: sqlite3.Connection, start_cash: float | None = None) ->
     conn.execute(
         """
         INSERT INTO portfolio(
-            id, cash_krw, asset_qty, cash_available, cash_locked, asset_available, asset_locked
-        ) VALUES (1, ?, 0.0, ?, 0.0, 0.0, 0.0)
+            id, probe_run_id, cash_krw, asset_qty, cash_available, cash_locked, asset_available, asset_locked
+        ) VALUES (1, NULL, ?, 0.0, ?, 0.0, 0.0, 0.0)
         """,
         (cash, cash),
     )

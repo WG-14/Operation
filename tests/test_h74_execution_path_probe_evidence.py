@@ -64,6 +64,145 @@ def test_probe_report_filters_by_probe_run_id() -> None:
     assert report["sell_order_id"] is None
 
 
+def test_probe_report_requires_run_id() -> None:
+    conn = _conn()
+
+    try:
+        generate_h74_execution_path_probe_report(conn, probe_run_id="")
+    except ValueError as exc:
+        assert str(exc) == "probe_run_id_required"
+    else:
+        raise AssertionError("expected probe_run_id_required")
+
+
+def test_probe_report_without_matching_run_id_does_not_pass() -> None:
+    conn = _conn()
+    _seed_pass(conn, "other-run")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] != "PASS"
+
+
+def test_probe_report_buy_only_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] != "PASS"
+    assert report["sell_order_id"] is None
+
+
+def test_probe_report_sell_only_does_not_pass() -> None:
+    conn = _conn()
+    _seed_sell(conn, "probe-1")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] != "PASS"
+    assert report["buy_order_id"] is None
+
+
+def test_probe_report_orders_and_fills_mixed_run_ids_do_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("UPDATE fills SET probe_run_id='other-run'")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] != "PASS"
+    assert report["buy_fill_id"] is None
+
+
+def test_probe_report_accounting_mixed_run_id_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("UPDATE trades SET probe_run_id='other-run'")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] == "FAILED_ACCOUNTING"
+
+
+def test_probe_report_lifecycle_mixed_run_id_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('other-run', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] == "FAILED_LIFECYCLE"
+
+
+def test_probe_report_final_flat_mixed_run_id_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('other-run', 'KRW-BTC', 0)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] == "FINAL_POSITION_NOT_FLAT"
+    assert report["final_flat_or_documented_dust"] is False
+
+
+def test_probe_report_missing_final_flat_evidence_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] == "FINAL_POSITION_NOT_FLAT"
+
+
+def test_probe_report_final_non_flat_evidence_does_not_pass() -> None:
+    conn = _conn()
+    _seed_buy(conn, "probe-1")
+    _seed_sell(conn, "probe-1")
+    conn.execute("INSERT INTO trade_lifecycles(probe_run_id, pair) VALUES('probe-1', 'KRW-BTC')")
+    conn.execute("INSERT INTO portfolio(probe_run_id, pair, asset_qty) VALUES('probe-1', 'KRW-BTC', 0.001)")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] == "FINAL_POSITION_NOT_FLAT"
+
+
+def test_uncorrelated_legacy_rows_do_not_satisfy_probe_report() -> None:
+    conn = _conn()
+    _seed_pass(conn, "probe-1")
+    for table in (
+        "strategy_decisions",
+        "execution_plan",
+        "orders",
+        "order_events",
+        "fills",
+        "trades",
+        "open_position_lots",
+        "trade_lifecycles",
+        "portfolio",
+    ):
+        conn.execute(f"UPDATE {table} SET probe_run_id=NULL")
+
+    report = generate_h74_execution_path_probe_report(conn, probe_run_id="probe-1")
+
+    assert report["execution_path_probe_status"] != "PASS"
+
+
 def test_probe_report_requires_open_lot_created() -> None:
     conn = _conn()
     _seed_buy(conn, "probe-1", open_lot=False)

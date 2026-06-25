@@ -59,6 +59,8 @@ def _first_row(
     if side:
         if "side" in cols:
             _append(clauses, params, "upper(side)=?", (side.upper(),))
+        elif table == "execution_plan" and "submit_plan_side" in cols:
+            _append(clauses, params, "upper(submit_plan_side)=?", (side.upper(),))
         elif table == "strategy_decisions" and "signal" in cols:
             _append(clauses, params, "upper(signal)=?", (side.upper(),))
         elif client_order_id and "client_order_id" in cols:

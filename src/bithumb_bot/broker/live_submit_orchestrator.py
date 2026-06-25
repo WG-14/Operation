@@ -86,6 +86,7 @@ class StandardSubmitPipelineRequest:
     strategy_instance_id: str | None = None
     cycle_id: str | None = None
     authority_hash: str | None = None
+    probe_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,7 @@ class StandardSubmitPlanningFailureRequest:
     strategy_instance_id: str | None = None
     cycle_id: str | None = None
     authority_hash: str | None = None
+    probe_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -667,6 +669,7 @@ def _planning_failure(
         final_intended_qty=request.final_intended_qty,
         final_submitted_qty=request.final_submitted_qty,
         decision_reason_code=request.decision_reason_code,
+        probe_run_id=request.probe_run_id,
         local_intent_state="PLAN_REJECTED",
         ts_ms=request.ts,
         status="FAILED",
@@ -885,6 +888,7 @@ def _plan_submit_attempt(*, context: _StandardSubmitAttemptContext) -> None:
         final_intended_qty=request.final_intended_qty,
         final_submitted_qty=request.final_submitted_qty,
         decision_reason_code=request.decision_reason_code,
+        probe_run_id=request.probe_run_id,
         local_intent_state="PENDING_SUBMIT",
         ts_ms=request.ts,
         status="PENDING_SUBMIT",

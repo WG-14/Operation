@@ -76,6 +76,7 @@ class SchemaValidationError(RuntimeError):
 REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "portfolio": (
         "id",
+        "probe_run_id",
         "cash_krw",
         "asset_qty",
         "cash_available",
@@ -85,6 +86,7 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "trades": (
         "id",
+        "probe_run_id",
         "ts",
         "pair",
         "interval",
@@ -97,6 +99,7 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "orders": (
         "id",
+        "probe_run_id",
         "client_order_id",
         "status",
         "side",
@@ -111,6 +114,7 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "fills": (
         "id",
+        "probe_run_id",
         "client_order_id",
         "fill_ts",
         "price",
@@ -119,10 +123,11 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "fee_accounting_status",
         "trade_id",
     ),
-    "order_events": ("id", "client_order_id", "event_type", "event_ts"),
+    "order_events": ("id", "probe_run_id", "client_order_id", "event_type", "event_ts"),
     "bot_health": ("id", "recovery_required_count", "unresolved_open_order_count", "startup_gate_reason"),
     "open_position_lots": (
         "id",
+        "probe_run_id",
         "pair",
         "entry_trade_id",
         "qty_open",
@@ -131,7 +136,7 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "position_semantic_basis",
         "position_state",
     ),
-    "trade_lifecycles": ("id", "entry_trade_id", "exit_trade_id", "matched_qty", "net_pnl"),
+    "trade_lifecycles": ("id", "probe_run_id", "entry_trade_id", "exit_trade_id", "matched_qty", "net_pnl"),
     "external_cash_adjustments": ("id", "adjustment_key", "event_type", "event_ts", "delta_amount"),
     "manual_flat_accounting_repairs": ("id", "repair_key", "event_type", "event_ts", "repair_basis"),
     "external_position_adjustments": ("id", "adjustment_key", "event_type", "event_ts", "adjustment_basis"),
@@ -246,6 +251,7 @@ REQUIRED_RUNTIME_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "execution_plan": (
         "id",
+        "probe_run_id",
         "allocation_id",
         "runtime_strategy_set_manifest_id",
         "runtime_strategy_set_manifest_hash",
@@ -872,6 +878,16 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def _probe_run_id_from_mapping(value: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    for key in ("probe_run_id", "h74_execution_path_probe_run_id"):
+        candidate = str(value.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+
 def _json_dumps_stable(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -1357,6 +1373,7 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS execution_plan (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             allocation_id INTEGER NOT NULL,
             portfolio_target_hash TEXT,
             execution_plan_bundle_hash TEXT NOT NULL,
@@ -1389,6 +1406,7 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
         "execution_plan_bundle_json",
         "execution_plan_bundle_json TEXT NOT NULL DEFAULT '{}'",
     )
+    _ensure_column(conn, "execution_plan", "probe_run_id", "probe_run_id TEXT")
     _ensure_column(conn, "execution_plan", "runtime_strategy_set_manifest_id", "runtime_strategy_set_manifest_id INTEGER")
     _ensure_column(conn, "execution_plan", "runtime_strategy_set_manifest_hash", "runtime_strategy_set_manifest_hash TEXT")
     _ensure_column(conn, "execution_plan", "execution_submit_plan_json", "execution_submit_plan_json TEXT")
@@ -1410,6 +1428,12 @@ def _ensure_multi_strategy_artifact_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_execution_plan_submit_hash
         ON execution_plan(execution_submit_plan_hash)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_plan_probe_run
+        ON execution_plan(probe_run_id, submit_plan_side, submit_expected)
         """
     )
 
@@ -1579,6 +1603,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY CHECK (id = 1),
+            probe_run_id TEXT,
             cash_krw REAL NOT NULL,
             asset_qty REAL NOT NULL,
             cash_available REAL NOT NULL DEFAULT 0,
@@ -1593,6 +1618,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "portfolio", "cash_locked", "cash_locked REAL NOT NULL DEFAULT 0")
     _ensure_column(conn, "portfolio", "asset_available", "asset_available REAL NOT NULL DEFAULT 0")
     _ensure_column(conn, "portfolio", "asset_locked", "asset_locked REAL NOT NULL DEFAULT 0")
+    _ensure_column(conn, "portfolio", "probe_run_id", "probe_run_id TEXT")
 
     # One-time backfill for pre-existing DBs that had only aggregate columns.
     conn.execute(
@@ -1616,6 +1642,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             ts INTEGER NOT NULL,
             pair TEXT NOT NULL,
             interval TEXT NOT NULL,
@@ -1633,6 +1660,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             exit_rule_name TEXT,
             note TEXT
         )
+        """
+    )
+    _ensure_column(conn, "trades", "probe_run_id", "probe_run_id TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trades_probe_run
+        ON trades(probe_run_id, side, pair, client_order_id)
         """
     )
     conn.execute(
@@ -2530,6 +2564,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             client_order_id TEXT NOT NULL UNIQUE,
             submit_attempt_id TEXT,
             exchange_order_id TEXT,
@@ -2576,6 +2611,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "orders", "submit_attempt_id", "submit_attempt_id TEXT")
+    _ensure_column(conn, "orders", "probe_run_id", "probe_run_id TEXT")
     _ensure_column(conn, "orders", "pair", "pair TEXT")
     _ensure_column(conn, "orders", "order_type", "order_type TEXT")
     _ensure_column(conn, "orders", "strategy_name", "strategy_name TEXT")
@@ -2606,11 +2642,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "orders", "participation_decision_hash", "participation_decision_hash TEXT")
     _ensure_column(conn, "orders", "daily_participation_kst_day", "daily_participation_kst_day TEXT")
     _ensure_column(conn, "orders", "daily_participation_fallback_mode", "daily_participation_fallback_mode TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orders_probe_run
+        ON orders(probe_run_id, side, pair)
+        """
+    )
 
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS fills (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             client_order_id TEXT NOT NULL,
             fill_id TEXT,
             fill_ts INTEGER NOT NULL,
@@ -2638,6 +2681,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "fills", "fill_id", "fill_id TEXT")
+    _ensure_column(conn, "fills", "probe_run_id", "probe_run_id TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_fills_probe_run
+        ON fills(probe_run_id, client_order_id)
+        """
+    )
     _ensure_column(
         conn,
         "fills",
@@ -2708,6 +2758,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS order_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             client_order_id TEXT NOT NULL,
             event_type TEXT NOT NULL,
             event_ts INTEGER NOT NULL,
@@ -2751,6 +2802,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "order_events", "symbol", "symbol TEXT")
+    _ensure_column(conn, "order_events", "probe_run_id", "probe_run_id TEXT")
     _ensure_column(conn, "order_events", "side", "side TEXT")
     _ensure_column(conn, "order_events", "order_type", "order_type TEXT")
     _ensure_column(conn, "order_events", "submit_attempt_id", "submit_attempt_id TEXT")
@@ -2778,6 +2830,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "order_events", "final_intended_qty", "final_intended_qty REAL")
     _ensure_column(conn, "order_events", "final_submitted_qty", "final_submitted_qty REAL")
     _ensure_column(conn, "order_events", "decision_reason_code", "decision_reason_code TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_order_events_probe_run
+        ON order_events(probe_run_id, side, symbol, client_order_id)
+        """
+    )
 
     conn.execute(
         """
@@ -3082,6 +3140,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS strategy_decisions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             decision_ts INTEGER NOT NULL,
             strategy_name TEXT NOT NULL,
             signal TEXT NOT NULL,
@@ -3110,6 +3169,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "strategy_decisions", "strategy_decision_projection_type", "strategy_decision_projection_type TEXT")
     _ensure_column(conn, "strategy_decisions", "strategy_decisions_authority", "strategy_decisions_authority TEXT")
     _ensure_column(conn, "strategy_decisions", "context_json", "context_json TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "strategy_decisions", "probe_run_id", "probe_run_id TEXT")
 
     conn.execute(
         """
@@ -3121,6 +3181,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_strategy_decisions_artifact_chain
         ON strategy_decisions(runtime_strategy_decision_bundle_id, portfolio_allocation_decision_id, portfolio_target_id, execution_plan_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_strategy_decisions_probe_run
+        ON strategy_decisions(probe_run_id, signal, decision_ts)
         """
     )
 
@@ -3250,6 +3316,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS open_position_lots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             pair TEXT NOT NULL,
             entry_trade_id INTEGER NOT NULL,
             entry_client_order_id TEXT NOT NULL,
@@ -3290,6 +3357,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         f"position_state TEXT NOT NULL DEFAULT '{OPEN_EXPOSURE_LOT_STATE}'",
     )
     _ensure_column(conn, "open_position_lots", "entry_fill_id", "entry_fill_id TEXT")
+    _ensure_column(conn, "open_position_lots", "probe_run_id", "probe_run_id TEXT")
     _ensure_column(conn, "open_position_lots", "entry_fee_total", "entry_fee_total REAL NOT NULL DEFAULT 0")
     _ensure_column(
         conn,
@@ -3322,6 +3390,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "open_position_lots", "authority_hash", "authority_hash TEXT")
     _ensure_column(conn, "open_position_lots", "entry_decision_id", "entry_decision_id INTEGER")
     _ensure_column(conn, "open_position_lots", "entry_decision_linkage", "entry_decision_linkage TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_open_position_lots_probe_run
+        ON open_position_lots(probe_run_id, pair)
+        """
+    )
     conn.execute(
         """
         UPDATE open_position_lots
@@ -3438,6 +3512,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS trade_lifecycles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            probe_run_id TEXT,
             pair TEXT NOT NULL,
             entry_trade_id INTEGER NOT NULL,
             exit_trade_id INTEGER NOT NULL,
@@ -3466,6 +3541,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "trade_lifecycles", "entry_fill_id", "entry_fill_id TEXT")
+    _ensure_column(conn, "trade_lifecycles", "probe_run_id", "probe_run_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_fill_id", "exit_fill_id TEXT")
     _ensure_column(conn, "trade_lifecycles", "strategy_name", "strategy_name TEXT")
     _ensure_column(conn, "trade_lifecycles", "strategy_instance_id", "strategy_instance_id TEXT")
@@ -3490,6 +3566,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "trade_lifecycles", "exit_decision_id", "exit_decision_id INTEGER")
     _ensure_column(conn, "trade_lifecycles", "exit_reason", "exit_reason TEXT")
     _ensure_column(conn, "trade_lifecycles", "exit_rule_name", "exit_rule_name TEXT")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_lifecycles_probe_run
+        ON trade_lifecycles(probe_run_id, pair)
+        """
+    )
 
     conn.execute(
         """
@@ -3586,17 +3668,19 @@ def record_strategy_decision(
         **normalized_context,
         **_strategy_decision_experiment_context(strategy_name=str(strategy_name)),
     }
+    probe_run_id = _probe_run_id_from_mapping(normalized_context)
     row = conn.execute(
         """
         INSERT INTO strategy_decisions(
-            decision_ts, strategy_name, signal, reason, candle_ts, market_price, confidence,
+            probe_run_id, decision_ts, strategy_name, signal, reason, candle_ts, market_price, confidence,
             runtime_strategy_decision_bundle_id, portfolio_allocation_decision_id,
             portfolio_target_id, execution_plan_id, strategy_decision_projection_type,
             strategy_decisions_authority, context_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            probe_run_id,
             int(decision_ts),
             str(strategy_name),
             str(signal),
@@ -4083,6 +4167,7 @@ def record_execution_plan(
                         submit_payload["strategy_risk_decision_hash"] = str(
                             strategy_risk_decision.get("risk_decision_hash") or ""
                         )
+    probe_run_id = _probe_run_id_from_mapping(submit_payload) or _probe_run_id_from_mapping(bundle_payload)
     status = getattr(execution_plan_bundle, "status", None)
     status_text = ""
     if status is not None and hasattr(status, "status"):
@@ -4121,7 +4206,7 @@ def record_execution_plan(
     conn.execute(
         """
         INSERT OR IGNORE INTO execution_plan(
-            allocation_id, runtime_strategy_set_manifest_id, runtime_strategy_set_manifest_hash,
+            probe_run_id, allocation_id, runtime_strategy_set_manifest_id, runtime_strategy_set_manifest_hash,
             portfolio_target_hash, execution_plan_bundle_hash,
             execution_submit_plan_hash, submit_plan_side, submit_plan_qty,
             submit_plan_notional_krw, submit_plan_idempotency_key, submit_plan_source,
@@ -4129,9 +4214,10 @@ def record_execution_plan(
             status, execution_plan_bundle_json, execution_submit_plan_json,
             execution_plan_batch_hash, execution_plan_batch_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            probe_run_id,
             int(allocation_id),
             manifest_id,
             manifest_hash,
@@ -5185,8 +5271,8 @@ def init_portfolio(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO portfolio(
-                id, cash_krw, asset_qty, cash_available, cash_locked, asset_available, asset_locked
-            ) VALUES (1, ?, 0.0, ?, 0.0, 0.0, 0.0)
+                id, probe_run_id, cash_krw, asset_qty, cash_available, cash_locked, asset_available, asset_locked
+            ) VALUES (1, NULL, ?, 0.0, ?, 0.0, 0.0, 0.0)
             """,
             (float(settings.START_CASH_KRW), float(settings.START_CASH_KRW)),
         )
@@ -5222,6 +5308,7 @@ def set_portfolio(
     *,
     cash_locked: float = 0.0,
     asset_locked: float = 0.0,
+    probe_run_id: str | None = None,
 ) -> None:
     set_portfolio_breakdown(
         conn,
@@ -5229,6 +5316,7 @@ def set_portfolio(
         cash_locked=float(cash_locked),
         asset_available=float(asset_qty),
         asset_locked=float(asset_locked),
+        probe_run_id=probe_run_id,
     )
 
 
@@ -5239,6 +5327,7 @@ def set_portfolio_breakdown(
     cash_locked: float,
     asset_available: float,
     asset_locked: float,
+    probe_run_id: str | None = None,
 ) -> None:
     init_portfolio(conn)
     cash_available_n, cash_locked_n, asset_available_n, asset_locked_n = normalize_portfolio_breakdown(
@@ -5249,11 +5338,13 @@ def set_portfolio_breakdown(
     )
     cash_total = portfolio_cash_total(cash_available=cash_available_n, cash_locked=cash_locked_n)
     asset_total = portfolio_asset_total(asset_available=asset_available_n, asset_locked=asset_locked_n)
+    normalized_probe_run_id = str(probe_run_id or "").strip() or None
     had_tx = conn.in_transaction
     conn.execute(
         """
         UPDATE portfolio
         SET
+            probe_run_id=?,
             cash_krw=?,
             asset_qty=?,
             cash_available=?,
@@ -5263,6 +5354,7 @@ def set_portfolio_breakdown(
         WHERE id=1
         """,
         (
+            normalized_probe_run_id,
             cash_total,
             asset_total,
             cash_available_n,
@@ -6096,7 +6188,7 @@ def record_external_cash_adjustment(
     conn.execute(
         """
         UPDATE portfolio
-        SET cash_krw=?, cash_available=?
+        SET probe_run_id=NULL, cash_krw=?, cash_available=?
         WHERE id=1
         """,
         (

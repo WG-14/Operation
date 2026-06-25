@@ -78,6 +78,7 @@ def record_order_if_missing(
     participation_decision_hash: str | None = None,
     daily_participation_kst_day: str | None = None,
     daily_participation_fallback_mode: str | None = None,
+    probe_run_id: str | None = None,
     ts_ms: int | None = None,
     status: str = "NEW",
 ) -> None:
@@ -118,6 +119,7 @@ def record_order_if_missing(
         participation_decision_hash=participation_decision_hash,
         daily_participation_kst_day=daily_participation_kst_day,
         daily_participation_fallback_mode=daily_participation_fallback_mode,
+        probe_run_id=probe_run_id,
         status=status,
         ts_ms=(int(ts_ms) if ts_ms is not None else None),
         conn=conn,
@@ -407,7 +409,8 @@ def _apply_fill_and_trade_core(
             entry_decision_id,
             exit_decision_id,
             decision_reason,
-            exit_rule_name
+            exit_rule_name,
+            probe_run_id
         FROM orders
         WHERE client_order_id=?
         """,
@@ -422,6 +425,7 @@ def _apply_fill_and_trade_core(
     order_exit_decision_id: int | None = None
     order_decision_reason: str | None = None
     order_exit_rule_name: str | None = None
+    order_probe_run_id: str | None = None
     submit_qty = float(qty)
     if order is not None:
         order_exchange_order_id = str(order["exchange_order_id"]) if order["exchange_order_id"] is not None else None
@@ -436,6 +440,7 @@ def _apply_fill_and_trade_core(
         order_exit_decision_id = int(order["exit_decision_id"]) if order["exit_decision_id"] is not None else None
         order_decision_reason = str(order["decision_reason"]) if order["decision_reason"] is not None else None
         order_exit_rule_name = str(order["exit_rule_name"]) if order["exit_rule_name"] is not None else None
+        order_probe_run_id = str(order["probe_run_id"] or "").strip() or None
         fill_tol = order_fill_tolerance(qty_req)
         projected_qty = qty_filled + float(qty)
         _LOG.info(
@@ -494,6 +499,7 @@ def _apply_fill_and_trade_core(
         observed_fee_validation_reason=observed_fee_validation_reason,
         observed_fee_validation_checks=observed_fee_validation_checks,
         conn=conn,
+        probe_run_id=order_probe_run_id,
     )
 
     set_portfolio_breakdown(
@@ -502,6 +508,7 @@ def _apply_fill_and_trade_core(
         cash_locked=max(cash_locked_after, 0.0),
         asset_available=max(asset_available_after, 0.0),
         asset_locked=max(asset_locked_after, 0.0),
+        probe_run_id=order_probe_run_id,
     )
     effective_strategy_name = strategy_name or order_strategy_name
     effective_strategy_instance_id = order_strategy_instance_id
@@ -522,12 +529,13 @@ def _apply_fill_and_trade_core(
     trade_row = conn.execute(
         """
         INSERT INTO trades(
-            ts, pair, interval, side, price, qty, fee, cash_after, asset_after,
+            probe_run_id, ts, pair, interval, side, price, qty, fee, cash_after, asset_after,
             client_order_id, strategy_name, entry_decision_id, exit_decision_id, exit_reason, exit_rule_name, note
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            order_probe_run_id,
             int(fill_ts),
             trade_pair,
             settings.INTERVAL,
@@ -573,6 +581,7 @@ def _apply_fill_and_trade_core(
         exit_reason=(effective_exit_reason if side == "SELL" else None),
         exit_rule_name=(effective_exit_rule_name if side == "SELL" else None),
         allow_entry_decision_fallback=allow_entry_decision_fallback,
+        probe_run_id=order_probe_run_id,
     )
     if effective_strategy_name == "daily_participation_sma" and order_cycle_id:
         from .h74_cycle_state import upsert_h74_cycle_fill

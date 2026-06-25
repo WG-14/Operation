@@ -1247,7 +1247,9 @@ def apply_fill_lifecycle(
     exit_reason: str | None = None,
     exit_rule_name: str | None = None,
     allow_entry_decision_fallback: bool = True,
+    probe_run_id: str | None = None,
 ) -> None:
+    normalized_probe_run_id = str(probe_run_id or "").strip() or None
     if side == "BUY":
         # BUY fills are persisted as lot-native exposure plus explicit dust.
         # The stored executable quantity is the exact executable lot multiple;
@@ -1319,6 +1321,7 @@ def apply_fill_lifecycle(
             conn.execute(
                 """
                 INSERT INTO open_position_lots(
+                    probe_run_id,
                     pair,
                     entry_trade_id,
                     entry_client_order_id,
@@ -1341,9 +1344,10 @@ def apply_fill_lifecycle(
                     strategy_name,
                     entry_decision_id,
                     entry_decision_linkage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    normalized_probe_run_id,
                     str(pair),
                     int(trade_id),
                     str(client_order_id),
@@ -1373,6 +1377,7 @@ def apply_fill_lifecycle(
             conn.execute(
                 """
                 INSERT INTO open_position_lots(
+                    probe_run_id,
                     pair,
                     entry_trade_id,
                     entry_client_order_id,
@@ -1395,9 +1400,10 @@ def apply_fill_lifecycle(
                     strategy_name,
                     entry_decision_id,
                     entry_decision_linkage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    normalized_probe_run_id,
                     str(pair),
                     int(trade_id),
                     str(client_order_id),
@@ -1525,6 +1531,7 @@ def apply_fill_lifecycle(
         conn.execute(
             """
             INSERT INTO trade_lifecycles(
+                probe_run_id,
                 pair,
                 entry_trade_id,
                 exit_trade_id,
@@ -1559,9 +1566,10 @@ def apply_fill_lifecycle(
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                normalized_probe_run_id,
                 str(pair),
                 int(_row_value(lot, "entry_trade_id", 1) or 0),
                 int(trade_id),
@@ -1634,6 +1642,7 @@ def apply_fill_lifecycle(
         conn.execute(
             """
             INSERT INTO trade_lifecycles(
+                probe_run_id,
                 pair,
                 entry_trade_id,
                 exit_trade_id,
@@ -1668,9 +1677,10 @@ def apply_fill_lifecycle(
                 exit_decision_id,
                 exit_reason,
                 exit_rule_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                normalized_probe_run_id,
                 str(pair),
                 0,
                 int(trade_id),

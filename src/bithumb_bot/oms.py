@@ -308,10 +308,21 @@ def _record_order_event(
     final_intended_qty: float | None = None,
     final_submitted_qty: float | None = None,
     decision_reason_code: str | None = None,
+    probe_run_id: str | None = None,
 ) -> None:
+    normalized_probe_run_id = str(probe_run_id or "").strip() or None
+    if normalized_probe_run_id is None:
+        row = conn.execute(
+            "SELECT probe_run_id FROM orders WHERE client_order_id=?",
+            (client_order_id,),
+        ).fetchone()
+        if row is not None:
+            value = row["probe_run_id"] if hasattr(row, "keys") else row[0]
+            normalized_probe_run_id = str(value or "").strip() or None
     conn.execute(
         """
         INSERT INTO order_events(
+            probe_run_id,
             client_order_id,
             event_type,
             event_ts,
@@ -349,9 +360,10 @@ def _record_order_event(
             final_intended_qty,
             final_submitted_qty,
             decision_reason_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            normalized_probe_run_id,
             client_order_id,
             event_type,
             int(event_ts if event_ts is not None else time.time() * 1000),
@@ -732,18 +744,20 @@ def create_order(
     participation_decision_hash: str | None = None,
     daily_participation_kst_day: str | None = None,
     daily_participation_fallback_mode: str | None = None,
+    probe_run_id: str | None = None,
     status: str = "NEW",
     ts_ms: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
     ts = int(ts_ms if ts_ms is not None else time.time() * 1000)
+    normalized_probe_run_id = str(probe_run_id or "").strip() or None
     own_conn = conn is None
     conn = conn or ensure_db()
     try:
         conn.execute(
             """
             INSERT INTO orders(
-                client_order_id, submit_attempt_id, exchange_order_id, status, side, order_type, price, qty_req, qty_filled,
+                probe_run_id, client_order_id, submit_attempt_id, exchange_order_id, status, side, order_type, price, qty_req, qty_filled,
                 pair, strategy_name, strategy_instance_id, cycle_id, authority_hash, entry_decision_id, exit_decision_id, decision_reason, exit_rule_name,
                 internal_lot_size, effective_min_trade_qty, qty_step, min_notional_krw, intended_lot_count,
                 executable_lot_count, final_intended_qty, final_submitted_qty, decision_reason_code,
@@ -753,9 +767,10 @@ def create_order(
                 daily_participation_kst_day, daily_participation_fallback_mode,
                 created_ts, updated_ts, last_error
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                normalized_probe_run_id,
                 client_order_id,
                 submit_attempt_id,
                 None,
@@ -1307,6 +1322,7 @@ def add_fill(
     observed_fee_validation_reason: str | None = None,
     observed_fee_validation_checks: dict[str, object] | None = None,
     conn: sqlite3.Connection | None = None,
+    probe_run_id: str | None = None,
 ) -> None:
     own_conn = conn is None
     conn = conn or ensure_db()
@@ -1358,10 +1374,20 @@ def add_fill(
             if reference_price is not None
             else None
         )
+        normalized_probe_run_id = str(probe_run_id or "").strip() or None
+        if normalized_probe_run_id is None:
+            probe_row = conn.execute(
+                "SELECT probe_run_id FROM orders WHERE client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            if probe_row is not None:
+                value = probe_row["probe_run_id"] if hasattr(probe_row, "keys") else probe_row[0]
+                normalized_probe_run_id = str(value or "").strip() or None
 
         conn.execute(
             """
             INSERT INTO fills(
+                probe_run_id,
                 client_order_id,
                 fill_id,
                 fill_ts,
@@ -1381,9 +1407,10 @@ def add_fill(
                 executable_lot_count,
                 internal_lot_size
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                normalized_probe_run_id,
                 client_order_id,
                 fill_id,
                 int(fill_ts),

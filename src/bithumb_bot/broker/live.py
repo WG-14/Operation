@@ -2746,6 +2746,7 @@ def _determine_live_execution_intent(
             "exchange_submit_field": target_plan.get("exchange_submit_field"),
             "exchange_submit_notional_krw": target_plan.get("exchange_submit_notional_krw"),
             "exchange_submit_qty": target_plan.get("exchange_submit_qty"),
+            "h74_execution_path_probe_run_id": target_plan.get("h74_execution_path_probe_run_id"),
         }
         _copy_pre_submit_authority_fields(target_observability, target_plan)
         position_state.decision_observability.update(target_observability)
@@ -2946,6 +2947,7 @@ def _determine_live_execution_intent(
                     "buy_submit_plan_notional_krw": plan_notional,
                     "buy_submit_plan_qty": plan_qty,
                     "buy_submit_plan_delta_krw": buy_plan.get("delta_krw"),
+                    "h74_execution_path_probe_run_id": buy_plan.get("h74_execution_path_probe_run_id"),
                 }
             )
             return _LiveExecutionIntent(
