@@ -104,6 +104,10 @@ def test_h74_buy_only_does_not_pass_roundtrip_acceptance() -> None:
     assert "sell_order_filled" in result["missing_evidence"]
 
 
+def test_no_window_probe_acceptance_requires_buy_fill_cycle_sell_close() -> None:
+    test_h74_buy_only_does_not_pass_roundtrip_acceptance()
+
+
 def test_h74_manual_sell_does_not_count_as_automated_sell_success() -> None:
     report = _pass_report()
     report["manual_sell"] = True
@@ -112,6 +116,23 @@ def test_h74_manual_sell_does_not_count_as_automated_sell_success() -> None:
 
     assert result["execution_path_probe_status"] != "PASS"
     assert "automated_sell_required" in result["missing_evidence"]
+
+
+def test_no_window_probe_acceptance_rejects_manual_flatten_as_sell_success() -> None:
+    test_h74_manual_sell_does_not_count_as_automated_sell_success()
+
+
+def test_no_window_probe_acceptance_rejects_missing_h74_cycle_state() -> None:
+    report = _pass_report()
+    report["h74_cycle_ownership_created"] = False
+    report["h74_cycle_state_closed"] = False
+    report["h74_cycle_id"] = ""
+
+    result = evaluate_h74_execution_path_probe_acceptance(report)
+
+    assert result["execution_path_probe_status"] != "PASS"
+    assert "h74_cycle_ownership_created" in result["missing_evidence"]
+    assert "h74_cycle_state_closed" in result["missing_evidence"]
 
 
 def test_acceptance_uses_runtime_built_probe_report() -> None:

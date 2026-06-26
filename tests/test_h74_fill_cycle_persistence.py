@@ -19,7 +19,7 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
-def _ownership_contract(cycle_id: str):
+def _ownership_contract(cycle_id: str, *, entry_plan_id: str = "h74-buy"):
     return h74_position_ownership_contract_from_payload(
         {
             "cycle_id": cycle_id,
@@ -29,20 +29,29 @@ def _ownership_contract(cycle_id: str):
             "probe_run_id": "probe-run-1",
             "pair": "KRW-BTC",
             "entry_side": "BUY",
-            "entry_plan_id": "h74-buy",
+            "entry_plan_id": entry_plan_id,
             "position_mode": "fixed_fill_qty_until_exit",
             "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
         }
     )
 
 
-def _order(conn: sqlite3.Connection, *, cycle_id: str | None = "cycle-1") -> None:
+def _order(
+    conn: sqlite3.Connection,
+    *,
+    cycle_id: str | None = "cycle-1",
+    client_order_id: str = "h74-buy",
+    entry_plan_id: str = "h74-buy",
+    persist_contract: bool = True,
+) -> None:
     contract_hash = None
+    contract = None
     if cycle_id:
-        contract_hash = _ownership_contract(cycle_id).contract_hash
+        contract = _ownership_contract(cycle_id, entry_plan_id=entry_plan_id)
+        contract_hash = contract.contract_hash
     record_order_if_missing(
         conn,
-        client_order_id="h74-buy",
+        client_order_id=client_order_id,
         side="BUY",
         qty_req=0.0008,
         price=100_000_000.0,
@@ -50,7 +59,9 @@ def _order(conn: sqlite3.Connection, *, cycle_id: str | None = "cycle-1") -> Non
         strategy_instance_id="h74-source-observation",
         cycle_id=cycle_id,
         authority_hash="sha256:a",
+        h74_entry_plan_client_order_id=entry_plan_id if cycle_id else None,
         h74_position_ownership_contract_hash=contract_hash,
+        h74_position_ownership_contract=(contract.as_dict() if contract is not None and persist_contract else None),
         probe_run_id="probe-run-1",
         status="NEW",
     )
@@ -129,7 +140,8 @@ def test_h74_buy_fill_links_contract_identity_to_remaining_cycle_qty() -> None:
     inventory = load_h74_cycle_inventory(conn, cycle_id=contract.cycle_id)
     row = conn.execute(
         """
-        SELECT cycle_id, acquired_qty, sold_qty, locked_exit_qty, contract_hash
+        SELECT cycle_id, acquired_qty, sold_qty, locked_exit_qty, contract_hash,
+               entry_client_order_id, h74_entry_plan_client_order_id
         FROM h74_cycle_state
         WHERE cycle_id=?
         """,
@@ -142,6 +154,8 @@ def test_h74_buy_fill_links_contract_identity_to_remaining_cycle_qty() -> None:
     assert row["cycle_id"] == contract.cycle_id
     assert inventory.contract_hash == contract.contract_hash
     assert row["contract_hash"] == contract.contract_hash
+    assert row["entry_client_order_id"] == "h74-buy"
+    assert row["h74_entry_plan_client_order_id"] == "h74-buy"
     assert inventory.remaining_cycle_qty == pytest.approx(expected_remaining)
     assert inventory.remaining_cycle_qty == pytest.approx(0.0008)
 
@@ -197,6 +211,176 @@ def test_h74_buy_fill_rejects_order_contract_hash_mismatch() -> None:
     assert conn.execute("SELECT COUNT(*) AS n FROM fills").fetchone()["n"] == 0
     assert conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"] == 0
     assert conn.execute("SELECT COUNT(*) AS n FROM h74_cycle_state").fetchone()["n"] == 0
+
+
+def test_h74_buy_fill_uses_persisted_contract_when_entry_plan_id_differs_from_client_order_id() -> None:
+    conn = _conn()
+    _order(
+        conn,
+        client_order_id="live_123_buy_xxx",
+        entry_plan_id="h74_entry_plan_123",
+    )
+
+    result = apply_fill_and_trade(
+        conn,
+        client_order_id="live_123_buy_xxx",
+        side="BUY",
+        fill_id="fill-1",
+        fill_ts=1,
+        price=100_000_000.0,
+        qty=0.0008,
+        fee=32.0,
+        strategy_name="daily_participation_sma",
+        pair="KRW-BTC",
+    )
+
+    row = conn.execute(
+        """
+        SELECT entry_client_order_id, h74_entry_plan_client_order_id, contract_hash
+        FROM h74_cycle_state
+        WHERE cycle_id='cycle-1'
+        """
+    ).fetchone()
+    assert result["h74_contract_source"] == "orders.h74_position_ownership_contract"
+    assert result["h74_entry_plan_client_order_id"] == "h74_entry_plan_123"
+    assert row["entry_client_order_id"] == "live_123_buy_xxx"
+    assert row["h74_entry_plan_client_order_id"] == "h74_entry_plan_123"
+
+
+def test_h74_buy_fill_uses_persisted_entry_plan_id_when_different_from_client_order_id() -> None:
+    test_h74_buy_fill_uses_persisted_contract_when_entry_plan_id_differs_from_client_order_id()
+
+
+def test_h74_buy_fill_records_cycle_with_original_entry_plan_id() -> None:
+    conn = _conn()
+    _order(conn, client_order_id="live_1782468180000_buy_ae69dfb7", entry_plan_id="h74_entry_plan_1782468302011")
+
+    apply_fill_and_trade(
+        conn,
+        client_order_id="live_1782468180000_buy_ae69dfb7",
+        side="BUY",
+        fill_id="fill-1",
+        fill_ts=1,
+        price=100_000_000.0,
+        qty=0.0008,
+        fee=32.0,
+        strategy_name="daily_participation_sma",
+        pair="KRW-BTC",
+    )
+
+    row = conn.execute(
+        "SELECT h74_entry_plan_client_order_id FROM h74_cycle_state WHERE cycle_id='cycle-1'"
+    ).fetchone()
+    assert row["h74_entry_plan_client_order_id"] == "h74_entry_plan_1782468302011"
+
+
+def test_h74_buy_fill_rejects_persisted_contract_hash_mismatch() -> None:
+    conn = _conn()
+    _order(conn, client_order_id="live_123_buy_xxx", entry_plan_id="h74_entry_plan_123")
+    conn.execute(
+        "UPDATE orders SET h74_position_ownership_contract_hash=? WHERE client_order_id=?",
+        ("sha256:mismatch", "live_123_buy_xxx"),
+    )
+
+    with pytest.raises(RuntimeError, match="h74_cycle_ownership_contract_hash_mismatch"):
+        apply_fill_and_trade(
+            conn,
+            client_order_id="live_123_buy_xxx",
+            side="BUY",
+            fill_id="fill-1",
+            fill_ts=1,
+            price=100_000_000.0,
+            qty=0.0008,
+            fee=32.0,
+            strategy_name="daily_participation_sma",
+            pair="KRW-BTC",
+        )
+
+
+def test_h74_legacy_order_uses_execution_plan_contract_when_order_contract_missing() -> None:
+    conn = _conn()
+    contract = _ownership_contract("cycle-1", entry_plan_id="h74_entry_plan_legacy")
+    _order(
+        conn,
+        client_order_id="live_legacy_buy",
+        entry_plan_id="h74_entry_plan_legacy",
+        persist_contract=False,
+    )
+    conn.execute(
+        """
+        INSERT INTO order_events(client_order_id, event_type, event_ts, submit_evidence)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            "live_legacy_buy",
+            "submit_attempt_preflight",
+            1,
+            __import__("json").dumps({"h74_position_ownership_contract": contract.as_dict()}),
+        ),
+    )
+
+    result = apply_fill_and_trade(
+        conn,
+        client_order_id="live_legacy_buy",
+        side="BUY",
+        fill_id="fill-1",
+        fill_ts=1,
+        price=100_000_000.0,
+        qty=0.0008,
+        fee=32.0,
+        strategy_name="daily_participation_sma",
+        pair="KRW-BTC",
+    )
+
+    assert result["h74_contract_source"] == "execution_plan_json"
+
+
+def test_h74_legacy_order_fails_closed_when_contract_cannot_be_recovered() -> None:
+    conn = _conn()
+    _order(
+        conn,
+        client_order_id="live_legacy_buy",
+        entry_plan_id="h74_entry_plan_legacy",
+        persist_contract=False,
+    )
+    conn.execute(
+        "UPDATE orders SET h74_entry_plan_client_order_id=NULL WHERE client_order_id=?",
+        ("live_legacy_buy",),
+    )
+
+    with pytest.raises(RuntimeError, match="h74_cycle_ownership_contract_hash_mismatch"):
+        apply_fill_and_trade(
+            conn,
+            client_order_id="live_legacy_buy",
+            side="BUY",
+            fill_id="fill-1",
+            fill_ts=1,
+            price=100_000_000.0,
+            qty=0.0008,
+            fee=32.0,
+            strategy_name="daily_participation_sma",
+            pair="KRW-BTC",
+        )
+
+
+def test_h74_legacy_client_order_id_fallback_requires_hash_match() -> None:
+    conn = _conn()
+    _order(conn, persist_contract=False)
+
+    result = apply_fill_and_trade(
+        conn,
+        client_order_id="h74-buy",
+        side="BUY",
+        fill_id="fill-1",
+        fill_ts=1,
+        price=100_000_000.0,
+        qty=0.0008,
+        fee=32.0,
+        strategy_name="daily_participation_sma",
+        pair="KRW-BTC",
+    )
+
+    assert result["h74_contract_source"] == "legacy_client_order_id_reconstruction"
 
 
 def test_h74_cycle_persistence_failure_rolls_back_fill_trade_and_portfolio(monkeypatch) -> None:

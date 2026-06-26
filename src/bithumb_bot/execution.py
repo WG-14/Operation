@@ -24,7 +24,16 @@ from .lifecycle import apply_fill_lifecycle
 from .notifier import format_event, notify
 from .observability import format_log_kv, record_fill_fee_anomaly
 from .oms import add_fill, create_order, set_exchange_order_id, set_status
-from .h74_position_ownership import H74PositionOwnershipError, h74_position_ownership_contract_from_payload
+from .h74_position_ownership import (
+    H74_CONTRACT_SOURCE_EXECUTION_PLAN,
+    H74_CONTRACT_SOURCE_LEGACY_CLIENT_ORDER_ID,
+    H74_CONTRACT_SOURCE_ORDER,
+    H74_CONTRACT_SOURCE_UNAVAILABLE,
+    H74PositionOwnershipContract,
+    H74PositionOwnershipError,
+    h74_position_ownership_contract_from_json,
+    h74_position_ownership_contract_from_payload,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -46,6 +55,133 @@ def order_fill_tolerance(qty_req: float | None = None) -> float:
     return max(base, abs(float(qty_req)) * 1e-9)
 
 
+def _h74_execution_plan_contract_from_order_events(
+    conn: sqlite3.Connection,
+    *,
+    client_order_id: str,
+    expected_hash: str,
+) -> H74PositionOwnershipContract | None:
+    rows = conn.execute(
+        """
+        SELECT submit_evidence
+        FROM order_events
+        WHERE client_order_id=?
+          AND submit_evidence IS NOT NULL
+        ORDER BY id DESC
+        """,
+        (client_order_id,),
+    ).fetchall()
+    for row in rows:
+        raw = row["submit_evidence"] if hasattr(row, "keys") else row[0]
+        try:
+            evidence = json.loads(str(raw or ""))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evidence, dict):
+            continue
+        payload = evidence.get("h74_position_ownership_contract")
+        if not isinstance(payload, dict):
+            continue
+        try:
+            contract = h74_position_ownership_contract_from_payload(payload)
+        except H74PositionOwnershipError:
+            continue
+        if contract.contract_hash == expected_hash:
+            return contract
+    return None
+
+
+def _resolve_h74_ownership_contract(
+    conn: sqlite3.Connection,
+    *,
+    client_order_id: str,
+    side: str,
+    trade_pair: str,
+    order_cycle_id: str | None,
+    order_authority_hash: str | None,
+    order_strategy_instance_id: str | None,
+    order_probe_run_id: str | None,
+    order_h74_entry_plan_id: str | None,
+    order_h74_contract_hash: str | None,
+    order_h74_contract_json: str | None,
+) -> tuple[H74PositionOwnershipContract, str]:
+    expected_hash = str(order_h74_contract_hash or "").strip()
+    if not expected_hash:
+        raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+    if str(order_h74_contract_json or "").strip():
+        try:
+            contract = h74_position_ownership_contract_from_json(str(order_h74_contract_json))
+        except H74PositionOwnershipError as exc:
+            raise RuntimeError(f"h74_cycle_ownership_incomplete:{exc}") from exc
+        if contract.contract_hash != expected_hash:
+            raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+        return contract, H74_CONTRACT_SOURCE_ORDER
+
+    event_contract = _h74_execution_plan_contract_from_order_events(
+        conn,
+        client_order_id=client_order_id,
+        expected_hash=expected_hash,
+    )
+    if event_contract is not None:
+        return event_contract, H74_CONTRACT_SOURCE_EXECUTION_PLAN
+
+    if str(side or "").upper() == "SELL":
+        ensure_cycle_entry_id = None
+        from .h74_cycle_state import ensure_h74_cycle_schema
+
+        ensure_h74_cycle_schema(conn)
+        cycle_order = conn.execute(
+            """
+            SELECT h74_entry_plan_client_order_id, entry_client_order_id
+            FROM h74_cycle_state
+            WHERE cycle_id=?
+            """,
+            (order_cycle_id,),
+        ).fetchone()
+        if cycle_order is not None:
+            ensure_cycle_entry_id = str(
+                (
+                    cycle_order["h74_entry_plan_client_order_id"]
+                    if hasattr(cycle_order, "keys")
+                    else cycle_order[0]
+                )
+                or (
+                    cycle_order["entry_client_order_id"]
+                    if hasattr(cycle_order, "keys")
+                    else cycle_order[1]
+                )
+                or ""
+            ).strip()
+        fallback_entry_plan_id = ensure_cycle_entry_id or str(order_h74_entry_plan_id or "").strip()
+    else:
+        fallback_entry_plan_id = str(order_h74_entry_plan_id or client_order_id or "").strip()
+    try:
+        contract = h74_position_ownership_contract_from_payload(
+            {
+                "cycle_id": order_cycle_id,
+                "h74_cycle_id": order_cycle_id,
+                "authority_hash": order_authority_hash,
+                "strategy_instance_id": order_strategy_instance_id,
+                "probe_run_id": order_probe_run_id,
+                "pair": trade_pair,
+                "entry_side": "BUY",
+                "entry_plan_id": fallback_entry_plan_id,
+                "position_mode": "fixed_fill_qty_until_exit",
+                "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
+            }
+        )
+    except H74PositionOwnershipError as exc:
+        raise RuntimeError(f"h74_cycle_ownership_incomplete:{exc}") from exc
+    if contract.contract_hash != expected_hash:
+        _LOG.error(
+            "h74_ownership_contract_unavailable_fail_closed client_order_id=%s contract_source=%s",
+            client_order_id,
+            H74_CONTRACT_SOURCE_UNAVAILABLE,
+        )
+        raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+    return contract, H74_CONTRACT_SOURCE_LEGACY_CLIENT_ORDER_ID
+
+
 def record_order_if_missing(
     conn: sqlite3.Connection,
     *,
@@ -59,7 +195,9 @@ def record_order_if_missing(
     strategy_instance_id: str | None = None,
     cycle_id: str | None = None,
     authority_hash: str | None = None,
+    h74_entry_plan_client_order_id: str | None = None,
     h74_position_ownership_contract_hash: str | None = None,
+    h74_position_ownership_contract: dict[str, object] | str | None = None,
     entry_decision_id: int | None = None,
     exit_decision_id: int | None = None,
     decision_reason: str | None = None,
@@ -85,28 +223,59 @@ def record_order_if_missing(
     status: str = "NEW",
 ) -> None:
     normalized_h74_contract_hash = str(h74_position_ownership_contract_hash or "").strip()
+    normalized_h74_entry_plan_id = str(h74_entry_plan_client_order_id or "").strip()
+    normalized_h74_contract_json: str | None = None
+    if h74_position_ownership_contract is not None:
+        payload = (
+            json.loads(h74_position_ownership_contract)
+            if isinstance(h74_position_ownership_contract, str)
+            else h74_position_ownership_contract
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("h74_cycle_ownership_contract_json_invalid")
+        contract = h74_position_ownership_contract_from_payload(payload)
+        if normalized_h74_contract_hash and contract.contract_hash != normalized_h74_contract_hash:
+            raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+        normalized_h74_contract_hash = normalized_h74_contract_hash or contract.contract_hash
+        normalized_h74_entry_plan_id = normalized_h74_entry_plan_id or contract.entry_plan_id
+        normalized_h74_contract_json = json.dumps(contract.as_dict(), sort_keys=True, separators=(",", ":"))
     exists = conn.execute(
-        "SELECT h74_position_ownership_contract_hash FROM orders WHERE client_order_id=?",
+        """
+        SELECT h74_entry_plan_client_order_id, h74_position_ownership_contract_hash,
+               h74_position_ownership_contract
+        FROM orders
+        WHERE client_order_id=?
+        """,
         (client_order_id,),
     ).fetchone()
     if exists:
         if normalized_h74_contract_hash:
-            existing_value = (
-                exists["h74_position_ownership_contract_hash"]
-                if hasattr(exists, "keys")
-                else exists[0]
-            )
+            existing_value = exists["h74_position_ownership_contract_hash"] if hasattr(exists, "keys") else exists[1]
             existing_hash = str(existing_value or "").strip()
             if existing_hash and existing_hash != normalized_h74_contract_hash:
                 raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
-            if not existing_hash:
+            existing_contract_value = (
+                exists["h74_position_ownership_contract"] if hasattr(exists, "keys") else exists[2]
+            )
+            if str(existing_contract_value or "").strip() and normalized_h74_contract_json:
+                existing_contract = h74_position_ownership_contract_from_json(str(existing_contract_value))
+                if existing_contract.contract_hash != normalized_h74_contract_hash:
+                    raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+            if not existing_hash or normalized_h74_contract_json or normalized_h74_entry_plan_id:
                 conn.execute(
                     """
                     UPDATE orders
-                    SET h74_position_ownership_contract_hash=?
+                    SET h74_entry_plan_client_order_id=COALESCE(h74_entry_plan_client_order_id, ?),
+                        h74_position_ownership_contract_hash=COALESCE(h74_position_ownership_contract_hash, ?),
+                        h74_position_ownership_contract=COALESCE(h74_position_ownership_contract, ?)
                     WHERE client_order_id=?
                     """,
-                    (normalized_h74_contract_hash, client_order_id),
+                    (
+                        normalized_h74_entry_plan_id or None,
+                        normalized_h74_contract_hash or None,
+                        normalized_h74_contract_json,
+                        client_order_id,
+                    ),
                 )
         return
     create_order(
@@ -120,7 +289,9 @@ def record_order_if_missing(
         strategy_instance_id=strategy_instance_id,
         cycle_id=cycle_id,
         authority_hash=authority_hash,
+        h74_entry_plan_client_order_id=normalized_h74_entry_plan_id or None,
         h74_position_ownership_contract_hash=normalized_h74_contract_hash or None,
+        h74_position_ownership_contract=normalized_h74_contract_json,
         entry_decision_id=entry_decision_id,
         exit_decision_id=exit_decision_id,
         decision_reason=decision_reason,
@@ -428,7 +599,9 @@ def _apply_fill_and_trade_core(
             strategy_instance_id,
             cycle_id,
             authority_hash,
+            h74_entry_plan_client_order_id,
             h74_position_ownership_contract_hash,
+            h74_position_ownership_contract,
             entry_decision_id,
             exit_decision_id,
             decision_reason,
@@ -443,7 +616,9 @@ def _apply_fill_and_trade_core(
     order_strategy_instance_id: str | None = None
     order_cycle_id: str | None = None
     order_authority_hash: str | None = None
+    order_h74_entry_plan_id: str | None = None
     order_h74_contract_hash: str | None = None
+    order_h74_contract_json: str | None = None
     order_exchange_order_id: str | None = None
     order_entry_decision_id: int | None = None
     order_exit_decision_id: int | None = None
@@ -460,7 +635,9 @@ def _apply_fill_and_trade_core(
         order_strategy_instance_id = str(order["strategy_instance_id"]) if order["strategy_instance_id"] is not None else None
         order_cycle_id = str(order["cycle_id"]) if order["cycle_id"] is not None else None
         order_authority_hash = str(order["authority_hash"]) if order["authority_hash"] is not None else None
+        order_h74_entry_plan_id = str(order["h74_entry_plan_client_order_id"] or "").strip() or None
         order_h74_contract_hash = str(order["h74_position_ownership_contract_hash"] or "").strip() or None
+        order_h74_contract_json = str(order["h74_position_ownership_contract"] or "").strip() or None
         order_entry_decision_id = int(order["entry_decision_id"]) if order["entry_decision_id"] is not None else None
         order_exit_decision_id = int(order["exit_decision_id"]) if order["exit_decision_id"] is not None else None
         order_decision_reason = str(order["decision_reason"]) if order["decision_reason"] is not None else None
@@ -633,44 +810,25 @@ def _apply_fill_and_trade_core(
         if h74_fill_apply:
             from .h74_cycle_state import ensure_h74_cycle_schema, upsert_h74_cycle_fill
 
-            try:
-                ownership_entry_plan_id = client_order_id
-                if side == "SELL":
-                    ensure_h74_cycle_schema(conn)
-                    cycle_order = conn.execute(
-                        """
-                        SELECT entry_client_order_id
-                        FROM h74_cycle_state
-                        WHERE cycle_id=?
-                        """,
-                        (order_cycle_id,),
-                    ).fetchone()
-                    if cycle_order is not None:
-                        ownership_entry_plan_id = str(
-                            cycle_order["entry_client_order_id"]
-                            if hasattr(cycle_order, "keys")
-                            else cycle_order[0]
-                        )
-                ownership_contract = h74_position_ownership_contract_from_payload(
-                    {
-                        "cycle_id": order_cycle_id,
-                        "h74_cycle_id": order_cycle_id,
-                        "authority_hash": order_authority_hash,
-                        "strategy_instance_id": effective_strategy_instance_id,
-                        "probe_run_id": order_probe_run_id,
-                        "pair": trade_pair,
-                        "entry_side": "BUY",
-                        "entry_plan_id": ownership_entry_plan_id,
-                        "position_mode": "fixed_fill_qty_until_exit",
-                        "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
-                    }
-                )
-            except H74PositionOwnershipError as exc:
-                raise RuntimeError(f"h74_cycle_ownership_incomplete:{exc}") from exc
-            if not order_h74_contract_hash:
-                raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
-            if order_h74_contract_hash != ownership_contract.contract_hash:
-                raise RuntimeError("h74_cycle_ownership_contract_hash_mismatch")
+            ownership_contract, ownership_contract_source = _resolve_h74_ownership_contract(
+                conn,
+                client_order_id=client_order_id,
+                side=side,
+                trade_pair=trade_pair,
+                order_cycle_id=order_cycle_id,
+                order_authority_hash=order_authority_hash,
+                order_strategy_instance_id=effective_strategy_instance_id,
+                order_probe_run_id=order_probe_run_id,
+                order_h74_entry_plan_id=order_h74_entry_plan_id,
+                order_h74_contract_hash=order_h74_contract_hash,
+                order_h74_contract_json=order_h74_contract_json,
+            )
+            _LOG.info(
+                "h74_ownership_contract_resolved client_order_id=%s contract_source=%s entry_plan_id=%s",
+                client_order_id,
+                ownership_contract_source,
+                ownership_contract.entry_plan_id,
+            )
 
             upsert_h74_cycle_fill(
                 conn,
@@ -683,6 +841,7 @@ def _apply_fill_and_trade_core(
                 client_order_id=client_order_id,
                 fill_ts=int(fill_ts),
                 contract_hash=order_h74_contract_hash,
+                h74_entry_plan_client_order_id=ownership_contract.entry_plan_id,
             )
             from .h74_cycle_state import load_h74_cycle_inventory
 
@@ -698,6 +857,8 @@ def _apply_fill_and_trade_core(
                 "h74_exit_authority_ready": 1 if ready else 0,
                 "h74_exit_authority_not_ready_reason": "none" if ready else "h74_cycle_state_missing_or_empty",
                 "h74_cycle_id": order_cycle_id,
+                "h74_contract_source": ownership_contract_source,
+                "h74_entry_plan_client_order_id": ownership_contract.entry_plan_id,
                 "h74_cycle_acquired_qty": 0.0 if inventory is None else inventory.acquired_qty,
                 "h74_remaining_cycle_qty": 0.0 if inventory is None else inventory.remaining_cycle_qty,
                 "h74_cycle_contract_hash": order_h74_contract_hash,

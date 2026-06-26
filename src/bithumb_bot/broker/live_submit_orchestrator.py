@@ -92,7 +92,9 @@ class StandardSubmitPipelineRequest:
     authority_hash: str | None = None
     probe_run_id: str | None = None
     h74_cycle_id: str | None = None
+    h74_entry_plan_client_order_id: str | None = None
     h74_position_ownership_contract_hash: str | None = None
+    h74_position_ownership_contract: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -139,7 +141,9 @@ class StandardSubmitPlanningFailureRequest:
     authority_hash: str | None = None
     probe_run_id: str | None = None
     h74_cycle_id: str | None = None
+    h74_entry_plan_client_order_id: str | None = None
     h74_position_ownership_contract_hash: str | None = None
+    h74_position_ownership_contract: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,20 @@ class StandardSubmitDispatchResult:
 
 def _encode_submit_evidence(*, payload: dict) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _h74_request_evidence_fields(
+    request: StandardSubmitPlanningFailureRequest | StandardSubmitPipelineRequest,
+) -> dict[str, object]:
+    return {
+        "h74_position_ownership_contract": request.h74_position_ownership_contract,
+        "h74_position_ownership_contract_hash": request.h74_position_ownership_contract_hash,
+        "h74_entry_plan_client_order_id": request.h74_entry_plan_client_order_id,
+        "h74_cycle_id": request.h74_cycle_id or request.cycle_id,
+        "authority_hash": request.authority_hash,
+        "strategy_instance_id": request.strategy_instance_id,
+        "probe_run_id": request.probe_run_id,
+    }
 
 
 def _emit_notification(message: str) -> None:
@@ -623,6 +641,7 @@ def _planning_failure(
             "normalized_qty": request.qty,
             **request.submit_observability_fields,
             **request.submit_truth_source_fields,
+            **_h74_request_evidence_fields(request),
             "reference_price": request.reference_price,
             "top_of_book": request.top_of_book_summary,
             "request_ts": None,
@@ -663,7 +682,9 @@ def _planning_failure(
         strategy_instance_id=request.strategy_instance_id,
         cycle_id=request.cycle_id,
         authority_hash=request.authority_hash,
+        h74_entry_plan_client_order_id=request.h74_entry_plan_client_order_id,
         h74_position_ownership_contract_hash=request.h74_position_ownership_contract_hash,
+        h74_position_ownership_contract=request.h74_position_ownership_contract,
         entry_decision_id=(request.decision_id if request.side == "BUY" else None),
         exit_decision_id=(request.decision_id if request.side == "SELL" else None),
         decision_reason=request.decision_reason,
@@ -781,9 +802,15 @@ def _validate_explicit_submit_plan(*, request: StandardSubmitPipelineRequest) ->
             "live submit_plan qty mismatch before dispatch: "
             f"request={float(request.qty):.12f} planned={float(submit_plan.submitted_qty):.12f}"
         )
-    h74_fixed_buy = (
-        str(request.side or "").strip().upper() == "BUY"
-        and bool(request.submit_observability_fields.get("h74_fixed_position_contract_active"))
+    h74_field_values = (
+        request.h74_position_ownership_contract_hash,
+        request.cycle_id or request.h74_cycle_id,
+        request.authority_hash,
+        request.probe_run_id,
+    )
+    h74_fixed_buy = str(request.side or "").strip().upper() == "BUY" and (
+        bool(request.submit_observability_fields.get("h74_fixed_position_contract_active"))
+        or any(str(value or "").strip() for value in h74_field_values)
     )
     if h74_fixed_buy:
         plan_payload = (
@@ -797,6 +824,7 @@ def _validate_explicit_submit_plan(*, request: StandardSubmitPipelineRequest) ->
             "strategy_instance_id": request.strategy_instance_id,
             "authority_hash": request.authority_hash,
             "probe_run_id": request.probe_run_id,
+            "h74_entry_plan_client_order_id": request.h74_entry_plan_client_order_id,
             "h74_position_ownership_contract_hash": request.h74_position_ownership_contract_hash,
         }
         for key, request_value in required_matches.items():
@@ -814,23 +842,21 @@ def _validate_explicit_submit_plan(*, request: StandardSubmitPipelineRequest) ->
                 raise BrokerRejectError(f"h74_cycle_ownership_required_for_entry:plan_missing:{key}")
             if value != plan_value:
                 raise BrokerRejectError(f"h74_cycle_ownership_required_for_entry:mismatch:{key}")
+        if not isinstance(request.h74_position_ownership_contract, dict):
+            raise BrokerRejectError("h74_cycle_ownership_required_for_entry:missing:h74_position_ownership_contract")
         try:
-            h74_position_ownership_contract_from_payload(
+            ownership_contract = h74_position_ownership_contract_from_payload(
                 {
-                    **request.submit_observability_fields,
-                    "cycle_id": request.cycle_id,
-                    "h74_cycle_id": request.h74_cycle_id or request.cycle_id,
-                    "strategy_instance_id": request.strategy_instance_id,
-                    "authority_hash": request.authority_hash,
-                    "probe_run_id": request.probe_run_id,
+                    **request.h74_position_ownership_contract,
                     "h74_position_ownership_contract_hash": request.h74_position_ownership_contract_hash,
-                    "pair": settings.PAIR,
-                    "entry_side": "BUY",
-                    "entry_plan_id": request.client_order_id,
                 }
             )
         except H74PositionOwnershipError as exc:
             raise BrokerRejectError(f"h74_cycle_ownership_required_for_entry:{exc}") from exc
+        if ownership_contract.entry_plan_id != str(request.h74_entry_plan_client_order_id or "").strip():
+            raise BrokerRejectError("h74_cycle_ownership_required_for_entry:mismatch:h74_entry_plan_client_order_id")
+        if ownership_contract.contract_hash != str(request.h74_position_ownership_contract_hash or "").strip():
+            raise BrokerRejectError("h74_cycle_ownership_required_for_entry:mismatch:h74_position_ownership_contract_hash")
     if submit_plan.intent.price is not None:
         raise BrokerRejectError(
             "live submit_plan price mismatch before dispatch: "
@@ -903,6 +929,7 @@ def _plan_submit_attempt(*, context: _StandardSubmitAttemptContext) -> None:
             "normalized_qty": request.qty,
             **request.submit_observability_fields,
             **request.submit_truth_source_fields,
+            **_h74_request_evidence_fields(request),
             "reference_price": request.reference_price,
             "top_of_book": request.top_of_book_summary,
             "request_ts": None,
@@ -933,7 +960,9 @@ def _plan_submit_attempt(*, context: _StandardSubmitAttemptContext) -> None:
         strategy_instance_id=request.strategy_instance_id,
         cycle_id=request.cycle_id,
         authority_hash=request.authority_hash,
+        h74_entry_plan_client_order_id=request.h74_entry_plan_client_order_id,
         h74_position_ownership_contract_hash=request.h74_position_ownership_contract_hash,
+        h74_position_ownership_contract=request.h74_position_ownership_contract,
         entry_decision_id=(request.decision_id if request.side == "BUY" else None),
         exit_decision_id=(request.decision_id if request.side == "SELL" else None),
         decision_reason=request.decision_reason,
@@ -994,6 +1023,7 @@ def _plan_submit_attempt(*, context: _StandardSubmitAttemptContext) -> None:
             "normalized_qty": request.qty,
             **request.submit_observability_fields,
             **request.submit_truth_source_fields,
+            **_h74_request_evidence_fields(request),
             "reference_price": request.reference_price,
             "top_of_book": request.top_of_book_summary,
             "request_ts": None,

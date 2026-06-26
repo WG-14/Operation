@@ -13,6 +13,7 @@ from bithumb_bot.h74_cycle_state import (
     lock_h74_cycle_exit_qty,
     upsert_h74_cycle_fill,
 )
+from bithumb_bot.h74_position_ownership import h74_position_ownership_contract_from_payload
 from bithumb_bot.run_loop_execution_planner import _inject_h74_cycle_inventory
 from bithumb_bot.target_position import TargetPositionSettings, build_target_position_decision
 from bithumb_bot.experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
@@ -323,6 +324,105 @@ def test_h74_fixed_buy_without_cycle_id_is_blocked_before_order_submit() -> None
         )
 
     assert conn.execute("SELECT COUNT(*) AS n FROM fills").fetchone()["n"] == 0
+
+
+def test_h74_cycle_state_preserves_h74_entry_plan_id_distinct_from_order_client_id() -> None:
+    conn = _conn()
+    contract = h74_position_ownership_contract_from_payload(
+        {
+            "cycle_id": "cycle-1",
+            "h74_cycle_id": "cycle-1",
+            "authority_hash": "sha256:a",
+            "strategy_instance_id": "h74-source-observation",
+            "probe_run_id": "probe-run-1",
+            "pair": "KRW-BTC",
+            "entry_side": "BUY",
+            "entry_plan_id": "h74_entry_plan_1",
+            "position_mode": "fixed_fill_qty_until_exit",
+            "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
+        }
+    )
+    record_order_if_missing(
+        conn,
+        client_order_id="live_buy_1",
+        side="BUY",
+        qty_req=0.0008,
+        price=100_000_000.0,
+        strategy_name="daily_participation_sma",
+        strategy_instance_id="h74-source-observation",
+        cycle_id="cycle-1",
+        authority_hash="sha256:a",
+        h74_entry_plan_client_order_id=contract.entry_plan_id,
+        h74_position_ownership_contract_hash=contract.contract_hash,
+        h74_position_ownership_contract=contract.as_dict(),
+        probe_run_id="probe-run-1",
+        status="NEW",
+    )
+
+    apply_fill_and_trade(
+        conn,
+        client_order_id="live_buy_1",
+        side="BUY",
+        fill_id="fill-1",
+        fill_ts=1,
+        price=100_000_000.0,
+        qty=0.0008,
+        fee=32.0,
+        strategy_name="daily_participation_sma",
+        pair="KRW-BTC",
+    )
+
+    row = conn.execute(
+        """
+        SELECT entry_client_order_id, h74_entry_plan_client_order_id
+        FROM h74_cycle_state
+        WHERE cycle_id='cycle-1'
+        """
+    ).fetchone()
+    assert row["entry_client_order_id"] == "live_buy_1"
+    assert row["h74_entry_plan_client_order_id"] == "h74_entry_plan_1"
+
+
+def test_h74_sell_uses_same_cycle_entry_plan_identity() -> None:
+    conn = _conn()
+    upsert_h74_cycle_fill(
+        conn,
+        cycle_id="cycle-1",
+        authority_hash="sha256:a",
+        strategy_instance_id="h74",
+        pair="KRW-BTC",
+        side="BUY",
+        qty=0.0008,
+        client_order_id="live_buy_1",
+        fill_ts=1,
+        contract_hash="sha256:contract",
+        h74_entry_plan_client_order_id="h74_entry_plan_1",
+    )
+    upsert_h74_cycle_fill(
+        conn,
+        cycle_id="cycle-1",
+        authority_hash="sha256:a",
+        strategy_instance_id="h74",
+        pair="KRW-BTC",
+        side="SELL",
+        qty=0.0008,
+        client_order_id="live_sell_1",
+        fill_ts=2,
+        contract_hash="sha256:contract",
+        h74_entry_plan_client_order_id="h74_entry_plan_1",
+    )
+
+    row = conn.execute(
+        """
+        SELECT entry_client_order_id, exit_client_order_id, h74_entry_plan_client_order_id, state
+        FROM h74_cycle_state
+        WHERE cycle_id='cycle-1'
+        """
+    ).fetchone()
+    assert row["entry_client_order_id"] == "live_buy_1"
+    assert row["exit_client_order_id"] == "live_sell_1"
+    assert row["h74_entry_plan_client_order_id"] == "h74_entry_plan_1"
+    assert row["state"] == "CLOSED"
 
 
 def test_h74_exit_submit_locks_pending_exit_qty() -> None:

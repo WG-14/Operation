@@ -66,7 +66,7 @@ def _ownership() -> H74PositionOwnershipContract:
         probe_run_id="probe-run-1",
         pair="KRW-BTC",
         entry_side="BUY",
-        entry_plan_id="h74-live-buy",
+        entry_plan_id="h74_entry_plan_123",
         position_mode="fixed_fill_qty_until_exit",
         hold_policy="hold_acquired_fill_qty_until_max_holding_exit",
     )
@@ -84,6 +84,9 @@ def _request(conn, *, cycle_id: str | None = "cycle-1") -> StandardSubmitPipelin
         "h74_execution_path_probe_run_id": ownership.probe_run_id,
         "position_mode": ownership.position_mode,
         "hold_policy": ownership.hold_policy,
+        "entry_plan_id": ownership.entry_plan_id,
+        "h74_entry_plan_client_order_id": ownership.entry_plan_id,
+        "h74_position_ownership_contract": ownership.as_dict(),
     }
     return StandardSubmitPipelineRequest(
         conn=conn,
@@ -130,7 +133,9 @@ def _request(conn, *, cycle_id: str | None = "cycle-1") -> StandardSubmitPipelin
         authority_hash=ownership.authority_hash,
         probe_run_id=ownership.probe_run_id,
         h74_cycle_id=cycle_id,
+        h74_entry_plan_client_order_id=ownership.entry_plan_id,
         h74_position_ownership_contract_hash=ownership.contract_hash,
+        h74_position_ownership_contract=ownership.as_dict(),
     )
 
 
@@ -168,6 +173,8 @@ def test_h74_order_event_submit_evidence_contains_ownership_contract_hash(tmp_pa
     assert order_row["authority_hash"] == "sha256:a"
     assert order_row["probe_run_id"] == "probe-run-1"
     assert evidence["h74_position_ownership_contract_hash"].startswith("sha256:")
+    assert evidence["h74_position_ownership_contract"]["entry_plan_id"] == "h74_entry_plan_123"
+    assert evidence["h74_entry_plan_client_order_id"] == "h74_entry_plan_123"
 
 
 def test_h74_order_row_persists_ownership_contract_hash(tmp_path) -> None:
@@ -187,3 +194,134 @@ def test_h74_order_row_persists_ownership_contract_hash(tmp_path) -> None:
     ).fetchone()
 
     assert order_row["h74_position_ownership_contract_hash"] == request.h74_position_ownership_contract_hash
+
+
+def test_h74_submit_request_carries_full_ownership_contract(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    assert request.h74_position_ownership_contract["entry_plan_id"] == "h74_entry_plan_123"
+    assert request.h74_entry_plan_client_order_id == "h74_entry_plan_123"
+    assert request.client_order_id != request.h74_entry_plan_client_order_id
+
+
+def test_h74_order_row_persists_full_ownership_contract(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+    _plan_submit_attempt(context=context)
+
+    row = conn.execute(
+        """
+        SELECT h74_position_ownership_contract
+        FROM orders
+        WHERE client_order_id=?
+        """,
+        (request.client_order_id,),
+    ).fetchone()
+    contract_json = json.loads(row["h74_position_ownership_contract"])
+    assert contract_json["entry_plan_id"] == "h74_entry_plan_123"
+    assert contract_json["contract_hash"] == request.h74_position_ownership_contract_hash
+
+
+def test_h74_order_row_persists_h74_entry_plan_client_order_id(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+    _plan_submit_attempt(context=context)
+
+    row = conn.execute(
+        """
+        SELECT h74_entry_plan_client_order_id
+        FROM orders
+        WHERE client_order_id=?
+        """,
+        (request.client_order_id,),
+    ).fetchone()
+    assert row["h74_entry_plan_client_order_id"] == "h74_entry_plan_123"
+
+
+def test_h74_order_row_contract_hash_matches_contract_json(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+    _plan_submit_attempt(context=context)
+
+    row = conn.execute(
+        """
+        SELECT h74_position_ownership_contract_hash, h74_position_ownership_contract
+        FROM orders
+        WHERE client_order_id=?
+        """,
+        (request.client_order_id,),
+    ).fetchone()
+    contract_json = json.loads(row["h74_position_ownership_contract"])
+    assert row["h74_position_ownership_contract_hash"] == contract_json["contract_hash"]
+
+
+def test_h74_order_event_submit_evidence_contains_full_ownership_contract(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+    _plan_submit_attempt(context=context)
+
+    event_row = conn.execute(
+        """
+        SELECT submit_evidence FROM order_events
+        WHERE client_order_id=? AND submit_phase='planning'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (request.client_order_id,),
+    ).fetchone()
+    evidence = json.loads(event_row["submit_evidence"])
+    assert evidence["h74_position_ownership_contract"]["entry_plan_id"] == "h74_entry_plan_123"
+
+
+def test_h74_order_event_submit_evidence_contains_h74_entry_plan_client_order_id(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+    _plan_submit_attempt(context=context)
+
+    event_row = conn.execute(
+        """
+        SELECT submit_evidence FROM order_events
+        WHERE client_order_id=? AND submit_phase='planning'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (request.client_order_id,),
+    ).fetchone()
+    evidence = json.loads(event_row["submit_evidence"])
+    assert evidence["h74_entry_plan_client_order_id"] == "h74_entry_plan_123"
+
+
+def test_h74_guard_activates_when_request_has_ownership_hash_even_without_active_flag(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+    observability = dict(request.submit_observability_fields)
+    observability.pop("h74_fixed_position_contract_active")
+    request = request.__class__(**{**request.__dict__, "submit_observability_fields": observability})
+
+    assert _validate_explicit_submit_plan(request=request) is request.submit_plan
+
+
+def test_h74_guard_accepts_entry_plan_id_different_from_client_order_id_when_contract_matches(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+
+    assert request.client_order_id != request.h74_entry_plan_client_order_id
+    assert _validate_explicit_submit_plan(request=request) is request.submit_plan
+
+
+def test_h74_guard_rejects_contract_hash_mismatch_before_dispatch(tmp_path) -> None:
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _request(conn)
+    bad = request.__class__(**{**request.__dict__, "h74_position_ownership_contract_hash": "sha256:mismatch"})
+
+    with pytest.raises(BrokerRejectError, match="h74_cycle_ownership"):
+        _validate_explicit_submit_plan(request=bad)

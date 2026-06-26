@@ -72,8 +72,10 @@ from bithumb_bot.position_authority_repair import (
 from bithumb_bot.public_api_orderbook import BestQuote
 from bithumb_bot.reason_codes import DUST_RESIDUAL_UNSELLABLE
 from bithumb_bot.recovery import reconcile_with_broker
+from bithumb_bot.recovery import recover_order_with_exchange_id
 from bithumb_bot.runtime_readiness import compute_runtime_readiness_snapshot
 from bithumb_bot.risk import evaluate_daily_loss_state
+from bithumb_bot.h74_position_ownership import h74_position_ownership_contract_from_payload
 from bithumb_bot.utils_time import kst_str
 
 
@@ -997,6 +999,69 @@ class _RecoverSuccessBroker:
                 price=100000000.0,
                 qty=0.01,
                 fee=10.0,
+                exchange_order_id=exchange_order_id,
+            )
+        ]
+
+    def get_open_orders(
+        self,
+        *,
+        exchange_order_ids: list[str] | tuple[str, ...] | None = None,
+        client_order_ids: list[str] | tuple[str, ...] | None = None,
+    ):
+        return []
+
+    def get_recent_orders(
+        self,
+        *,
+        limit: int = 100,
+        exchange_order_ids: list[str] | tuple[str, ...] | None = None,
+        client_order_ids: list[str] | tuple[str, ...] | None = None,
+    ):
+        return []
+
+    def get_recent_fills(self, *, limit: int = 100):
+        return []
+
+    def get_balance(self) -> BrokerBalance:
+        return BrokerBalance(
+            cash_available=0.0,
+            cash_locked=0.0,
+            asset_available=0.01,
+            asset_locked=0.0,
+        )
+
+
+class _RecoverH74Broker(_RecoverSuccessBroker):
+    def get_order(
+        self, *, client_order_id: str, exchange_order_id: str | None = None
+    ) -> BrokerOrder:
+        return BrokerOrder(
+            client_order_id,
+            exchange_order_id,
+            "BUY",
+            "FILLED",
+            None,
+            0.0008,
+            0.0008,
+            1,
+            1,
+        )
+
+    def get_fills(
+        self,
+        *,
+        client_order_id: str | None = None,
+        exchange_order_id: str | None = None,
+    ) -> list[BrokerFill]:
+        return [
+            BrokerFill(
+                client_order_id=str(client_order_id or ""),
+                fill_id="h74_recover_fill_1",
+                fill_ts=1000,
+                price=100000000.0,
+                qty=0.0008,
+                fee=32.0,
                 exchange_order_id=exchange_order_id,
             )
         ]
@@ -6477,6 +6542,158 @@ def test_recover_order_dry_run_prints_preview_and_makes_no_changes(capsys, tmp_p
     assert row is not None
     assert row["status"] == "RECOVERY_REQUIRED"
     assert row["exchange_order_id"] is None
+
+
+def _insert_h74_recovery_order(tmp_path, *, client_order_id: str = "live_buy_1") -> tuple[str, str]:
+    _set_tmp_db(tmp_path)
+    contract = h74_position_ownership_contract_from_payload(
+        {
+            "cycle_id": "cycle-1",
+            "h74_cycle_id": "cycle-1",
+            "authority_hash": "sha256:a",
+            "strategy_instance_id": "h74-source-observation",
+            "probe_run_id": "probe-run-1",
+            "pair": "KRW-BTC",
+            "entry_side": "BUY",
+            "entry_plan_id": "h74_entry_plan_1",
+            "position_mode": "fixed_fill_qty_until_exit",
+            "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
+        }
+    )
+    conn = ensure_db()
+    try:
+        set_portfolio_breakdown(
+            conn,
+            cash_available=1_000_000.0,
+            cash_locked=0.0,
+            asset_available=0.0,
+            asset_locked=0.0,
+        )
+        record_order_if_missing(
+            conn,
+            client_order_id=client_order_id,
+            side="BUY",
+            qty_req=0.0008,
+            price=100_000_000.0,
+            strategy_name="daily_participation_sma",
+            strategy_instance_id="h74-source-observation",
+            cycle_id="cycle-1",
+            authority_hash="sha256:a",
+            h74_entry_plan_client_order_id=contract.entry_plan_id,
+            h74_position_ownership_contract_hash=contract.contract_hash,
+            h74_position_ownership_contract=contract.as_dict(),
+            probe_run_id="probe-run-1",
+            status="RECOVERY_REQUIRED",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return contract.entry_plan_id, contract.contract_hash
+
+
+def test_recover_order_dry_run_reports_h74_contract_source(capsys, tmp_path):
+    entry_plan_id, contract_hash = _insert_h74_recovery_order(tmp_path)
+    original_mode = settings.MODE
+    object.__setattr__(settings, "MODE", "live")
+    try:
+        cmd_recover_order(
+            client_order_id="live_buy_1",
+            exchange_order_id="ex_h74_1",
+            dry_run=True,
+        )
+    finally:
+        object.__setattr__(settings, "MODE", original_mode)
+
+    out = capsys.readouterr().out
+    assert "contract_source=orders.h74_position_ownership_contract" in out
+    assert f"h74_entry_plan_client_order_id={entry_plan_id}" in out
+    assert f"h74_position_ownership_contract_hash={contract_hash}" in out
+
+
+def test_recover_order_preview_reports_legacy_contract_source(capsys, tmp_path):
+    _set_tmp_db(tmp_path)
+    conn = ensure_db()
+    try:
+        record_order_if_missing(
+            conn,
+            client_order_id="legacy_buy",
+            side="BUY",
+            qty_req=0.0008,
+            price=100_000_000.0,
+            strategy_name="daily_participation_sma",
+            strategy_instance_id="h74-source-observation",
+            cycle_id="cycle-1",
+            authority_hash="sha256:a",
+            h74_position_ownership_contract_hash="sha256:legacy",
+            probe_run_id="probe-run-1",
+            status="RECOVERY_REQUIRED",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    original_mode = settings.MODE
+    object.__setattr__(settings, "MODE", "live")
+    try:
+        cmd_recover_order(
+            client_order_id="legacy_buy",
+            exchange_order_id="ex_h74_legacy",
+            dry_run=True,
+        )
+    finally:
+        object.__setattr__(settings, "MODE", original_mode)
+
+    out = capsys.readouterr().out
+    assert "contract_source=legacy_client_order_id_reconstruction" in out
+
+
+def test_recover_order_applies_h74_fill_with_persisted_ownership_contract(tmp_path):
+    entry_plan_id, _contract_hash = _insert_h74_recovery_order(tmp_path)
+
+    recover_order_with_exchange_id(
+        _RecoverH74Broker(),
+        client_order_id="live_buy_1",
+        exchange_order_id="ex_h74_1",
+    )
+
+    conn = ensure_db()
+    try:
+        counts = {
+            "fills": conn.execute("SELECT COUNT(*) AS n FROM fills").fetchone()["n"],
+            "trades": conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"],
+            "cycles": conn.execute("SELECT COUNT(*) AS n FROM h74_cycle_state").fetchone()["n"],
+        }
+        row = conn.execute(
+            """
+            SELECT entry_client_order_id, h74_entry_plan_client_order_id
+            FROM h74_cycle_state
+            WHERE cycle_id='cycle-1'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert counts == {"fills": 1, "trades": 1, "cycles": 1}
+    assert row["entry_client_order_id"] == "live_buy_1"
+    assert row["h74_entry_plan_client_order_id"] == entry_plan_id
+
+
+def test_recover_order_does_not_mutate_h74_contract_hash(tmp_path):
+    _entry_plan_id, contract_hash = _insert_h74_recovery_order(tmp_path)
+
+    recover_order_with_exchange_id(
+        _RecoverH74Broker(),
+        client_order_id="live_buy_1",
+        exchange_order_id="ex_h74_1",
+    )
+
+    conn = ensure_db()
+    try:
+        row = conn.execute(
+            "SELECT h74_position_ownership_contract_hash FROM orders WHERE client_order_id='live_buy_1'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["h74_position_ownership_contract_hash"] == contract_hash
 
 
 def test_recover_order_requires_explicit_confirmation(monkeypatch, tmp_path):

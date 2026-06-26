@@ -571,6 +571,29 @@ def test_h74_order_event_submit_evidence_contains_ownership_contract_hash(roundt
 
     evidence = json.loads(event_row["submit_evidence"])
     assert evidence["h74_position_ownership_contract_hash"] == request.h74_position_ownership_contract_hash
+    assert evidence["h74_position_ownership_contract"]["entry_plan_id"] == request.h74_entry_plan_client_order_id
+
+
+def test_h74_order_event_submit_evidence_contains_ownership_contract_payload(roundtrip_db) -> None:
+    conn = _conn(roundtrip_db)
+    request = _live_submit_request(conn)
+    try:
+        context = _build_context(request=request, submit_plan=_validate_explicit_submit_plan(request=request))
+        _plan_submit_attempt(context=context)
+        event_row = conn.execute(
+            """
+            SELECT submit_evidence FROM order_events
+            WHERE client_order_id=? AND submit_phase='planning'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (request.client_order_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    evidence = json.loads(event_row["submit_evidence"])
+    assert evidence["h74_entry_plan_client_order_id"] == request.h74_entry_plan_client_order_id
+    assert evidence["h74_position_ownership_contract"]["contract_hash"] == request.h74_position_ownership_contract_hash
 
 
 def _acceptance_report(**overrides: object) -> dict[str, object]:

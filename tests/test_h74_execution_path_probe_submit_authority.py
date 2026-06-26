@@ -10,6 +10,8 @@ from bithumb_bot.execution_service import (
     _h74_execution_path_probe_authority_allows_submit,
     build_execution_decision_summary,
 )
+from bithumb_bot.broker.base import BrokerRejectError
+from bithumb_bot.broker.live_submit_orchestrator import _validate_explicit_submit_plan
 from bithumb_bot.experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
 from bithumb_bot.h74_observation import (
     H74_SOURCE_OBSERVATION_PARAMETERS,
@@ -19,7 +21,9 @@ from bithumb_bot.h74_observation import (
     build_h74_source_variant_observation_authority_payload,
 )
 from bithumb_bot.h74_pre_submit_evidence import build_h74_pre_submit_evidence_bundle
+from bithumb_bot.h74_position_ownership import H74PositionOwnershipError, h74_position_ownership_contract_from_payload
 from bithumb_bot.research.hashing import sha256_prefixed
+from tests.test_h74_live_submit_ownership import _request as _live_submit_request
 
 
 pytestmark = pytest.mark.fast_regression
@@ -110,6 +114,23 @@ def _settings(authority_path: str, evidence_path: str = "", **overrides: object)
 
 
 def _payload(**overrides: object) -> dict[str, object]:
+    try:
+        contract = h74_position_ownership_contract_from_payload(
+            {
+                "cycle_id": overrides.get("cycle_id", "h74-cycle-1"),
+                "h74_cycle_id": overrides.get("h74_cycle_id", overrides.get("cycle_id", "h74-cycle-1")),
+                "strategy_instance_id": overrides.get("strategy_instance_id", "h74-source-observation"),
+                "authority_hash": overrides.get("authority_hash", "sha256:authority"),
+                "probe_run_id": "probe-run-1",
+                "pair": "KRW-BTC",
+                "entry_side": "BUY",
+                "entry_plan_id": overrides.get("h74_entry_plan_client_order_id", "h74-entry-plan-1"),
+                "position_mode": POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT,
+                "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
+            }
+        )
+    except H74PositionOwnershipError:
+        contract = None
     payload = {
         "strategy": "daily_participation_sma",
         "h74_fixed_position_contract_active": True,
@@ -123,6 +144,9 @@ def _payload(**overrides: object) -> dict[str, object]:
         "position_mode": POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT,
         "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
     }
+    if contract is not None:
+        payload["h74_position_ownership_contract_hash"] = contract.contract_hash
+        payload["h74_position_ownership_contract"] = contract.as_dict()
     payload.update(overrides)
     return payload
 
@@ -511,6 +535,23 @@ def test_h74_fixed_buy_requires_ownership_before_submit(tmp_path, field, reason_
     assert reason_field in plan["block_reason"]
 
 
+def test_h74_fixed_buy_pre_dispatch_requires_full_ownership_contract(tmp_path) -> None:
+    from bithumb_bot.db_core import ensure_db
+
+    conn = ensure_db(str(tmp_path / "live-submit.sqlite"))
+    request = _live_submit_request(conn)
+    hash_only_request = request.__class__(
+        **{
+            **request.__dict__,
+            "h74_position_ownership_contract": None,
+            "h74_entry_plan_client_order_id": None,
+        }
+    )
+
+    with pytest.raises(BrokerRejectError, match="h74_cycle_ownership_required_for_entry"):
+        _validate_explicit_submit_plan(request=hash_only_request)
+
+
 def test_h74_fixed_buy_requires_cycle_id_before_submit(tmp_path) -> None:
     cfg = _valid_cfg(tmp_path)
     payload = _payload(cycle_id="", h74_cycle_id="")
@@ -549,6 +590,6 @@ def test_h74_fixed_buy_requires_cycle_id_before_submit(tmp_path) -> None:
 
     assert summary.target_submit_plan is not None
     plan = summary.target_submit_plan.as_dict()
-    assert plan["submit_expected"] is True
-    assert plan["cycle_id"]
-    assert plan["h74_cycle_id"] == plan["cycle_id"]
+    assert plan["submit_expected"] is False
+    assert plan["final_action"] == "BLOCK_PORTFOLIO_TARGET_AUTHORITY"
+    assert plan["block_reason"].startswith("h74_cycle_ownership_required_for_entry")

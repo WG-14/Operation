@@ -31,6 +31,7 @@ class H74CycleInventory:
     sold_qty: float
     locked_exit_qty: float
     contract_hash: str = ""
+    h74_entry_plan_client_order_id: str = ""
 
     @property
     def remaining_cycle_qty(self) -> float:
@@ -47,6 +48,7 @@ class H74CycleInventory:
             "remaining_cycle_qty": self.remaining_cycle_qty,
             "contract_hash": str(self.contract_hash or ""),
             "h74_position_ownership_contract_hash": str(self.contract_hash or ""),
+            "h74_entry_plan_client_order_id": str(self.h74_entry_plan_client_order_id or ""),
         }
         payload["cycle_inventory_hash"] = sha256_prefixed(payload)
         return payload
@@ -62,6 +64,7 @@ def ensure_h74_cycle_schema(conn: sqlite3.Connection) -> None:
             pair TEXT NOT NULL DEFAULT 'KRW-BTC',
             state TEXT NOT NULL DEFAULT 'HOLDING',
             entry_client_order_id TEXT,
+            h74_entry_plan_client_order_id TEXT,
             exit_client_order_id TEXT,
             entry_filled_ts INTEGER,
             scheduled_exit_ts INTEGER,
@@ -80,6 +83,8 @@ def ensure_h74_cycle_schema(conn: sqlite3.Connection) -> None:
     }
     if "contract_hash" not in columns:
         conn.execute("ALTER TABLE h74_cycle_state ADD COLUMN contract_hash TEXT")
+    if "h74_entry_plan_client_order_id" not in columns:
+        conn.execute("ALTER TABLE h74_cycle_state ADD COLUMN h74_entry_plan_client_order_id TEXT")
 
 
 def upsert_h74_cycle_fill(
@@ -94,6 +99,7 @@ def upsert_h74_cycle_fill(
     client_order_id: str,
     fill_ts: int,
     contract_hash: str | None = None,
+    h74_entry_plan_client_order_id: str | None = None,
     max_holding_minutes: int = 74,
 ) -> None:
     ensure_h74_cycle_schema(conn)
@@ -101,22 +107,24 @@ def upsert_h74_cycle_fill(
     acquired_delta = float(qty) if normalized_side == "BUY" else 0.0
     sold_delta = float(qty) if normalized_side == "SELL" else 0.0
     entry_id = client_order_id if normalized_side == "BUY" else None
+    h74_entry_id = str(h74_entry_plan_client_order_id or "").strip() or None
     exit_id = client_order_id if normalized_side == "SELL" else None
     scheduled_exit_ts = int(fill_ts) + int(max_holding_minutes) * 60_000 if normalized_side == "BUY" else None
     conn.execute(
         """
         INSERT INTO h74_cycle_state(
             cycle_id, authority_hash, strategy_instance_id, pair, state,
-            entry_client_order_id, exit_client_order_id, entry_filled_ts,
+            entry_client_order_id, h74_entry_plan_client_order_id, exit_client_order_id, entry_filled_ts,
             scheduled_exit_ts, acquired_qty, sold_qty, contract_hash, updated_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cycle_id) DO UPDATE SET
             authority_hash=excluded.authority_hash,
             strategy_instance_id=excluded.strategy_instance_id,
             pair=excluded.pair,
             contract_hash=COALESCE(excluded.contract_hash, h74_cycle_state.contract_hash),
             entry_client_order_id=COALESCE(h74_cycle_state.entry_client_order_id, excluded.entry_client_order_id),
+            h74_entry_plan_client_order_id=COALESCE(h74_cycle_state.h74_entry_plan_client_order_id, excluded.h74_entry_plan_client_order_id),
             exit_client_order_id=COALESCE(excluded.exit_client_order_id, h74_cycle_state.exit_client_order_id),
             entry_filled_ts=COALESCE(h74_cycle_state.entry_filled_ts, excluded.entry_filled_ts),
             scheduled_exit_ts=COALESCE(h74_cycle_state.scheduled_exit_ts, excluded.scheduled_exit_ts),
@@ -137,6 +145,7 @@ def upsert_h74_cycle_fill(
             pair,
             H74_CYCLE_STATE_HOLDING,
             entry_id,
+            h74_entry_id,
             exit_id,
             int(fill_ts) if normalized_side == "BUY" else None,
             scheduled_exit_ts,
@@ -152,7 +161,8 @@ def load_h74_cycle_inventory(conn: sqlite3.Connection, *, cycle_id: str) -> H74C
     ensure_h74_cycle_schema(conn)
     row = conn.execute(
         """
-        SELECT cycle_id, authority_hash, strategy_instance_id, acquired_qty, sold_qty, locked_exit_qty, contract_hash
+        SELECT cycle_id, authority_hash, strategy_instance_id, acquired_qty, sold_qty, locked_exit_qty, contract_hash,
+               h74_entry_plan_client_order_id
         FROM h74_cycle_state
         WHERE cycle_id=?
         """,
@@ -168,6 +178,9 @@ def load_h74_cycle_inventory(conn: sqlite3.Connection, *, cycle_id: str) -> H74C
         sold_qty=float(row["sold_qty"] if hasattr(row, "keys") else row[4]),
         locked_exit_qty=float(row["locked_exit_qty"] if hasattr(row, "keys") else row[5]),
         contract_hash=str((row["contract_hash"] if hasattr(row, "keys") else row[6]) or ""),
+        h74_entry_plan_client_order_id=str(
+            (row["h74_entry_plan_client_order_id"] if hasattr(row, "keys") else row[7]) or ""
+        ),
     )
 
 
@@ -300,7 +313,8 @@ def h74_cycle_health_invariant_reasons(conn: sqlite3.Connection) -> tuple[str, .
     def _cycle_row(cycle_id: str):
         return conn.execute(
             """
-            SELECT acquired_qty, sold_qty, locked_exit_qty, state, entry_client_order_id, pair
+            SELECT acquired_qty, sold_qty, locked_exit_qty, state, entry_client_order_id, pair,
+                   h74_entry_plan_client_order_id
             FROM h74_cycle_state
             WHERE cycle_id=?
             """,
@@ -327,6 +341,12 @@ def h74_cycle_health_invariant_reasons(conn: sqlite3.Connection) -> tuple[str, .
         cycle = _cycle_row(cycle_id)
         if cycle is None:
             reasons.append("h74_cycle_ownership_incomplete")
+            continue
+        h74_entry_plan_id = str(
+            (cycle["h74_entry_plan_client_order_id"] if hasattr(cycle, "keys") else cycle[6]) or ""
+        ).strip()
+        if not h74_entry_plan_id:
+            reasons.append("h74_cycle_entry_plan_identity_missing")
             continue
         summed = _fill_sum(client_order_id)
         trade_summed = _trade_sum(client_order_id, "BUY")
@@ -384,6 +404,12 @@ def h74_cycle_health_invariant_reasons(conn: sqlite3.Connection) -> tuple[str, .
         cycle = _cycle_row(cycle_id)
         if cycle is None:
             reasons.append("h74_cycle_ownership_incomplete")
+            continue
+        h74_entry_plan_id = str(
+            (cycle["h74_entry_plan_client_order_id"] if hasattr(cycle, "keys") else cycle[6]) or ""
+        ).strip()
+        if not h74_entry_plan_id:
+            reasons.append("h74_cycle_entry_plan_identity_missing")
             continue
         acquired = float(cycle["acquired_qty"] if hasattr(cycle, "keys") else cycle[0])
         sold = float(cycle["sold_qty"] if hasattr(cycle, "keys") else cycle[1])

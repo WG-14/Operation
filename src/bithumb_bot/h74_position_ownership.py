@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping
 
 from .decision_equivalence import sha256_prefixed
@@ -21,6 +22,12 @@ H74_OWNERSHIP_REQUIRED_FIELDS = (
 
 class H74PositionOwnershipError(ValueError):
     pass
+
+
+H74_CONTRACT_SOURCE_ORDER = "orders.h74_position_ownership_contract"
+H74_CONTRACT_SOURCE_EXECUTION_PLAN = "execution_plan_json"
+H74_CONTRACT_SOURCE_LEGACY_CLIENT_ORDER_ID = "legacy_client_order_id_reconstruction"
+H74_CONTRACT_SOURCE_UNAVAILABLE = "unavailable_fail_closed"
 
 
 @dataclass(frozen=True)
@@ -104,8 +111,20 @@ def h74_position_ownership_contract_from_payload(
         entry_plan_id=entry_plan_id,
         position_mode=str(payload.get("position_mode") or "").strip(),
         hold_policy=str(payload.get("hold_policy") or "").strip(),
-        contract_hash=str(payload.get("h74_position_ownership_contract_hash") or "").strip(),
+        contract_hash=str(
+            payload.get("h74_position_ownership_contract_hash") or payload.get("contract_hash") or ""
+        ).strip(),
     )
+
+
+def h74_position_ownership_contract_from_json(value: str) -> H74PositionOwnershipContract:
+    try:
+        payload = json.loads(str(value or ""))
+    except json.JSONDecodeError as exc:
+        raise H74PositionOwnershipError("h74_cycle_ownership_contract_json_invalid") from exc
+    if not isinstance(payload, Mapping):
+        raise H74PositionOwnershipError("h74_cycle_ownership_contract_json_invalid")
+    return h74_position_ownership_contract_from_payload(payload)
 
 
 def ownership_payload_fields(contract: H74PositionOwnershipContract) -> dict[str, object]:
@@ -143,7 +162,12 @@ def h74_fixed_position_ownership_missing_fields(payload: Mapping[str, Any]) -> t
 __all__ = [
     "H74PositionOwnershipContract",
     "H74PositionOwnershipError",
+    "H74_CONTRACT_SOURCE_EXECUTION_PLAN",
+    "H74_CONTRACT_SOURCE_LEGACY_CLIENT_ORDER_ID",
+    "H74_CONTRACT_SOURCE_ORDER",
+    "H74_CONTRACT_SOURCE_UNAVAILABLE",
     "h74_fixed_position_ownership_missing_fields",
     "h74_position_ownership_contract_from_payload",
+    "h74_position_ownership_contract_from_json",
     "ownership_payload_fields",
 ]

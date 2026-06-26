@@ -1112,10 +1112,20 @@ def execute_live_submission_and_application(
             or ""
         )
         or None,
+        h74_entry_plan_client_order_id=str(
+            decision_observability.get("h74_entry_plan_client_order_id")
+            or ""
+        ).strip()
+        or None,
         h74_position_ownership_contract_hash=str(
             decision_observability.get("h74_position_ownership_contract_hash") or ""
         ).strip()
         or None,
+        h74_position_ownership_contract=(
+            decision_observability.get("h74_position_ownership_contract")
+            if isinstance(decision_observability.get("h74_position_ownership_contract"), dict)
+            else None
+        ),
     )
     try:
         submit_plan = build_live_submit_plan(
@@ -1278,10 +1288,20 @@ def execute_live_submission_and_application(
                 or ""
             )
             or None,
+            h74_entry_plan_client_order_id=str(
+                decision_observability.get("h74_entry_plan_client_order_id")
+                or ""
+            ).strip()
+            or None,
             h74_position_ownership_contract_hash=str(
                 decision_observability.get("h74_position_ownership_contract_hash") or ""
             ).strip()
             or None,
+            h74_position_ownership_contract=(
+                decision_observability.get("h74_position_ownership_contract")
+                if isinstance(decision_observability.get("h74_position_ownership_contract"), dict)
+                else None
+            ),
         ),
         intent_key=intent_key,
         strategy_name=(strategy_name or settings.STRATEGY_NAME),

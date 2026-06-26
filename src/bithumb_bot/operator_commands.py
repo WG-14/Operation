@@ -7176,7 +7176,10 @@ def _build_recover_order_preview(
         row = conn.execute(
             """
             SELECT client_order_id, status, exchange_order_id, qty_filled, last_error,
-                   side, price, qty_req, created_ts, updated_ts
+                   side, price, qty_req, created_ts, updated_ts,
+                   h74_entry_plan_client_order_id,
+                   h74_position_ownership_contract_hash,
+                   h74_position_ownership_contract
             FROM orders
             WHERE client_order_id=?
             """,
@@ -7200,6 +7203,14 @@ def _build_recover_order_preview(
 
     current_status = str(row["status"] or "UNKNOWN")
     current_exchange_order_id = str(row["exchange_order_id"] or "").strip()
+    h74_contract_json = str(row["h74_position_ownership_contract"] or "").strip()
+    h74_contract_hash = str(row["h74_position_ownership_contract_hash"] or "").strip()
+    h74_entry_plan_id = str(row["h74_entry_plan_client_order_id"] or "").strip()
+    h74_contract_source = (
+        "orders.h74_position_ownership_contract"
+        if h74_contract_json
+        else ("legacy_client_order_id_reconstruction" if h74_contract_hash else "unavailable_fail_closed")
+    )
     if current_status == "RECOVERY_REQUIRED":
         return {
             "exists": True,
@@ -7218,6 +7229,9 @@ def _build_recover_order_preview(
             ],
             "last_error": str(row["last_error"] or "-"),
             "qty_filled": float(row["qty_filled"] or 0.0),
+            "h74_contract_source": h74_contract_source,
+            "h74_entry_plan_client_order_id": h74_entry_plan_id or "-",
+            "h74_position_ownership_contract_hash": h74_contract_hash or "-",
         }
 
     eligibility_reason = "client_order_id must exist and be safely attributable"
@@ -7295,6 +7309,9 @@ def _build_recover_order_preview(
         ],
         "last_error": str(row["last_error"] or "-"),
         "qty_filled": float(row["qty_filled"] or 0.0),
+        "h74_contract_source": h74_contract_source,
+        "h74_entry_plan_client_order_id": h74_entry_plan_id or "-",
+        "h74_position_ownership_contract_hash": h74_contract_hash or "-",
     }
 
 
@@ -7343,6 +7360,12 @@ def cmd_recover_order(
         f"exchange_order_id={preview['current_exchange_order_id']}"
     )
     print(f"  eligibility_reason={preview.get('eligibility_reason')}")
+    print(
+        "  h74_contract="
+        f"contract_source={preview.get('h74_contract_source', '-')} "
+        f"h74_entry_plan_client_order_id={preview.get('h74_entry_plan_client_order_id', '-')} "
+        f"h74_position_ownership_contract_hash={preview.get('h74_position_ownership_contract_hash', '-')}"
+    )
     print(f"  proposed_recovery_action={preview['proposed_action']}")
     print("  important_state_changes:")
     for change in preview.get("state_changes", []):

@@ -21,7 +21,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def _h74_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-buy") -> None:
-    contract_hash = h74_position_ownership_contract_from_payload(
+    contract = h74_position_ownership_contract_from_payload(
         {
             "cycle_id": "cycle-1",
             "h74_cycle_id": "cycle-1",
@@ -34,7 +34,7 @@ def _h74_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-buy") ->
             "position_mode": "fixed_fill_qty_until_exit",
             "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
         }
-    ).contract_hash
+    )
     record_order_if_missing(
         conn,
         client_order_id=client_order_id,
@@ -45,14 +45,16 @@ def _h74_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-buy") ->
         strategy_instance_id="h74-source-observation",
         cycle_id="cycle-1",
         authority_hash="sha256:a",
-        h74_position_ownership_contract_hash=contract_hash,
+        h74_entry_plan_client_order_id=contract.entry_plan_id,
+        h74_position_ownership_contract_hash=contract.contract_hash,
+        h74_position_ownership_contract=contract.as_dict(),
         probe_run_id="probe-run-1",
         status="FILLED",
     )
 
 
 def _h74_sell_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-sell") -> None:
-    contract_hash = h74_position_ownership_contract_from_payload(
+    contract = h74_position_ownership_contract_from_payload(
         {
             "cycle_id": "cycle-1",
             "h74_cycle_id": "cycle-1",
@@ -65,7 +67,7 @@ def _h74_sell_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-sel
             "position_mode": "fixed_fill_qty_until_exit",
             "hold_policy": "hold_acquired_fill_qty_until_max_holding_exit",
         }
-    ).contract_hash
+    )
     record_order_if_missing(
         conn,
         client_order_id=client_order_id,
@@ -76,7 +78,9 @@ def _h74_sell_order(conn: sqlite3.Connection, *, client_order_id: str = "h74-sel
         strategy_instance_id="h74-source-observation",
         cycle_id="cycle-1",
         authority_hash="sha256:a",
-        h74_position_ownership_contract_hash=contract_hash,
+        h74_entry_plan_client_order_id=contract.entry_plan_id,
+        h74_position_ownership_contract_hash=contract.contract_hash,
+        h74_position_ownership_contract=contract.as_dict(),
         probe_run_id="probe-run-1",
         status="FILLED",
     )
@@ -109,11 +113,36 @@ def test_h74_cycle_state_qty_mismatch_is_health_blocker() -> None:
         qty=0.0003,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
 
     data = compute_runtime_readiness_snapshot(conn).as_dict()
 
     assert "h74_cycle_qty_mismatch" in data["resume_blockers"]
+
+
+def test_h74_cycle_health_rejects_missing_entry_plan_identity() -> None:
+    conn = _conn()
+    _h74_order(conn)
+    conn.execute(
+        "INSERT INTO fills(client_order_id, fill_id, fill_ts, price, qty, fee) VALUES (?, ?, ?, ?, ?, ?)",
+        ("h74-buy", "fill-1", 1, 100_000_000.0, 0.0008, 32.0),
+    )
+    upsert_h74_cycle_fill(
+        conn,
+        cycle_id="cycle-1",
+        authority_hash="sha256:a",
+        strategy_instance_id="h74-source-observation",
+        pair="KRW-BTC",
+        side="BUY",
+        qty=0.0008,
+        client_order_id="h74-buy",
+        fill_ts=1,
+    )
+
+    data = compute_runtime_readiness_snapshot(conn).as_dict()
+
+    assert "h74_cycle_entry_plan_identity_missing" in data["resume_blockers"]
 
 
 def test_h74_closed_cycle_and_flat_portfolio_is_clean() -> None:
@@ -128,6 +157,7 @@ def test_h74_closed_cycle_and_flat_portfolio_is_clean() -> None:
         qty=0.0008,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
     upsert_h74_cycle_fill(
         conn,
@@ -139,6 +169,7 @@ def test_h74_closed_cycle_and_flat_portfolio_is_clean() -> None:
         qty=0.0008,
         client_order_id="h74-sell",
         fill_ts=2,
+        h74_entry_plan_client_order_id="h74-buy",
     )
 
     data = compute_runtime_readiness_snapshot(conn).as_dict()
@@ -233,6 +264,7 @@ def test_h74_closed_cycle_requires_flat_portfolio_and_accounting() -> None:
         qty=0.0008,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
     upsert_h74_cycle_fill(
         conn,
@@ -244,6 +276,7 @@ def test_h74_closed_cycle_requires_flat_portfolio_and_accounting() -> None:
         qty=0.0008,
         client_order_id="h74-sell",
         fill_ts=2,
+        h74_entry_plan_client_order_id="h74-buy",
     )
     set_portfolio(conn, cash_krw=1_000_000.0, asset_qty=0.0001)
 
@@ -269,6 +302,7 @@ def test_h74_cycle_mismatch_blocks_new_entry() -> None:
         qty=0.0003,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
 
     readiness = compute_runtime_readiness_snapshot(conn)
@@ -290,6 +324,7 @@ def test_h74_trade_row_missing_for_h74_fill_is_health_blocker() -> None:
         qty=0.0008,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
     conn.execute(
         """
@@ -354,6 +389,7 @@ def test_h74_open_lot_qty_mismatch_with_cycle_remaining_is_health_blocker() -> N
         qty=0.0008,
         client_order_id="h74-buy",
         fill_ts=1,
+        h74_entry_plan_client_order_id="h74-buy",
     )
     conn.execute(
         """
