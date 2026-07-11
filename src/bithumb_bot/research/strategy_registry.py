@@ -26,6 +26,11 @@ from ..operation_strategy.capabilities import (
     StrategyRuntimeCapabilities,
     normalized_data_capabilities,
 )
+from ..operation_strategy.registry import (
+    operation_registration_from_legacy_plugin,
+    register_operation_strategy_plugin,
+    clear_operation_strategy_registry_for_tests,
+)
 
 
 ResearchEventBuilder = Callable[..., Iterable[ResearchDecisionEvent]]
@@ -1138,10 +1143,19 @@ def register_research_strategy_plugin(
     key = str(plugin.name or "").strip().lower()
     if not key:
         raise ResearchStrategyRegistryError("research strategy plugin name must be non-empty")
+    operation_registration = operation_registration_from_legacy_plugin(plugin)
     existing = _RESEARCH_STRATEGY_PLUGINS.get(key)
     if existing is not None and not replace:
         raise ResearchStrategyRegistryError(f"duplicate research strategy plugin name: {key}")
     _RESEARCH_STRATEGY_PLUGINS[key] = plugin
+    try:
+        register_operation_strategy_plugin(operation_registration, replace=replace)
+    except Exception:
+        if existing is None:
+            _RESEARCH_STRATEGY_PLUGINS.pop(key, None)
+        else:
+            _RESEARCH_STRATEGY_PLUGINS[key] = existing
+        raise
 
 
 def list_research_strategy_plugins() -> tuple[ResearchStrategyPlugin, ...]:
@@ -1184,6 +1198,7 @@ def reload_research_strategy_plugins_for_tests(
     global _RESEARCH_STRATEGY_PLUGINS, _DISCOVERED_STRATEGY_PLUGINS_LOADED
     _RESEARCH_STRATEGY_PLUGINS = {}
     _DISCOVERED_STRATEGY_PLUGINS_LOADED = False
+    clear_operation_strategy_registry_for_tests()
     if providers is None:
         _ensure_discovered_strategy_plugins_loaded()
         return

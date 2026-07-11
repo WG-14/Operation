@@ -60,10 +60,14 @@ Operation-owned strategy specification extraction and Operation-owned
 capability/data-requirement value-object extraction are complete. The latter
 now lives in `bithumb_bot.operation_strategy.capabilities`, preserving the
 existing `ResearchStrategyDataRequirements` name for plugin/profile
-compatibility. This is still a foundation PR: the allowlist remains at 29 files.
-`runtime_data_provider.py` now owns its capability/data-requirement types, but
-retains one temporary research dependency: the
-`research_strategy_data_requirements` resolver.
+compatibility. The Operation-owned registry in
+`bithumb_bot.operation_strategy.registry` is also complete: research plugin
+registration now performs a transitional dual registration using a duck-typed
+Operation projection that preserves the existing compatibility contract hash.
+This remains a foundation PR, so the allowlist stays at 29 files and runtime
+consumers still use the research registry. `runtime_data_provider.py` now owns
+its capability/data-requirement types, but retains one temporary research
+dependency: the `research_strategy_data_requirements` resolver.
 
 ## Next migration targets
 
@@ -71,10 +75,9 @@ Do not reintroduce the completed historical backfill date-range or
 channel-breakout diagnostic wrapper dependencies into Operation scripts or
 commands. Move these remaining bounded modules in this order:
 
-1. Create the Operation-owned runtime strategy registry required by
-   `runtime_strategy_set.py`, `runtime_strategy_decision.py`,
-   `runtime_data_provider.py`, `runtime_adapter_bootstrap.py`, and `config.py`.
-   This is a registry extraction, not plugin or runtime-selection migration.
+1. Move `runtime_adapter_bootstrap.py` and `runtime_strategy_decision.py` to
+   the Operation registry. Runtime consumers otherwise remain on the research
+   registry until their focused transition contracts are in place.
 2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.
