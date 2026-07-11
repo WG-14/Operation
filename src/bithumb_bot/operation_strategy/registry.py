@@ -11,7 +11,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from .capabilities import RuntimeDataRequirementBuilder, RuntimeParameterAdapter, StrategyRuntimeCapabilities
+from .capabilities import (
+    DataCapabilityRequirement,
+    OperationStrategyDataRequirements,
+    RuntimeDataRequirementBuilder,
+    RuntimeParameterAdapter,
+    StrategyRuntimeCapabilities,
+)
 
 
 class OperationStrategyRegistryError(ValueError):
@@ -146,6 +152,7 @@ def operation_registration_from_legacy_plugin(plugin: object) -> OperationStrate
 
 
 _OPERATION_STRATEGY_PLUGINS: dict[str, OperationStrategyRegistration] = {}
+_TEST_TOP_OF_BOOK_REQUIRED_STRATEGY = "__test_top_of_book_required__"
 
 
 def register_operation_strategy_plugin(
@@ -169,6 +176,38 @@ def resolve_operation_strategy_plugin(strategy_name: str) -> OperationStrategyRe
         return _OPERATION_STRATEGY_PLUGINS[key]
     except KeyError as exc:
         raise OperationStrategyRegistryError(f"unsupported operation strategy: {key}") from exc
+
+
+def operation_strategy_data_requirements(
+    strategy_name: str,
+    *,
+    runtime_strategy_spec: object | None = None,
+) -> OperationStrategyDataRequirements:
+    """Resolve runtime data requirements from the Operation-owned registry."""
+    key = _normalized_strategy_name(strategy_name)
+    if key == _TEST_TOP_OF_BOOK_REQUIRED_STRATEGY:
+        return OperationStrategyDataRequirements(
+            required_data=("candles", "top_of_book"),
+            capabilities=(
+                DataCapabilityRequirement(
+                    name="orderbook_top",
+                    required=True,
+                    min_coverage_pct=100.0,
+                    evidence_level="best_bid_ask",
+                    source="sqlite_orderbook_top_snapshots",
+                    notes="private test hook for required top-of-book preflight",
+                    max_age_ms=120_000,
+                    freshness_policy="max_age",
+                ),
+            ),
+        )
+    registration = resolve_operation_strategy_plugin(key)
+    if registration.runtime_data_requirement_builder is not None:
+        return registration.runtime_data_requirement_builder(runtime_strategy_spec)
+    return OperationStrategyDataRequirements(
+        required_data=registration.required_data,
+        optional_data=registration.optional_data,
+    )
 
 
 def list_operation_strategy_plugins() -> tuple[OperationStrategyRegistration, ...]:

@@ -15,9 +15,7 @@ from .operation_strategy.capabilities import (
     DataCapabilityRequirement,
     ResearchStrategyDataRequirements,
 )
-from .research.strategy_registry import (
-    research_strategy_data_requirements,
-)
+from .operation_strategy import registry as operation_strategy_registry
 
 
 RUNTIME_DATA_PROVIDER_NAME = "sqlite_runtime_data_provider"
@@ -236,6 +234,9 @@ class RuntimeDataRequirementResolver:
     optional_missing_fails: bool = False
 
     def resolve_for_strategy_set(self, strategy_set: object) -> RuntimeStrategyDataRequirements:
+        from .runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
+
+        ensure_runtime_decision_adapters_registered()
         required_by_name: dict[str, DataCapabilityRequirement] = {}
         optional_by_name: dict[str, DataCapabilityRequirement] = {}
         unsupported_required: list[str] = []
@@ -250,7 +251,7 @@ class RuntimeDataRequirementResolver:
                     instance_id = derive_strategy_instance_id(spec)
                 except Exception:
                     instance_id = strategy_name
-            research_requirements = research_strategy_data_requirements(
+            research_requirements = operation_strategy_registry.operation_strategy_data_requirements(
                 strategy_name,
                 runtime_strategy_spec=spec,
             )
@@ -607,9 +608,10 @@ class SQLiteRuntimeDataProvider:
         if not strategy_name:
             return feature_snapshot
         try:
-            from .research.strategy_registry import resolve_research_strategy_plugin
+            from .runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
 
-            plugin = resolve_research_strategy_plugin(strategy_name)
+            ensure_runtime_decision_adapters_registered()
+            plugin = operation_strategy_registry.resolve_operation_strategy_plugin(strategy_name)
         except Exception:
             return feature_snapshot
         builder = getattr(plugin, "runtime_feature_snapshot_builder", None)
