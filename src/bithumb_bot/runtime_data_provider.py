@@ -11,9 +11,11 @@ from .runtime_data_capabilities import (
     RUNTIME_DATA_CAPABILITY_TABLES,
     normalize_runtime_data_capability,
 )
-from .research.strategy_registry import (
+from .operation_strategy.capabilities import (
     DataCapabilityRequirement,
     ResearchStrategyDataRequirements,
+)
+from .research.strategy_registry import (
     research_strategy_data_requirements,
 )
 

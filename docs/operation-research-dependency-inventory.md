@@ -56,17 +56,25 @@ the existing research-compatible schema and hashes without calling the research
 strategy registry. This is a bounded specification extraction, not a strategy
 registry or plugin migration.
 
+Operation-owned strategy specification extraction and Operation-owned
+capability/data-requirement value-object extraction are complete. The latter
+now lives in `bithumb_bot.operation_strategy.capabilities`, preserving the
+existing `ResearchStrategyDataRequirements` name for plugin/profile
+compatibility. This is still a foundation PR: the allowlist remains at 29 files.
+`runtime_data_provider.py` now owns its capability/data-requirement types, but
+retains one temporary research dependency: the
+`research_strategy_data_requirements` resolver.
+
 ## Next migration targets
 
 Do not reintroduce the completed historical backfill date-range or
 channel-breakout diagnostic wrapper dependencies into Operation scripts or
 commands. Move these remaining bounded modules in this order:
 
-1. Extract the remaining minimal Operation-owned runtime strategy capability
-   and registry interfaces required by `runtime_strategy_set.py`,
-   `runtime_strategy_decision.py`, `runtime_data_provider.py`,
-   `runtime_adapter_bootstrap.py`, and `config.py`. This is a contract
-   extraction, not a shared package/submodule creation.
+1. Create the Operation-owned runtime strategy registry required by
+   `runtime_strategy_set.py`, `runtime_strategy_decision.py`,
+   `runtime_data_provider.py`, `runtime_adapter_bootstrap.py`, and `config.py`.
+   This is a registry extraction, not plugin or runtime-selection migration.
 2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.
