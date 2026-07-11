@@ -6,7 +6,7 @@ from typing import Any, Mapping
 SMOKE_ONLY_EVIDENCE_SCOPE = "smoke_only_not_manifest_backed"
 SMOKE_EVIDENCE_OPERATOR_NEXT_ACTION = "use_manifest_backed_research_validation"
 DIAGNOSTIC_FEATURE_MINING_SCOPE = "diagnostic_feature_mining"
-DIAGNOSTIC_FEATURE_MINING_OPERATOR_NEXT_ACTION = "run_research_validate_from_fixed_manifest"
+DIAGNOSTIC_FEATURE_MINING_OPERATOR_NEXT_ACTION = "manual_operation_review_required"
 DIAGNOSTIC_FEATURE_MINING_FORBIDDEN_USES = (
     "strategy_promotion",
     "approved_profile",
@@ -48,6 +48,9 @@ def smoke_only_evidence_rejection_reasons(payload: Mapping[str, Any] | None) -> 
         reasons.append("promotion_grade_validation_required")
     if payload.get("diagnostic_only") is True:
         reasons.append("diagnostic_only_evidence_artifact")
+    forbidden_uses = payload.get("forbidden_uses")
+    if isinstance(forbidden_uses, (list, tuple, set)):
+        reasons.extend(f"forbidden_use:{value}" for value in forbidden_uses if isinstance(value, str) and value)
     return tuple(sorted(set(reasons)))
 
 
@@ -62,6 +65,6 @@ def smoke_only_evidence_rejection_context(payload: Mapping[str, Any] | None) -> 
         "reason_codes": list(reasons),
         "operator_next_action": SMOKE_EVIDENCE_OPERATOR_NEXT_ACTION if reasons else "none",
         "recommended_command": (
-            "uv run bithumb-bot research-validate --manifest <path>" if reasons else "none"
+            "uv run bithumb-bot operation-approval-verify --approval <path>" if reasons else "none"
         ),
     }

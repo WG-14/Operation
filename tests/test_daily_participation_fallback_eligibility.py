@@ -1,13 +1,54 @@
 from __future__ import annotations
 
-from tests.test_daily_participation_sizing import _count_snapshot, _exit_policy, _market, _position, _state
-from bithumb_bot.core.sma_policy import ExecutionConstraintSnapshot, SmaPolicyConfig
+from bithumb_bot.core.sma_policy import ExecutionConstraintSnapshot, MarketWindow, PositionSnapshot, SmaPolicyConfig
 from bithumb_bot.sma_decision import SmaEntryDecision
 from bithumb_bot.strategy.daily_participation_policy import (
+    DailyParticipationCountSnapshot,
     DOCUMENT_FALLBACK_MODE_ALIASES,
     DailyParticipationPolicyConfig,
+    DailyParticipationStateSnapshot,
 )
+from bithumb_bot.strategy.exit_rules import ExitPolicyConfig
 from bithumb_bot.strategy_plugins.daily_participation_sma import evaluate_daily_participation_sma_decision
+
+
+def _market(prev_s: float, prev_l: float, curr_s: float, curr_l: float) -> MarketWindow:
+    return MarketWindow(
+        pair="KRW-BTC", interval="1m", candle_ts=1_704_046_800_000,
+        closes=(100.0, 101.0, 102.0, 103.0), prev_s=prev_s, prev_l=prev_l,
+        curr_s=curr_s, curr_l=curr_l, gap_ratio=0.01, volatility_ratio=0.01,
+        overextended_ratio=0.0, market_regime_snapshot={"regime": "unknown"},
+    )
+
+
+def _position() -> PositionSnapshot:
+    return PositionSnapshot(in_position=False, entry_allowed=True, exit_allowed=True)
+
+
+def _state() -> DailyParticipationStateSnapshot:
+    return DailyParticipationStateSnapshot(
+        decision_ts=1_704_046_800_000, count_for_kst_day=0, position_open=False,
+        daily_count_snapshot_hash="sha256:" + "2" * 64,
+    )
+
+
+def _count_snapshot() -> DailyParticipationCountSnapshot:
+    return DailyParticipationCountSnapshot(
+        count_basis="filled", timezone="Asia/Seoul", kst_day="2024-01-01",
+        count_for_kst_day=0, timestamp_field="fill_ts", source="unit", rows=(),
+        pair="KRW-BTC", strategy_instance_id="daily:test",
+        event_set_hash="sha256:" + "3" * 64,
+        source_contract_hash="sha256:" + "4" * 64,
+        query_contract_hash="sha256:" + "5" * 64,
+    )
+
+
+def _exit_policy() -> ExitPolicyConfig:
+    return ExitPolicyConfig(
+        rule_names=(), stop_loss_ratio=0.0, max_holding_sec=0.0,
+        min_take_profit_ratio=0.0, small_loss_tolerance_ratio=0.0,
+        live_fee_rate_estimate=0.001,
+    )
 
 
 def _config() -> SmaPolicyConfig:

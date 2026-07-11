@@ -420,22 +420,8 @@ deterministic evaluator with `assert_fast_research_workload`. Strategy canaries
 in the default suite should focus on common kernel contracts and minimal
 datasets.
 
-Do not add unmarked direct calls to `run_research_backtest` or
-`run_research_walk_forward`. The static policy check rejects direct production
-runner use unless the test has an expensive research marker and an entry in the
-comprehensive workload inventory at `tests/policy/research_e2e_inventory.json`
-explaining why lower-level contract coverage is insufficient.
-
-Production backtest or report canaries belong in `research_e2e`, `nightly`, or
-the dedicated research suite. Real walk-forward canaries belong in
-`walk_forward_e2e`; real complete-external audit coverage belongs in
-`audit_e2e`; real parallel worker evidence belongs in `parallel_e2e`. Keep those
-E2E tests as the smallest representative smoke or acceptance checks and cover
-hash, report, audit, artifact, and promotion payload semantics with lower-level
-contract tests. Any new `research_e2e`, `audit_e2e`, `walk_forward_e2e`,
-`parallel_e2e`, `research_kernel`, `slow_research`, `nightly`, or
-`memory_sensitive` test must be disclosed in the PR checklist with workload
-delta and justification.
+Keep Operation strategy tests deterministic and focused. Prefer plugin,
+runtime-contract, and live-safety coverage over broad strategy matrices.
 
 The repository statically checks that the PR template and this authoring guide
 continue to require those workload disclosures. The actual changed-file

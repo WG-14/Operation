@@ -26,30 +26,10 @@ Default Patch Mode validation and not Codex Pytest Repair Mode validation; Codex
 sessions may run only focused tests directly related to the patch or failure
 packet and must hand broad validation back to the operator or WSL wrapper.
 
-It runs the static research runner marker/inventory policy check and then runs
-pytest excluding `research_kernel`, `research_e2e`, `audit_e2e`,
-`walk_forward_e2e`, `parallel_e2e`, `nightly`, `slow_research`, and
-`memory_sensitive`, with duration reporting enabled. The fast script also parses
-the reported durations and fails default-fast tests over the configured fast
-threshold. The script creates a repository-external pytest workspace before
-pytest starts and cleans it on success by default.
-
-The dedicated research/nightly pytest suite is:
-
-```bash
-./scripts/run_research_nightly_tests.sh
-```
-
-This fast suite must not include full research matrices, complete-external audit
-research runs, walk-forward E2E, serial/parallel real research comparisons, or
-memory-sensitive checks. It must also avoid production research evaluators and
-unbounded strategy/kernel tick loops; direct kernel tests in the fast suite must
-stay bounded in-memory micro-kernel contracts. Run research E2E/nightly
-validation through `scripts/run_research_nightly_tests.sh`, which includes
-`research_kernel`, `research_e2e`, `audit_e2e`, `walk_forward_e2e`,
-`parallel_e2e`, `nightly`, `slow_research`, and `memory_sensitive`, then checks
-their workload budget before pytest and durations against
-`tests/policy/research_e2e_inventory.json`.
+It runs the current Operation test set with duration reporting enabled. The
+fast script parses the reported durations and fails tests over the configured
+fast threshold. The script creates a repository-external pytest workspace
+before pytest starts and cleans it on success by default.
 
 The official full-suite pytest entrypoint is:
 
@@ -73,8 +53,8 @@ Pytest workspace controls:
   `BITHUMB_PYTEST_WORKSPACE_MAX_SINGLE_FILE_BYTES`: optional per-test workspace
   budgets enforced by the pytest fixture.
 
-On WSL, local Linux, and CI, official runners keep pytest and generated
-research/test evidence outside the repository. Successful runs clean the run
+On WSL, local Linux, and CI, official runners keep pytest and generated test
+evidence outside the repository. Successful runs clean the run
 workspace by default. Failed tests, explicit keep-artifacts runs, and workspace
 budget overages preserve the workspace and print a size summary. The full
 runner prints the summary before successful cleanup. Preflight failures are
@@ -131,36 +111,17 @@ contains unexplained large files, `/tmp/pytest-of-$USER` grows unexpectedly, or
 `ext4.vhdx` keeps growing after WSL cleanup, `fstrim`, shutdown, and reviewed
 compaction.
 
-Research workload budgets are defined in
-`tests/policy/research_workload_budget_policy.json` and enforced by
-`scripts/check_research_workload_budget.py` before research/nightly and full
-pytest. The preflight uses estimated tick events, audit stream rows, artifact
-write count, hash payload bytes, artifact bytes, and artifact file count.
-At runtime, experiment-scoped research artifacts share one
-`ResearchArtifactContext` across `derived/research/<experiment_id>` and
-`reports/research/<experiment_id>`, including reports, candidate journals,
-candidate results/failures, return panels, statistical evidence, audit streams,
-trace indexes, and trace manifests. `ArtifactBudgetExceeded` is a hard failure
-and must not be swallowed as an audit observability warning. Family and
-experiment JSONL registries are narrow append-only registry exemptions marked
-with `budget_policy=registry_append_only_budget_exempt`.
-
-The repo-local artifact checker rejects generated research/runtime outputs in
-the repository, including `reports/research`, `derived/research`, `traces`,
-`candidate_results`, `candidate_failures`, generated audit JSONL streams,
-database files, `.tmp/pytest`, and `pytest-debug`. JSONL under `tests/fixtures`
-or `examples` is allowed only as narrow static fixture/source material; generated
-stream filenames such as `decisions.jsonl`, `equity.jsonl`,
-`executions.jsonl`, and `candidate_events.jsonl` are forbidden there too unless
-the checker is deliberately updated with a named fixture policy.
+The repo-local artifact checker rejects generated runtime outputs in the
+repository, including database files, `.tmp/pytest`, and `pytest-debug`.
+JSONL under `tests/fixtures` or `examples` is allowed only as narrow static
+fixture/source material.
 
 Selector-less full pytest is long-running/full validation and is not the
 default PR check. Use `./scripts/run_full_pytest_tests.sh` or the dedicated
 pytest pipeline for full-suite repair or final full validation when required.
 
 `scripts/run_codex_pytest_pipeline.sh` is Codex full-pytest repair automation
-that may commit, push, and perform EC2 smoke verification. It is not the
-dedicated research/nightly pytest suite.
+that may commit, push, and perform EC2 smoke verification.
 
 ## Codex pipeline notification runbook
 

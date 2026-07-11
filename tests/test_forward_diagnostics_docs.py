@@ -5,7 +5,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK = ROOT / "docs/runbooks/forward-return-diagnostics.md"
-RESEARCH_VALIDATION = ROOT / "docs/research-validation.md"
 
 
 REQUIRED_POLICY_LINES = (
@@ -30,10 +29,8 @@ def test_forward_diagnostics_runbook_declares_diagnostic_only() -> None:
 
 def test_forward_diagnostics_docs_forbid_promotion_evidence_use() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
-    combined = runbook + "\n" + RESEARCH_VALIDATION.read_text(encoding="utf-8")
-
     for line in REQUIRED_POLICY_LINES:
-        assert line in combined
+        assert line in runbook
     forbidden_positive_claims = (
         "promotion-ready",
         "approved-profile-ready",
@@ -41,15 +38,5 @@ def test_forward_diagnostics_docs_forbid_promotion_evidence_use() -> None:
         "forward diagnostics approval",
     )
     for claim in forbidden_positive_claims:
-        assert claim not in combined
+        assert claim not in runbook
     assert "live-ready" not in runbook
-
-
-def test_forward_diagnostics_docs_list_command_and_artifact_paths() -> None:
-    source = RUNBOOK.read_text(encoding="utf-8")
-
-    assert "research-forward-diagnostics" in source
-    assert "DATA_ROOT/<mode>/reports/research/<experiment_id>/forward_diagnostics_report.json" in source
-    assert "DATA_ROOT/<mode>/derived/research/<experiment_id>/forward_diagnostics/feature_bucket_metrics.csv" in source
-    assert "DATA_ROOT/<mode>/derived/research/<experiment_id>/forward_diagnostics/feature_horizon_metrics.csv" in source
-    assert "DATA_ROOT/<mode>/derived/research/<experiment_id>/forward_diagnostics/warnings.json" in source

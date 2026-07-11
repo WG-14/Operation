@@ -138,7 +138,7 @@ def test_pure_unit_test_does_not_create_node_workspace(tmp_path: Path) -> None:
             "run",
             "pytest",
             "-q",
-            "tests/test_research_process_runtime.py::test_auto_safe_prefers_forkserver_when_available",
+            "tests/test_runtime_cycle_pipeline.py::test_runner_run_one_cycle_calls_pipeline_once",
         ],
         env={**os.environ, "BITHUMB_PYTEST_WORKSPACE_ROOT": str(workspace_root)},
         capture_output=True,
@@ -147,7 +147,7 @@ def test_pure_unit_test_does_not_create_node_workspace(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert not any(workspace_root.glob("**/tests_test_research_process_runtime.py__test_auto_safe_prefers_forkserver_when_available*"))
+    assert not any(workspace_root.glob("**/tests_test_runtime_cycle_pipeline.py__test_runner_run_one_cycle_calls_pipeline_once*"))
 
 
 def test_managed_runtime_env_still_creates_external_workspace(tmp_path: Path) -> None:
@@ -291,9 +291,8 @@ def test_pytest_workspace_wrapper_refuses_repo_local_workspace() -> None:
 def test_official_runners_use_external_workspace_and_no_repo_local_basetemp() -> None:
     for path in (
         Path("scripts/run_fast_pr_tests.sh"),
-        Path("scripts/run_research_nightly_tests.sh"),
         Path("scripts/run_full_pytest_tests.sh"),
-        Path("scripts/run_parallel_research_safety_tests.sh"),
+        Path("scripts/run_operation_tests.sh"),
     ):
         text = path.read_text(encoding="utf-8")
         assert "scripts/lib/pytest_workspace.sh" in text
@@ -363,21 +362,17 @@ def test_full_runner_uses_labeled_preflights_before_pytest_start() -> None:
     text = Path("scripts/run_full_pytest_tests.sh").read_text(encoding="utf-8")
     pythonpath_index = text.index('export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"')
     safety_index = text.index("bithumb_pytest_sanitize_unsafe_env")
-    research_policy_index = text.index('bithumb_pytest_run_preflight "research test policy"')
-    strategy_guard_index = text.index('bithumb_pytest_run_preflight "strategy PR workload guard"')
-    budget_index = text.index('bithumb_pytest_run_preflight "research workload budget full"')
     started_index = text.index("bithumb_pytest_mark_pytest_started")
     pytest_index = text.index('uv run pytest "${pytest_args[@]}"')
 
-    assert pythonpath_index < safety_index < research_policy_index < strategy_guard_index < budget_index < started_index < pytest_index
+    assert pythonpath_index < safety_index < started_index < pytest_index
 
 
 def test_official_runners_sanitize_unsafe_env_before_preflight_or_pytest() -> None:
     for path in (
         Path("scripts/run_full_pytest_tests.sh"),
         Path("scripts/run_fast_pr_tests.sh"),
-        Path("scripts/run_research_nightly_tests.sh"),
-        Path("scripts/run_parallel_research_safety_tests.sh"),
+        Path("scripts/run_operation_tests.sh"),
     ):
         text = path.read_text(encoding="utf-8")
         pythonpath_index = text.index('export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"')
@@ -448,7 +443,7 @@ exit 0
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "[PYTEST-SAFETY] unsafe inherited env disabled for full pytest runner" in proc.stdout
     captures = [block.strip().splitlines() for block in capture.read_text(encoding="utf-8").split("---") if block.strip()]
-    assert len(captures) == 4
+    assert len(captures) == 1
     assert any("args=run pytest -q" in block[0] for block in captures)
     for block in captures:
         values = dict(line.split("=", 1) for line in block[1:])
@@ -517,7 +512,7 @@ exit 0
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "broker-private env disabled for full pytest runner; external notification env allowed by explicit opt-in" in proc.stdout
     captures = [block.strip().splitlines() for block in capture.read_text(encoding="utf-8").split("---") if block.strip()]
-    assert len(captures) == 4
+    assert len(captures) == 1
     for block in captures:
         values = dict(line.split("=", 1) for line in block[1:])
         assert values == {

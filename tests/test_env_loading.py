@@ -8,8 +8,6 @@ from pathlib import Path
 import pytest
 
 from bithumb_bot import bootstrap
-
-
 def test_does_not_auto_load_dotenv_without_explicit_env_file(monkeypatch):
     calls: list[dict[str, str | None]] = []
 
@@ -140,37 +138,3 @@ def test_describe_explicit_env_file_reports_source_key(monkeypatch):
     assert summary.env_file == "/tmp/live.env"
     assert summary.source_key == "BITHUMB_ENV_FILE_LIVE"
     assert summary.loaded is False
-
-
-def test_backtest2_delegation_loads_explicit_env_file(tmp_path, monkeypatch):
-    env_file = tmp_path / "runtime.env"
-    env_file.write_text("BACKTEST2_BOOTSTRAP_VALUE=ok\n", encoding="utf-8")
-
-    def fake_load_dotenv(dotenv_path):
-        for line in Path(dotenv_path).read_text(encoding="utf-8").splitlines():
-            if not line or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            os.environ[key] = value
-
-    cli_main_module = importlib.import_module("bithumb_bot.cli.main")
-    import backtest2
-
-    captured_argv = None
-
-    def fake_cli_main(argv=None):
-        nonlocal captured_argv
-        captured_argv = list(argv or [])
-        return 0
-
-    monkeypatch.setenv("BITHUMB_ENV_FILE", str(env_file))
-    monkeypatch.delenv("BACKTEST2_BOOTSTRAP_VALUE", raising=False)
-    monkeypatch.setattr(bootstrap, "_load_dotenv", fake_load_dotenv)
-    monkeypatch.setattr(cli_main_module, "main", fake_cli_main)
-
-    with pytest.raises(SystemExit) as exc:
-        backtest2.main(["--manifest", "manifest.json"])
-
-    assert exc.value.code == 0
-    assert os.environ["BACKTEST2_BOOTSTRAP_VALUE"] == "ok"
-    assert captured_argv == ["research-backtest", "--manifest", "manifest.json"]

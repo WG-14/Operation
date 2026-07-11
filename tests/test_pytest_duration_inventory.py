@@ -22,7 +22,7 @@ def _inventory(path: Path, *, nodeid: str, budget: int = 45, measured: int = 3) 
                 "tests": [
                     {
                         "nodeid": nodeid,
-                        "markers": ["research_e2e"],
+                        "markers": ["slow_integration"],
                         "reason": "duration inventory test",
                         "expected_workload": {
                             "strategy_count": 1,
@@ -42,7 +42,7 @@ def _inventory(path: Path, *, nodeid: str, budget: int = 45, measured: int = 3) 
                         "lower_level_contract_available": False,
                         "replacement_contract_test": "",
                         "e2e_canary_group": "duration_policy",
-                        "tier": "research_nightly",
+                        "tier": "operation_slow",
                     }
                 ],
             }
@@ -66,7 +66,7 @@ def test_duration_inventory_reports_over_budget_nodeid(tmp_path: Path) -> None:
 
 
 def test_duration_inventory_reports_last_measured_drift(tmp_path: Path) -> None:
-    nodeid = "tests/test_research_backtest_reproducibility.py::test_report_write_stage_timing_is_recorded_after_artifact_write"
+    nodeid = "tests/test_recovery_restart_regression.py::test_restart_recovery"
     durations = tmp_path / "durations.txt"
     durations.write_text(f"52.49s call     {nodeid}\n", encoding="utf-8")
 
@@ -111,12 +111,12 @@ def test_duration_inventory_maps_pytest_duration_line_to_nodeid() -> None:
 def test_duration_inventory_strict_new_fails_missing_inventory(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    test_file = test_root / "test_new_research.py"
+    test_file = test_root / "test_new_operation_slow.py"
     test_file.write_text(
         """
 import pytest
 
-@pytest.mark.research_e2e
+@pytest.mark.slow_integration
 def test_new_expensive():
     assert True
 """,

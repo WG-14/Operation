@@ -14,9 +14,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tests.policy.research_runner_policy import discover_expensive_research_tests, load_inventory
-
-
 DURATION_RE = re.compile(r"^\s*(?P<seconds>\d+(?:\.\d+)?)s\s+(?P<phase>\S+)\s+(?P<nodeid>.+?)(?:\s+\([^)]*\))?\s*$")
 STATUS_OK = "OK"
 STATUS_OVER_BUDGET = "OVER_BUDGET"
@@ -87,7 +84,14 @@ def compare_duration_inventory(
     inventory_path: Path,
 ) -> tuple[list[DurationInventoryResult], list[str]]:
     rows, unparsed = parse_pytest_duration_file(durations_file)
-    inventory = load_inventory(inventory_path)
+    payload = json.loads(inventory_path.read_text(encoding="utf-8"))
+    entries = payload.get("tests") if isinstance(payload, dict) else None
+    assert isinstance(entries, list), "duration inventory must contain a tests list"
+    inventory = {
+        str(entry["nodeid"]): entry
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("nodeid"), str)
+    }
     results: list[DurationInventoryResult] = []
     for row in rows:
         entry = inventory.get(row.nodeid)
@@ -138,11 +142,15 @@ def compare_duration_inventory(
 
 
 def _strict_new_violations(results: Iterable[DurationInventoryResult], test_root: Path) -> list[str]:
-    expensive_nodeids = {test.nodeid for test in discover_expensive_research_tests(test_root)}
+    expensive_nodeids: set[str] = set()
+    for path in test_root.rglob("test_*.py"):
+        if "pytest.mark.slow_integration" in path.read_text(encoding="utf-8"):
+            expensive_nodeids.add(path.as_posix())
     return [
         result.nodeid
         for result in results
-        if STATUS_MISSING_INVENTORY in result.status and result.nodeid in expensive_nodeids
+        if STATUS_MISSING_INVENTORY in result.status
+        and any(result.nodeid.startswith(f"{path}::") for path in expensive_nodeids)
     ]
 
 

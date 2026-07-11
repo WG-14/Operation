@@ -47,7 +47,7 @@ def test_diagnostic_feature_mining_artifact_rejected_as_promotion_evidence() -> 
                 "live_readiness",
                 "capital_allocation",
             ],
-            "operator_next_action": "run_research_validate_from_fixed_manifest",
+            "operator_next_action": "manual_operation_review_required",
         }
     )
 

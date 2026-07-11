@@ -54,12 +54,9 @@ def test_plain_sma_cross_remains_allowed_outside_live_preflight() -> None:
 def test_operator_docs_describe_live_sma_regime_policy_boundary() -> None:
     env_example = Path(".env.example").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
-    research_doc = Path("docs/research-validation.md").read_text(encoding="utf-8")
-
-    combined = "\n".join((env_example, readme, research_doc))
-    assert "STRATEGY_CANDIDATE_PROFILE_PATH" in combined
-    assert "live_strategy_capability_validation_failed" in combined
-    assert "sma_cross" in combined
+    combined = "\n".join((env_example, readme))
+    assert "OPERATION_APPROVAL_PATH" in combined
+    assert "operation approval" in combined.lower()
     assert "sma_with_filter" in combined
     assert "fail closed" in combined
 
