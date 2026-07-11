@@ -34,33 +34,33 @@ boundary: they may test both sides during the transition.
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
 | CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
 | generic utility | 0 | Historical backfill now uses the operations-owned `bithumb_bot.date_range.DateRange`. |
-| test/document/script | 3 | Research diagnostics and test-support helpers should leave with their workflow. |
-| **Total** | **36** | **Files with reviewed temporary research-import coupling.** |
+| test/document/script | 1 | Only the research-backed strategy contract test helper remains. |
+| **Total** | **34** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
 
-Historical backfill no longer imports the research manifest for date parsing.
-`bithumb_bot.date_range.DateRange` preserves the existing inclusive UTC
-start/end timestamp and `as_dict()` contract without a research dependency.
+Historical backfill date-range separation is complete: it no longer imports the
+research manifest for date parsing. `bithumb_bot.date_range.DateRange` preserves
+the existing inclusive UTC start/end timestamp and `as_dict()` contract without
+a research dependency.
+
+Channel-breakout research diagnostic wrapper removal is complete. The two
+research-only script wrappers have left Operation; the only remaining
+`test/document/script` entry is `src/bithumb_bot/strategy_contract_testing.py`.
 
 ## Next migration targets
 
-Move these lowest-risk, clearly bounded modules first, in this order:
+Do not reintroduce the completed historical backfill date-range or
+channel-breakout diagnostic wrapper dependencies into Operation scripts or
+commands. Move these remaining bounded modules in this order:
 
-1. CLI surface separation is complete: research, paired-experiment, and
-   data-plane command modules are no longer registered by the operation CLI;
-   runtime/H74 observation commands are operation-evidence commands;
-   `notification_diagnostics.py` resolves its policy without importing
-   `research.cli`; and `operator_commands.py` owns the execution-quality
-   calibration artifact writer without directly importing research. Do not
-   reintroduce a command registry or operator-command path that imports
-   research on normal operational startup.
-2. Extract the minimal runtime strategy registry/spec/capability interfaces
+1. The next large task is to extract the minimal Operation-owned runtime
+   strategy registry/spec/capability interfaces
    required by `runtime_strategy_set.py`, `runtime_strategy_decision.py`,
    `runtime_data_provider.py`, `runtime_adapter_bootstrap.py`, and `config.py`.
    This is a contract extraction, not a shared package/submodule creation.
-3. Move approved-profile/promotion/evidence custody only after the above
+2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.
 

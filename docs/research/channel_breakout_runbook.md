@@ -63,11 +63,9 @@ fail-closed blockers. Missing numeric fields must not be interpreted as zero.
 
 ## Root-Cause Report
 
-Generate a trade-level diagnostic summary before judging the candidate:
-
-```bash
-uv run python scripts/channel_breakout_rootcause.py --input "$ROOTCAUSE_INPUT_JSON"
-```
+Generate a trade-level diagnostic summary in the research workspace before
+judging the candidate. Operation no longer distributes this research-only
+diagnostic wrapper.
 
 The input must contain paired variant rows with `closed_trades`. The report must
 include variant summary, period x variant summary, exit reason summary, holding
@@ -76,11 +74,9 @@ always include `00-05m` so early reclaim-loss concentration is visible.
 
 ## Acceptance Gate
 
-Run the explicit acceptance classifier on the paired clean-data summary:
-
-```bash
-uv run python scripts/channel_breakout_acceptance.py --summary "$COMPARE_JSON"
-```
+Run the explicit acceptance classifier on the paired clean-data summary in the
+research workspace. Operation no longer distributes this research-only
+diagnostic wrapper.
 
 Classification rules:
 

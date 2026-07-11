@@ -1,8 +1,6 @@
 {
   "purpose": "WG-14 temporary inventory of non-research source imports from bithumb_bot.research. Entries are fail-closed: a new source file or imported research module must be reviewed and added with a migration reason.",
   "entries": {
-    "scripts/channel_breakout_acceptance.py": {"category": "test/document/script", "reason": "research diagnostic script; move with the channel-breakout research workflow.", "imports": ["bithumb_bot.research.channel_breakout_reports"]},
-    "scripts/channel_breakout_rootcause.py": {"category": "test/document/script", "reason": "research diagnostic script; move with the channel-breakout research workflow.", "imports": ["bithumb_bot.research.channel_breakout_reports"]},
     "src/bithumb_bot/approved_profile.py": {"category": "approved profile/promotion/evidence", "reason": "approved-profile validation still consumes promotion lineage, deployment policy, and strategy specifications.", "imports": [".research.deployment_policy", ".research.hashing", ".research.lineage", ".research.promotion_gate", ".research.strategy_registry", ".research.strategy_spec", ".research.validation_pipeline"]},
     "src/bithumb_bot/broker/paper_execution.py": {"category": "runtime strategy registry/spec/capability", "reason": "paper execution reuses the research stress execution model.", "imports": ["..research.execution_model"]},
     "src/bithumb_bot/compat/sma_runtime_compat.py": {"category": "runtime strategy registry/spec/capability", "reason": "legacy SMA runtime compatibility resolves strategy registry/spec metadata.", "imports": ["bithumb_bot.research.strategy_registry", "bithumb_bot.research.strategy_spec"]},
