@@ -8,7 +8,6 @@ import pytest
 from bithumb_bot.artifact_hashing import sha256_prefixed
 from bithumb_bot.execution_calibration import build_calibration_artifact, write_calibration_artifact
 from bithumb_bot.paths import PathConfig, PathManager, PathPolicyError
-from bithumb_bot.research.execution_calibration import build_calibration_artifact as build_legacy_calibration_artifact
 
 
 def _manager(*, project_root: Path, data_root: Path) -> PathManager:
@@ -88,12 +87,6 @@ def test_operation_calibration_payload_preserves_schema_and_hash() -> None:
     }
     assert artifact["content_hash"] == sha256_prefixed(
         {key: value for key, value in artifact.items() if key != "content_hash"}
-    )
-    assert artifact == build_legacy_calibration_artifact(
-        summary=summary,
-        market="KRW-BTC",
-        interval="1m",
-        generated_at="2026-05-03T00:00:00+00:00",
     )
 
 

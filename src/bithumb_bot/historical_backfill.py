@@ -12,13 +12,13 @@ import httpx
 
 from .bootstrap import get_last_explicit_env_load_summary
 from .config import PROJECT_ROOT, settings
+from .date_range import DateRange
 from .db_core import ensure_db
 from .marketdata import BASE_URL, _candle_key_ts_ms
 from .markets import canonical_market_id, parse_exchange_market_response_code
 from .paths import PathManager
 from .public_api import PublicApiError
 from .public_api_minute_candles import MinuteCandle, fetch_minute_candles, interval_to_minute_unit
-from .research.experiment_manifest import DateRange
 
 
 MAX_API_BATCH_SIZE = 200

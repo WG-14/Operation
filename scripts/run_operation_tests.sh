@@ -15,6 +15,7 @@ source "$PROJECT_ROOT/scripts/lib/pytest_workspace.sh"
 # are intentionally excluded; their ownership remains with dedicated research runners.
 OPERATION_TESTS=(
   tests/test_operation_research_import_boundary.py
+  tests/test_operation_date_range.py
   tests/test_operator_commands_research_boundary.py
   tests/test_operation_execution_calibration.py
   tests/test_operation_cli_surface.py

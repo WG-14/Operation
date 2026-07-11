@@ -33,12 +33,16 @@ boundary: they may test both sides during the transition.
 | runtime strategy registry/spec/capability | 27 | Shared plugin registry/specification contracts are the primary coupling. |
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
 | CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
-| generic utility | 1 | Historical manifest/date-range reuse still needs an operations-owned replacement. |
+| generic utility | 0 | Historical backfill now uses the operations-owned `bithumb_bot.date_range.DateRange`. |
 | test/document/script | 3 | Research diagnostics and test-support helpers should leave with their workflow. |
-| **Total** | **37** | **Files with reviewed temporary research-import coupling.** |
+| **Total** | **36** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
+
+Historical backfill no longer imports the research manifest for date parsing.
+`bithumb_bot.date_range.DateRange` preserves the existing inclusive UTC
+start/end timestamp and `as_dict()` contract without a research dependency.
 
 ## Next migration targets
 
