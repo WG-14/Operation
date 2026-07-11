@@ -140,7 +140,7 @@ cd ~/work/bithumb-bot
 ./scripts/run_codex_pytest_pipeline.sh
 ```
 
-`NTFY_TOPIC` is required for success and failure notifications.
+`NTFY_TOPIC` is required for pipeline notifications.
 
 `scripts/notify_ntfy.sh` resolves the ntfy server in this order:
 

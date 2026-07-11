@@ -135,8 +135,8 @@ The WSL wrapper owns:
 - runtime artifact validation
 - failure packet generation
 - iteration control
-- success and failure notifications
-- commit, push, and optional remote smoke verification
+- pipeline notifications
+- commit and push
 
 Codex owns:
 
