@@ -248,10 +248,12 @@ def compute_sma_with_filter_signal(
 ) -> dict[str, object] | None:
     from bithumb_bot.runtime_strategy_decision import _attach_runtime_request_metadata
     from bithumb_bot.runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
-    from bithumb_bot.research.strategy_registry import runtime_strategy_parameters_from_settings
+    from bithumb_bot.operation_strategy.registry import operation_runtime_strategy_parameters_from_settings
+    from bithumb_bot.runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
     from bithumb_bot.strategy_config import _sma_int
 
-    parameters = runtime_strategy_parameters_from_settings("sma_with_filter", settings)
+    ensure_runtime_decision_adapters_registered()
+    parameters = operation_runtime_strategy_parameters_from_settings("sma_with_filter", settings)
     parameters["SMA_SHORT"] = int(_sma_int("SMA_SHORT") if short_n is None else short_n)
     parameters["SMA_LONG"] = int(_sma_int("SMA_LONG") if long_n is None else long_n)
 

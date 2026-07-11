@@ -30,12 +30,12 @@ boundary: they may test both sides during the transition.
 
 | Category | Files | Separation meaning |
 | --- | ---: | --- |
-| runtime strategy registry/spec/capability | 20 | Shared plugin registry/capability contracts remain the primary coupling after the SMA specification extraction. |
+| runtime strategy registry/spec/capability | 19 | Shared plugin registry/capability contracts remain the primary coupling after the SMA specification extraction. |
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
 | CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
 | generic utility | 0 | Historical backfill now uses the operations-owned `bithumb_bot.date_range.DateRange`. |
 | test/document/script | 1 | Only the research-backed strategy contract test helper remains. |
-| **Total** | **27** | **Files with reviewed temporary research-import coupling.** |
+| **Total** | **26** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
@@ -71,7 +71,12 @@ checks. `runtime_data_provider.py` now also resolves strategy data requirements
 through the Operation registry, preserving the requirement payload, aggregation,
 hash, and fail-closed contracts. `runtime_adapter_bootstrap.py` remains the
 transitional research discovery bridge that populates the Operation registry
-before those lookups. The allowlist is now 27 files.
+before those lookups. Operation-owned settings parameter extraction now uses
+the Operation registry, preserving `STRATEGY_PARAMETERS_JSON` precedence,
+settings-adapter fallback, accepted-key fail-closed checks, and SMA parameter
+materialization. `runtime_adapters/sma_with_filter.py` now uses that Operation
+API after bootstrap and has no direct research import. The allowlist is now 26
+files.
 
 ## Next migration targets
 
@@ -79,9 +84,9 @@ Do not reintroduce the completed historical backfill date-range or
 channel-breakout diagnostic wrapper dependencies into Operation scripts or
 commands. Move these remaining bounded modules in this order:
 
-1. Move the `runtime_adapters/sma_with_filter.py` and
-   `config.py`/`runtime_strategy_set.py` boundaries to the Operation registry,
-   retaining their existing fail-closed contracts.
+1. Move the `config.py` boundary to the Operation registry, retaining its
+   existing fail-closed contracts. Before moving `runtime_strategy_set.py`, an
+   Operation-owned exit-policy materialization API is required.
 2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.

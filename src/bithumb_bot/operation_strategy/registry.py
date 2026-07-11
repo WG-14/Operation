@@ -11,6 +11,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from bithumb_bot.legacy_compat.runtime_parameters import (
+    settings_derived_fallback,
+    strategy_parameters_json_fallback,
+)
+
 from .capabilities import (
     DataCapabilityRequirement,
     OperationStrategyDataRequirements,
@@ -18,6 +23,7 @@ from .capabilities import (
     RuntimeParameterAdapter,
     StrategyRuntimeCapabilities,
 )
+from .spec import materialize_strategy_parameters_for_spec
 
 
 class OperationStrategyRegistryError(ValueError):
@@ -176,6 +182,57 @@ def resolve_operation_strategy_plugin(strategy_name: str) -> OperationStrategyRe
         return _OPERATION_STRATEGY_PLUGINS[key]
     except KeyError as exc:
         raise OperationStrategyRegistryError(f"unsupported operation strategy: {key}") from exc
+
+
+def operation_runtime_strategy_parameters_from_settings(
+    strategy_name: str,
+    cfg: object,
+) -> dict[str, object]:
+    """Extract legacy-compatible runtime parameters through the Operation registry."""
+    registration = resolve_operation_strategy_plugin(strategy_name)
+    raw_json = str(getattr(cfg, "STRATEGY_PARAMETERS_JSON", "") or "").strip()
+    try:
+        json_fallback = strategy_parameters_json_fallback(raw_json)
+    except RuntimeError as exc:
+        raise OperationStrategyRegistryError(str(exc)) from exc
+    if json_fallback is not None:
+        parameters = materialize_strategy_parameters_for_spec(
+            registration.spec,
+            json_fallback.raw_parameters,
+        )
+        _assert_operation_runtime_parameters_accepted(
+            registration=registration,
+            parameters=parameters,
+        )
+        return parameters
+    if registration.runtime_parameter_adapter is None:
+        raise OperationStrategyRegistryError(
+            f"runtime parameter extraction unsupported: {registration.name}"
+        )
+    parameters = settings_derived_fallback(
+        registration.runtime_parameter_adapter,
+        cfg,
+    ).raw_parameters
+    _assert_operation_runtime_parameters_accepted(
+        registration=registration,
+        parameters=parameters,
+    )
+    return parameters
+
+
+def _assert_operation_runtime_parameters_accepted(
+    *,
+    registration: OperationStrategyRegistration,
+    parameters: dict[str, object],
+) -> None:
+    unexpected = sorted(
+        set(parameters) - set(registration.spec.accepted_parameter_names)
+    )
+    if unexpected:
+        raise OperationStrategyRegistryError(
+            "runtime parameter extraction returned unsupported keys:"
+            f"{registration.name}:{','.join(unexpected)}"
+        )
 
 
 def operation_strategy_data_requirements(

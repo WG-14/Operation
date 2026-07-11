@@ -16,6 +16,7 @@ source "$PROJECT_ROOT/scripts/lib/pytest_workspace.sh"
 OPERATION_TESTS=(
   tests/test_runtime_data_provider_operation_registry.py
   tests/test_runtime_strategy_decision_operation_registry.py
+  tests/test_operation_runtime_strategy_parameters.py
   tests/test_operation_strategy_registry.py
   tests/test_operation_strategy_capabilities.py
   tests/test_operation_strategy_spec.py

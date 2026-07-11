@@ -209,10 +209,76 @@ def strategy_spec_for_name(strategy_name: str) -> StrategySpec:
     raise StrategySpecError(f"unsupported research strategy: {strategy_name}")
 
 
+def runtime_bound_behavior_parameter_names_for_spec(strategy_spec: object) -> tuple[str, ...]:
+    """Return runtime-bound behavior parameters from a duck-typed spec object."""
+    research_only = set(getattr(strategy_spec, "research_only_parameter_names"))
+    return tuple(
+        name
+        for name in getattr(strategy_spec, "behavior_affecting_parameter_names")
+        if name not in research_only
+    )
+
+
+def strategy_parameter_source_map_for_spec(
+    strategy_spec: object,
+    parameter_values: dict[str, Any],
+    *,
+    fee_rate: float | None = None,
+    slippage_bps: float | None = None,
+) -> dict[str, str]:
+    raw = dict(parameter_values)
+    accepted_parameter_names = set(getattr(strategy_spec, "accepted_parameter_names"))
+    sources = {
+        key: "strategy_spec_default"
+        for key in dict(getattr(strategy_spec, "default_parameters"))
+    }
+    for key in raw:
+        sources[key] = "raw_parameter_values"
+    if (
+        fee_rate is not None
+        and "LIVE_FEE_RATE_ESTIMATE" in accepted_parameter_names
+        and "LIVE_FEE_RATE_ESTIMATE" not in raw
+    ):
+        sources["LIVE_FEE_RATE_ESTIMATE"] = "cost_model_fee_rate"
+    if (
+        slippage_bps is not None
+        and "STRATEGY_ENTRY_SLIPPAGE_BPS" in accepted_parameter_names
+        and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in raw
+    ):
+        sources["STRATEGY_ENTRY_SLIPPAGE_BPS"] = "cost_model_slippage_bps"
+    return sources
+
+
+def materialize_strategy_parameters_for_spec(
+    strategy_spec: object,
+    parameter_values: dict[str, Any],
+    *,
+    fee_rate: float | None = None,
+    slippage_bps: float | None = None,
+) -> dict[str, Any]:
+    """Materialize parameters from a duck-typed spec without research type coupling."""
+    raw = dict(parameter_values)
+    accepted_parameter_names = set(getattr(strategy_spec, "accepted_parameter_names"))
+    values = {**dict(getattr(strategy_spec, "default_parameters")), **raw}
+    getattr(strategy_spec, "validate_parameters")(values)
+    if (
+        fee_rate is not None
+        and "LIVE_FEE_RATE_ESTIMATE" in accepted_parameter_names
+        and "LIVE_FEE_RATE_ESTIMATE" not in raw
+    ):
+        values["LIVE_FEE_RATE_ESTIMATE"] = float(fee_rate)
+    if (
+        slippage_bps is not None
+        and "STRATEGY_ENTRY_SLIPPAGE_BPS" in accepted_parameter_names
+        and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in raw
+    ):
+        values["STRATEGY_ENTRY_SLIPPAGE_BPS"] = float(slippage_bps)
+    _validate_exit_policy_materialized_values(values)
+    return values
+
+
 def runtime_bound_behavior_parameter_names(strategy_name: str) -> tuple[str, ...]:
-    spec = strategy_spec_for_name(strategy_name)
-    research_only = set(spec.research_only_parameter_names)
-    return tuple(name for name in spec.behavior_affecting_parameter_names if name not in research_only)
+    return runtime_bound_behavior_parameter_names_for_spec(strategy_spec_for_name(strategy_name))
 
 
 def strategy_parameter_source_map(
@@ -222,16 +288,12 @@ def strategy_parameter_source_map(
     fee_rate: float | None = None,
     slippage_bps: float | None = None,
 ) -> dict[str, str]:
-    spec = strategy_spec_for_name(strategy_name)
-    raw = dict(parameter_values)
-    sources = {key: "strategy_spec_default" for key in spec.default_parameters}
-    for key in raw:
-        sources[key] = "raw_parameter_values"
-    if fee_rate is not None and "LIVE_FEE_RATE_ESTIMATE" in spec.accepted_parameter_names and "LIVE_FEE_RATE_ESTIMATE" not in raw:
-        sources["LIVE_FEE_RATE_ESTIMATE"] = "cost_model_fee_rate"
-    if slippage_bps is not None and "STRATEGY_ENTRY_SLIPPAGE_BPS" in spec.accepted_parameter_names and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in raw:
-        sources["STRATEGY_ENTRY_SLIPPAGE_BPS"] = "cost_model_slippage_bps"
-    return sources
+    return strategy_parameter_source_map_for_spec(
+        strategy_spec_for_name(strategy_name),
+        parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+    )
 
 
 def materialize_strategy_parameters(
@@ -241,15 +303,12 @@ def materialize_strategy_parameters(
     fee_rate: float | None = None,
     slippage_bps: float | None = None,
 ) -> dict[str, Any]:
-    spec = strategy_spec_for_name(strategy_name)
-    values = {**spec.default_parameters, **dict(parameter_values)}
-    spec.validate_parameters(values)
-    if fee_rate is not None and "LIVE_FEE_RATE_ESTIMATE" in spec.accepted_parameter_names and "LIVE_FEE_RATE_ESTIMATE" not in parameter_values:
-        values["LIVE_FEE_RATE_ESTIMATE"] = float(fee_rate)
-    if slippage_bps is not None and "STRATEGY_ENTRY_SLIPPAGE_BPS" in spec.accepted_parameter_names and "STRATEGY_ENTRY_SLIPPAGE_BPS" not in parameter_values:
-        values["STRATEGY_ENTRY_SLIPPAGE_BPS"] = float(slippage_bps)
-    _validate_exit_policy_materialized_values(values)
-    return values
+    return materialize_strategy_parameters_for_spec(
+        strategy_spec_for_name(strategy_name),
+        parameter_values,
+        fee_rate=fee_rate,
+        slippage_bps=slippage_bps,
+    )
 
 
 def materialized_strategy_parameters_hash(parameter_values: dict[str, Any]) -> str:
