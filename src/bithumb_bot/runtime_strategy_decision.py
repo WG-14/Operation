@@ -197,12 +197,15 @@ def _normalize_name(name: str) -> str:
 
 
 def list_runtime_decision_adapters() -> tuple[str, ...]:
-    from .research.strategy_registry import list_research_strategy_plugins
+    from .operation_strategy.registry import list_operation_strategy_plugins
+    from .runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
+
+    ensure_runtime_decision_adapters_registered()
 
     return tuple(
         sorted(
             plugin.name
-            for plugin in list_research_strategy_plugins()
+            for plugin in list_operation_strategy_plugins()
             if plugin.runtime_capabilities.promotion_runtime_decisions_supported
             and plugin.runtime_decision_adapter_factory is not None
         )
@@ -210,12 +213,17 @@ def list_runtime_decision_adapters() -> tuple[str, ...]:
 
 
 def get_runtime_decision_adapter(name: str) -> PromotionRuntimeDecisionAdapter | None:
-    from .research.strategy_registry import ResearchStrategyRegistryError, resolve_research_strategy_plugin
+    from .operation_strategy.registry import (
+        OperationStrategyRegistryError,
+        resolve_operation_strategy_plugin,
+    )
+    from .runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
 
     key = _normalize_name(name)
+    ensure_runtime_decision_adapters_registered()
     try:
-        plugin = resolve_research_strategy_plugin(key)
-    except ResearchStrategyRegistryError:
+        plugin = resolve_operation_strategy_plugin(key)
+    except OperationStrategyRegistryError:
         return None
     if not plugin.runtime_capabilities.promotion_runtime_decisions_supported:
         return None
@@ -365,9 +373,12 @@ class DecisionRunner:
         if resolved_strategy_set is not None:
             authority_context = ProfileAuthorityContext.for_strategy_set(resolved_strategy_set)
         if resolved_strategy_set is not None and resolved_strategy_set.multi_strategy_enabled:
-            from .research.strategy_registry import strategy_runtime_capability_issues
+            from .operation_strategy.registry import operation_strategy_runtime_capability_issues
+            from .runtime_adapter_bootstrap import ensure_runtime_decision_adapters_registered
 
-            issues = strategy_runtime_capability_issues(
+            ensure_runtime_decision_adapters_registered()
+
+            issues = operation_strategy_runtime_capability_issues(
                 selected_strategy_name,
                 live_dry_run=bool(settings.LIVE_DRY_RUN),
                 live_real_order_armed=bool(settings.LIVE_REAL_ORDER_ARMED),

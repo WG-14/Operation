@@ -30,12 +30,12 @@ boundary: they may test both sides during the transition.
 
 | Category | Files | Separation meaning |
 | --- | ---: | --- |
-| runtime strategy registry/spec/capability | 22 | Shared plugin registry/capability contracts remain the primary coupling after the SMA specification extraction. |
+| runtime strategy registry/spec/capability | 21 | Shared plugin registry/capability contracts remain the primary coupling after the SMA specification extraction. |
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
 | CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
 | generic utility | 0 | Historical backfill now uses the operations-owned `bithumb_bot.date_range.DateRange`. |
 | test/document/script | 1 | Only the research-backed strategy contract test helper remains. |
-| **Total** | **29** | **Files with reviewed temporary research-import coupling.** |
+| **Total** | **28** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
@@ -64,10 +64,15 @@ compatibility. The Operation-owned registry in
 `bithumb_bot.operation_strategy.registry` is also complete: research plugin
 registration now performs a transitional dual registration using a duck-typed
 Operation projection that preserves the existing compatibility contract hash.
-This remains a foundation PR, so the allowlist stays at 29 files and runtime
-consumers still use the research registry. `runtime_data_provider.py` now owns
-its capability/data-requirement types, but retains one temporary research
-dependency: the `research_strategy_data_requirements` resolver.
+The Operation-owned registry based transition is complete for
+`runtime_strategy_decision.py`: its adapter and capability lookups now use the
+Operation registry while preserving adapter filtering, cache, and fail-closed
+checks. `runtime_adapter_bootstrap.py` remains the transitional research
+discovery bridge that populates the Operation registry before those lookups.
+The allowlist is now 28 files.
+`runtime_data_provider.py` owns its capability/data-requirement types, but
+retains the next temporary research dependency: the
+`research_strategy_data_requirements` resolver.
 
 ## Next migration targets
 
@@ -75,9 +80,8 @@ Do not reintroduce the completed historical backfill date-range or
 channel-breakout diagnostic wrapper dependencies into Operation scripts or
 commands. Move these remaining bounded modules in this order:
 
-1. Move `runtime_adapter_bootstrap.py` and `runtime_strategy_decision.py` to
-   the Operation registry. Runtime consumers otherwise remain on the research
-   registry until their focused transition contracts are in place.
+1. Move `runtime_data_provider.py` to the Operation registry, retaining the
+   current resolver contract and fail-closed data-capability behavior.
 2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.

@@ -175,6 +175,54 @@ def list_operation_strategy_plugins() -> tuple[OperationStrategyRegistration, ..
     return tuple(_OPERATION_STRATEGY_PLUGINS[name] for name in sorted(_OPERATION_STRATEGY_PLUGINS))
 
 
+def operation_strategy_runtime_capability_issues(
+    strategy_name: str,
+    *,
+    live_dry_run: bool,
+    live_real_order_armed: bool,
+    approved_profile_path: str = "",
+    require_promotion_runtime: bool = True,
+    require_runtime_replay: bool = False,
+    require_runtime_decision_adapter: bool = True,
+) -> tuple[str, ...]:
+    """Return fail-closed runtime capability reasons for an Operation registration."""
+    key = str(strategy_name or "").strip().lower()
+    try:
+        registration = resolve_operation_strategy_plugin(key)
+    except OperationStrategyRegistryError:
+        return (f"strategy_plugin_not_registered:{key}",)
+
+    capabilities = registration.runtime_capabilities
+    issues: list[str] = []
+    if require_promotion_runtime and not capabilities.promotion_runtime_decisions_supported:
+        issues.append(
+            f"promotion_runtime_unsupported_for_strategy:{registration.name}:{capabilities.fail_closed_reason}"
+        )
+    if require_runtime_replay and not capabilities.runtime_replay_supported:
+        issues.append(
+            f"runtime_replay_unsupported_for_strategy:{registration.name}:{capabilities.fail_closed_reason}"
+        )
+    if require_runtime_decision_adapter and registration.runtime_decision_adapter_factory is None:
+        issues.append(
+            f"runtime_decision_adapter_unsupported_for_strategy:{registration.name}:{capabilities.fail_closed_reason}"
+        )
+    if bool(live_dry_run) and not capabilities.live_dry_run_allowed:
+        issues.append(
+            f"live_dry_run_not_allowed_for_strategy:{registration.name}:{capabilities.fail_closed_reason}"
+        )
+    if bool(live_real_order_armed) and not capabilities.live_real_order_allowed:
+        issues.append(
+            f"live_real_order_not_allowed_for_strategy:{registration.name}:{capabilities.fail_closed_reason}"
+        )
+    if (
+        (bool(live_dry_run) or bool(live_real_order_armed))
+        and capabilities.approved_profile_required
+        and not str(approved_profile_path or "").strip()
+    ):
+        issues.append(f"approved_profile_required_for_strategy:{registration.name}")
+    return tuple(issues)
+
+
 def clear_operation_strategy_registry_for_tests() -> None:
     _OPERATION_STRATEGY_PLUGINS.clear()
 

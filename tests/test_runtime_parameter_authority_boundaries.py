@@ -68,7 +68,7 @@ def test_live_multi_strategy_rejects_global_profile_fallback() -> None:
 
 def test_promotion_adapter_with_db_bound_decide_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     from bithumb_bot import runtime_strategy_decision
-    from bithumb_bot.research import strategy_registry
+    from bithumb_bot.operation_strategy import registry as operation_registry
 
     class _DbBoundAdapter:
         strategy_name = "db_bound_unit"
@@ -82,12 +82,13 @@ def test_promotion_adapter_with_db_bound_decide_is_rejected(monkeypatch: pytest.
         def typed_authority_required(self) -> bool:
             return True
 
+    runtime_strategy_decision.list_runtime_decision_adapters()
     plugin = replace(
-        strategy_registry.resolve_research_strategy_plugin("canary_non_sma"),
+        operation_registry.resolve_operation_strategy_plugin("canary_non_sma"),
         name="db_bound_unit",
         runtime_decision_adapter_factory=lambda: _DbBoundAdapter(),
     )
-    monkeypatch.setattr(strategy_registry, "resolve_research_strategy_plugin", lambda _name: plugin)
+    monkeypatch.setattr(operation_registry, "resolve_operation_strategy_plugin", lambda _name: plugin)
     runtime_strategy_decision._DERIVED_RUNTIME_DECISION_ADAPTER_CACHE.clear()
 
     with pytest.raises(RuntimeError, match="promotion_runtime_adapter_db_bound_decide_forbidden"):
