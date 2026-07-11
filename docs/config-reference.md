@@ -2,12 +2,11 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d074`
+Spec hash: `sha256:03c76c527d7348e827184591bfd8c9359f1196875713bc2c61d3ecd1ea139a0c`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ACTIVE_STRATEGIES` | string | common |  | no | no | no | P1 |  | ACTIVE_STRATEGIES runtime configuration. |
-| `APPROVED_STRATEGY_PROFILE_PATH` | string | common |  | no | no | no | P1 |  | APPROVED_STRATEGY_PROFILE_PATH runtime configuration. |
 | `ARCHIVE_ROOT` | string | common | `<PathManager>` | no | no | no | P1 |  | ARCHIVE_ROOT runtime configuration. |
 | `BACKUP_DIR` | string | common |  | no | no | no | P1 |  | BACKUP_DIR runtime configuration. |
 | `BACKUP_RETENTION_COUNT` | number | common |  | no | no | no | P1 |  | BACKUP_RETENTION_COUNT runtime configuration. |
@@ -32,9 +31,6 @@ Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d
 | `BITHUMB_PYTEST_STARTED` | bool | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_STARTED runtime configuration. |
 | `BITHUMB_PYTEST_SUITE` | string | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_SUITE runtime configuration. |
 | `BITHUMB_PYTEST_SUMMARY_ON_SUCCESS` | bool | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_SUMMARY_ON_SUCCESS runtime configuration. |
-| `BITHUMB_RESEARCH_ALLOW_UNSAFE_FORK` | bool | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_ALLOW_UNSAFE_FORK runtime configuration. |
-| `BITHUMB_RESEARCH_MAX_WORKERS` | number | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_MAX_WORKERS runtime configuration. |
-| `BITHUMB_RESEARCH_MP_START_METHOD` | string | internal |  | no | no | no | internal |  | BITHUMB_RESEARCH_MP_START_METHOD runtime configuration. |
 | `BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH runtime configuration. |
 | `BITHUMB_RUNTIME_GIT_DIFF_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_HASH runtime configuration. |
 | `BITHUMB_SOURCE_ARCHIVE_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_SOURCE_ARCHIVE_HASH runtime configuration. |
@@ -161,7 +157,8 @@ Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d
 | `NTFY_TOPIC` | string | common |  | no | no | no | P1 |  | NTFY_TOPIC runtime configuration. |
 | `NTFY_URL` | string | common |  | no | no | deprecated | P1 |  | Deprecated compatibility alias for NTFY_SERVER; NTFY_SERVER takes priority when both are set. |
 | `OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC` | number | common |  | no | no | no | P1 |  | OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC runtime configuration. |
-| `OPERATION_NOTIFICATION_POLICY` | string | common |  | no | no | no | P1 |  | Operation command notification policy: best_effort, require_delivery, or disabled. Takes priority over deprecated RESEARCH_NOTIFICATION_POLICY compatibility fallback. |
+| `OPERATION_APPROVAL_PATH` | string | common |  | no | no | no | P1 |  | OPERATION_APPROVAL_PATH runtime configuration. |
+| `OPERATION_NOTIFICATION_POLICY` | string | common |  | no | no | no | P1 |  | Operation command notification policy: best_effort, require_delivery, or disabled. |
 | `PAIR` | string | common | `KRW-BTC` | no | no | no | P1 |  | PAIR runtime configuration. |
 | `PAPER_EXECUTION_LATENCY_MS` | number | paper |  | no | no | no | P2 |  | PAPER_EXECUTION_LATENCY_MS runtime configuration. |
 | `PAPER_EXECUTION_MODEL` | string | paper |  | no | no | no | P2 |  | PAPER_EXECUTION_MODEL runtime configuration. |
@@ -177,7 +174,6 @@ Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d
 | `PYTEST_XDIST_WORKERS` | number | internal |  | no | no | no | internal |  | PYTEST_XDIST_WORKERS runtime configuration. |
 | `PYTEST_XDIST_WORKER_COUNT` | number | internal |  | no | no | no | internal |  | PYTEST_XDIST_WORKER_COUNT runtime configuration. |
 | `REQUIRE_BROKER_LOCAL_CONVERGENCE` | string | common |  | no | no | no | P1 |  | REQUIRE_BROKER_LOCAL_CONVERGENCE runtime configuration. |
-| `RESEARCH_NOTIFICATION_POLICY` | string | common |  | no | no | no | P1 |  | Research command notification policy: best_effort, require_delivery, or disabled. Defaults to best_effort. |
 | `RESIDUAL_BUY_SIZING_MODE` | string | common |  | no | no | no | P1 |  | RESIDUAL_BUY_SIZING_MODE runtime configuration. |
 | `RESIDUAL_INVENTORY_MODE` | string | common |  | no | no | no | P1 |  | RESIDUAL_INVENTORY_MODE runtime configuration. |
 | `RESIDUAL_LIVE_SELL_MODE` | string | common |  | no | no | no | P1 |  | RESIDUAL_LIVE_SELL_MODE runtime configuration. |
@@ -198,8 +194,6 @@ Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d
 | `SMA_SHORT` | string | common |  | no | no | no | P2 |  | SMA_SHORT runtime configuration. |
 | `SNAPSHOT_ROOT` | string | common | `<PathManager>` | no | no | no | P1 |  | Compatibility override for snapshot output under the backup bucket. |
 | `START_CASH_KRW` | number | paper |  | no | no | no | P1 |  | START_CASH_KRW runtime configuration. |
-| `STRATEGY_APPROVED_PROFILE_PATH` | string | common |  | no | no | no | P2 |  | STRATEGY_APPROVED_PROFILE_PATH runtime configuration. |
-| `STRATEGY_CANDIDATE_PROFILE_PATH` | string | common |  | no | no | no | P2 |  | STRATEGY_CANDIDATE_PROFILE_PATH runtime configuration. |
 | `STRATEGY_ENTRY_SLIPPAGE_BPS` | number | common |  | no | no | no | P2 |  | STRATEGY_ENTRY_SLIPPAGE_BPS runtime configuration. |
 | `STRATEGY_EXIT_MAX_HOLDING_MIN` | number | common |  | no | no | no | P2 |  | STRATEGY_EXIT_MAX_HOLDING_MIN runtime configuration. |
 | `STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO` | number | common |  | no | no | no | P2 |  | STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO runtime configuration. |

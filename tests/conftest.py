@@ -251,14 +251,10 @@ def relaxed_test_order_rules() -> None:
 def _restore_global_settings_state():
     """Keep direct settings mutations from leaking across test modules."""
     from bithumb_bot.broker import order_rules as _order_rules
-    from bithumb_bot.research import strategy_registry as _strategy_registry
-    from bithumb_bot.research import validation_protocol as _validation_protocol
 
     keys = [field.name for field in fields(type(settings))]
     test_path_manager = _path_manager_for_runtime_root((_BASE_RUNTIME_ROOT / "runtime-default").resolve())
     _sync_config_singletons(test_path_manager)
-    _strategy_registry.reload_research_strategy_plugins_for_tests()
-    _validation_protocol._CANDIDATE_SCENARIO_WORKER_CONTEXT = None
     object.__setattr__(settings, "DB_PATH", str(test_path_manager.primary_db_path()))
     object.__setattr__(settings, "STRATEGY_NAME", legacy_default_strategy_name())
     original = {key: getattr(settings, key) for key in keys if hasattr(settings, key)}
@@ -271,5 +267,3 @@ def _restore_global_settings_state():
             object.__setattr__(settings, key, value)
         _sync_config_singletons(test_path_manager)
         _order_rules._cached_rules.clear()
-        _strategy_registry.reload_research_strategy_plugins_for_tests()
-        _validation_protocol._CANDIDATE_SCENARIO_WORKER_CONTEXT = None

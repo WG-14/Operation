@@ -123,7 +123,6 @@ def _build_strategy_plugin_validate(parser: argparse.ArgumentParser) -> None:
         "--target",
         required=True,
         choices=(
-            "research_backtest",
             "runtime_replay",
             "runtime_decision",
             "live_dry_run",

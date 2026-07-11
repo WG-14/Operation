@@ -29,6 +29,7 @@ OPERATION_APPROVAL_SCHEMA_VERSION = 1
 OPERATION_APPROVAL_HASH_FIELD = "content_hash"
 OPERATION_APPROVAL_SELECTOR_ENV = "OPERATION_APPROVAL_PATH"
 OPERATION_APPROVAL_ALLOWED_MODES = frozenset({"paper", "live_dry_run", "small_live"})
+PROFILE_RUNTIME_COST_MISMATCH_ACTION = "Operation approval/runtime cost drift requires operator review."
 
 
 class OperationApprovalError(ValueError):
@@ -442,3 +443,13 @@ def verify_profile_against_runtime(
         runtime=runtime,
         require_approval=require_profile,
     )
+
+
+def profile_runtime_cost_match_status(approval: Mapping[str, Any] | None, runtime: Mapping[str, Any]) -> dict[str, object]:
+    if not isinstance(approval, Mapping):
+        return {"status": "WARN", "reason": "operation_approval_not_loaded"}
+    expected = float(approval.get("max_order_krw") or 0.0)
+    actual = float(runtime.get("max_order_krw") or 0.0)
+    if actual > expected:
+        return {"status": "FAIL", "reason": "runtime_max_order_exceeds_operation_approval", "expected": expected, "actual": actual}
+    return {"status": "PASS", "reason": "operation_approval_runtime_limits_match", "expected": expected, "actual": actual}
