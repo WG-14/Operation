@@ -32,10 +32,10 @@ boundary: they may test both sides during the transition.
 | --- | ---: | --- |
 | runtime strategy registry/spec/capability | 27 | Shared plugin registry/specification contracts are the primary coupling. |
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
-| CLI command | 1 | The remaining legacy operator command facade still imports research-owned command helpers. |
+| CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
 | generic utility | 1 | Historical manifest/date-range reuse still needs an operations-owned replacement. |
 | test/document/script | 3 | Research diagnostics and test-support helpers should leave with their workflow. |
-| **Total** | **38** | **Files with reviewed temporary research-import coupling.** |
+| **Total** | **37** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
@@ -46,11 +46,12 @@ Move these lowest-risk, clearly bounded modules first, in this order:
 
 1. CLI surface separation is complete: research, paired-experiment, and
    data-plane command modules are no longer registered by the operation CLI;
-   runtime/H74 observation commands are operation-evidence commands; and
+   runtime/H74 observation commands are operation-evidence commands;
    `notification_diagnostics.py` resolves its policy without importing
-   `research.cli`. The next target is `operator_commands.py`, the sole
-   remaining CLI-category research dependency. Do not leave a command registry
-   path that imports research on normal operational startup.
+   `research.cli`; and `operator_commands.py` owns the execution-quality
+   calibration artifact writer without directly importing research. Do not
+   reintroduce a command registry or operator-command path that imports
+   research on normal operational startup.
 2. Extract the minimal runtime strategy registry/spec/capability interfaces
    required by `runtime_strategy_set.py`, `runtime_strategy_decision.py`,
    `runtime_data_provider.py`, `runtime_adapter_bootstrap.py`, and `config.py`.

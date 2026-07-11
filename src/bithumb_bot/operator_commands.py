@@ -114,7 +114,7 @@ from .execution_quality import (
     refresh_execution_quality_records,
     summarize_execution_quality,
 )
-from .research.execution_calibration import build_calibration_artifact, write_calibration_artifact
+from .execution_calibration import build_calibration_artifact, write_calibration_artifact
 from .position_authority_repair import (
     apply_legacy_operator_closeout_evidence_enrichment,
     apply_position_authority_rebuild,
@@ -216,24 +216,6 @@ from .strategy_sweep import (
     summarize_strategy_sweep_results,
 )
 from .strategy_replay import load_replay_candles
-from .research.cli import (
-    cmd_research_backtest,
-    cmd_research_mark_attempt_aborted,
-    cmd_research_promote_candidate,
-    cmd_research_registry_inspect,
-    cmd_research_registry_validate,
-    cmd_research_reproduce,
-    cmd_research_validate,
-    cmd_research_verify_audit,
-    cmd_research_walk_forward,
-)
-from .research.readiness import cmd_research_readiness
-from .research.data_plane import (
-    persistent_missing_overall_next_action,
-    retry_missing_candles_from_artifact,
-    write_persistent_missing_candle_classification_artifact,
-    write_missing_candle_ranges_artifact,
-)
 from .profile_cli import (
     cmd_candidate_regime_policy_equivalence_evidence,
     cmd_decision_equivalence,
