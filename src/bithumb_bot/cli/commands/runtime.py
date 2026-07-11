@@ -138,7 +138,7 @@ def _h74_no_window_probe(args: argparse.Namespace, context) -> int:
     from bithumb_bot.h74_pre_submit_evidence import require_pre_submit_bundle_hash
     from bithumb_bot.h74_restore_check import verify_h74_restore_original_window
     from bithumb_bot.paths import PathManager
-    from bithumb_bot.research.hashing import sha256_prefixed
+    from bithumb_bot.artifact_hashing import sha256_prefixed
     from bithumb_bot.storage_io import write_json_atomic
 
     if not args.pre_submit_evidence:

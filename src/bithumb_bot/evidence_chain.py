@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .execution_reality_contract import contract_hash_matches
-from .research.hashing import content_hash_payload, sha256_prefixed
+from .artifact_hashing import content_hash_payload, sha256_prefixed
 from .decision_equivalence import compute_decision_equivalence_hash
 
 

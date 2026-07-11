@@ -109,7 +109,7 @@ class HashObservability:
         }
 
 
-_HASH_OBSERVER: ContextVar[HashObservability | None] = ContextVar("research_hash_observer", default=None)
+_HASH_OBSERVER: ContextVar[HashObservability | None] = ContextVar("operation_hash_observer", default=None)
 
 
 @contextmanager

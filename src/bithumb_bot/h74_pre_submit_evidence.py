@@ -4,7 +4,7 @@ import shutil
 from collections.abc import Mapping
 
 from .h74_authority_alignment import validate_h74_authority_env_alignment
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 
 
 class H74PreSubmitEvidenceError(RuntimeError):

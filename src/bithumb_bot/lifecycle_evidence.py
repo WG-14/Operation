@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Mapping
 
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 
 
 LIFECYCLE_EVIDENCE_SCHEMA_VERSION = 1
