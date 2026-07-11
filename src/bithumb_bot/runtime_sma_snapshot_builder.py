@@ -922,7 +922,7 @@ def _build_sma_with_filter_runtime_decision_from_normalized_db_readonly_impl(
             if isinstance(strategy.candidate_regime_policy, dict)
             else None
         ),
-        "approved_profile_path": settings.APPROVED_STRATEGY_PROFILE_PATH or None,
+        "approved_profile_path": settings.OPERATION_APPROVAL_PATH or None,
         "approved_profile_mode": (
             strategy.candidate_regime_policy.get("approved_profile_mode")
             if isinstance(strategy.candidate_regime_policy, dict)

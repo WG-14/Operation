@@ -219,7 +219,7 @@ class SmaWithFilterRuntimeDecisionAdapter:
         mode = str(settings.MODE or "").strip().lower()
         if mode == "live":
             return True
-        if str(getattr(settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
+        if str(getattr(settings, "OPERATION_APPROVAL_PATH", "") or "").strip():
             return True
         return True
 

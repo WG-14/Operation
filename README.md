@@ -28,6 +28,18 @@ The canonical CLI is `uv run bithumb-bot <command>`. Useful commands include
 `health`, `status`, `sync`, `run`, `live-dry-run`, `reconcile`, `resume`,
 `ops-report`, and `execution-quality-report`.
 
+## Configuration check
+
+Use the bootstrap-aware CLI to inspect the effective configuration without
+exposing secrets:
+
+```bash
+uv run bithumb-bot config-dump --masked
+```
+
+Direct Python imports do not run the CLI bootstrap path and therefore are not
+the supported way to verify selected environment configuration.
+
 ## Validation
 
 Codex patch sessions run only focused tests. The full suite remains owned by

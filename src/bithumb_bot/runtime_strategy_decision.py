@@ -292,7 +292,7 @@ def _production_missing_adapter_requires_typed_handoff() -> bool:
     mode = str(settings.MODE or "").strip().lower()
     if mode == "live":
         return True
-    if str(getattr(settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
+    if str(getattr(settings, "OPERATION_APPROVAL_PATH", "") or "").strip():
         return True
     return True
 
@@ -507,7 +507,7 @@ def compute_legacy_signal_for_diagnostics(
 
 def _reject_unapproved_runtime_overrides(selected_strategy_name: str) -> None:
     mode = str(settings.MODE or "").strip().lower()
-    approved_profile_path = str(getattr(settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
+    approved_profile_path = str(getattr(settings, "OPERATION_APPROVAL_PATH", "") or "").strip()
     approved_profile_alias = str(getattr(settings, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
     live_like = mode == "live" or bool(approved_profile_path or approved_profile_alias)
     if live_like:

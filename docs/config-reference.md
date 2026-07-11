@@ -2,7 +2,7 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:03c76c527d7348e827184591bfd8c9359f1196875713bc2c61d3ecd1ea139a0c`
+Spec hash: `sha256:5c0e8fee27152e2215f307e8ce1971280b385203c7a013b46e9d503f6a76be9b`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -60,7 +60,7 @@ Spec hash: `sha256:03c76c527d7348e827184591bfd8c9359f1196875713bc2c61d3ecd1ea139
 | `EXECUTION_DEPTH_REQUIRED` | string | common |  | no | no | no | P1 |  | EXECUTION_DEPTH_REQUIRED runtime configuration. |
 | `EXECUTION_ENGINE` | string | common |  | no | no | no | P1 |  | EXECUTION_ENGINE runtime configuration. |
 | `EXECUTION_FEE_SOURCE` | string | common |  | no | no | no | P1 |  | EXECUTION_FEE_SOURCE runtime configuration. |
-| `EXECUTION_FILL_REFERENCE_POLICY` | string | common |  | no | no | no | P1 |  | EXECUTION_FILL_REFERENCE_POLICY runtime configuration. |
+| `EXECUTION_FILL_REFERENCE_POLICY` | string | common | `next_candle_open` | no | no | no | P1 |  | EXECUTION_FILL_REFERENCE_POLICY runtime configuration. |
 | `EXECUTION_INTRA_CANDLE_PATH_AVAILABLE` | string | common |  | no | no | no | P1 |  | EXECUTION_INTRA_CANDLE_PATH_AVAILABLE runtime configuration. |
 | `EXECUTION_LATENCY_MODEL_TYPE` | string | common |  | no | no | no | P1 |  | EXECUTION_LATENCY_MODEL_TYPE runtime configuration. |
 | `EXECUTION_LATENCY_MS` | number | common |  | no | no | no | P1 |  | EXECUTION_LATENCY_MS runtime configuration. |

@@ -666,7 +666,7 @@ def _strict_target_exposure_required(
         run_loop_uses_target_delta(settings_obj)
         and (
             str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
-            or str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
+            or str(getattr(settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip()
             or str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
             or (
                 strategy_set is not None

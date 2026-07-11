@@ -1060,7 +1060,12 @@ class Settings:
     PAPER_EXECUTION_PARTIAL_FILL_RATE: float = float(os.getenv("PAPER_EXECUTION_PARTIAL_FILL_RATE", "0"))
     PAPER_EXECUTION_PARTIAL_FILL_FRACTION: float = float(os.getenv("PAPER_EXECUTION_PARTIAL_FILL_FRACTION", "0.5"))
     PAPER_EXECUTION_ORDER_FAILURE_RATE: float = float(os.getenv("PAPER_EXECUTION_ORDER_FAILURE_RATE", "0"))
-    EXECUTION_FILL_REFERENCE_POLICY: str = os.getenv("EXECUTION_FILL_REFERENCE_POLICY", "").strip()
+    # Conservative declared default: execution is referenced to the next
+    # candle open, never the same candle close. Explicitly empty overrides
+    # remain invalid at the operation-approval boundary.
+    EXECUTION_FILL_REFERENCE_POLICY: str = os.getenv(
+        "EXECUTION_FILL_REFERENCE_POLICY", "next_candle_open"
+    ).strip()
     EXECUTION_DECISION_GUARD_MS: int = int(os.getenv("EXECUTION_DECISION_GUARD_MS", "0"))
     EXECUTION_MAX_QUOTE_WAIT_MS: int = int(os.getenv("EXECUTION_MAX_QUOTE_WAIT_MS", "0"))
     EXECUTION_MISSING_QUOTE_POLICY: str = os.getenv("EXECUTION_MISSING_QUOTE_POLICY", "warn").strip() or "warn"

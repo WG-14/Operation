@@ -347,6 +347,7 @@ EXAMPLE_DEFAULTS = {
     "LIVE_REAL_ORDER_ARMED": "false",
     "LIVE_SUBMIT_CONTRACT_PROFILE": "live_explicit_submit_plan_v1",
     "LIVE_ORDER_RULE_FALLBACK_PROFILE": "persisted_snapshot_required",
+    "EXECUTION_FILL_REFERENCE_POLICY": "next_candle_open",
     "NOTIFIER_DEDUPE_WINDOW_SEC": "20",
 }
 
