@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from bithumb_bot.cli.registry import command_registry
 from bithumb_bot.research.forward_diagnostics_report import write_forward_diagnostics_report
 from bithumb_bot.research.forward_targets import build_horizon_durations
 from tests.test_forward_diagnostics_report import _manager, _manifest, _result
@@ -38,11 +37,8 @@ def test_report_records_horizon_steps_and_duration_for_five_minute_interval(tmp_
     assert report["horizon_durations"][0]["horizon_duration_label"] == "25m"
 
 
-def test_cli_help_describes_horizons_as_candle_steps() -> None:
-    source = Path("src/bithumb_bot/cli/commands/research.py").read_text(encoding="utf-8")
-
-    assert "candle-step integers" in source
-    assert "duration strings are not accepted" in source
+def test_forward_diagnostics_is_not_exposed_by_operation_cli() -> None:
+    assert "research-forward-diagnostics" not in command_registry()
 
 
 def test_horizon_label_remains_candle_step_not_wall_clock_duration() -> None:

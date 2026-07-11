@@ -6,7 +6,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESEARCH_ROOT = REPO_ROOT / "src" / "bithumb_bot" / "research"
-RESEARCH_CLI = REPO_ROOT / "src" / "bithumb_bot" / "cli" / "commands" / "research.py"
 WORKLOAD_BUDGET_SCRIPT = REPO_ROOT / "scripts" / "check_research_workload_budget.py"
 PROCESSOR_CONSTANT_NAMES = {"max_workers", "processors"}
 MEMORY_CONSTANT_NAMES = {"memory", "memory_mb", "max_total_memory_mb"}
@@ -18,7 +17,7 @@ def _research_python_files() -> list[Path]:
 
 
 def _policy_scan_files() -> list[Path]:
-    return [*_research_python_files(), RESEARCH_CLI, WORKLOAD_BUDGET_SCRIPT]
+    return [*_research_python_files(), WORKLOAD_BUDGET_SCRIPT]
 
 
 def test_no_hardcoded_wsl_worker_count() -> None:
@@ -33,10 +32,10 @@ def test_no_hardcoded_wsl_worker_count() -> None:
     assert offenders == []
 
 
-def test_policy_scans_research_cli_and_workload_budget_script() -> None:
+def test_policy_scans_research_package_and_workload_budget_script() -> None:
     scanned = {path.relative_to(REPO_ROOT).as_posix() for path in _policy_scan_files()}
 
-    assert "src/bithumb_bot/cli/commands/research.py" in scanned
+    assert "src/bithumb_bot/research/cli.py" in scanned
     assert "scripts/check_research_workload_budget.py" in scanned
 
 

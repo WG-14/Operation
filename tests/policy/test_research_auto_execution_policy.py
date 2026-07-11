@@ -6,12 +6,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESEARCH_ROOT = REPO_ROOT / "src" / "bithumb_bot" / "research"
-RESEARCH_CLI = REPO_ROOT / "src" / "bithumb_bot" / "cli" / "commands" / "research.py"
 WORKLOAD_BUDGET_SCRIPT = REPO_ROOT / "scripts" / "check_research_workload_budget.py"
 
 
 def _production_scan_files() -> list[Path]:
-    return sorted(RESEARCH_ROOT.rglob("*.py")) + [RESEARCH_CLI, WORKLOAD_BUDGET_SCRIPT]
+    return sorted(RESEARCH_ROOT.rglob("*.py")) + [WORKLOAD_BUDGET_SCRIPT]
 
 
 def test_no_hardcoded_auto_execution_worker_count() -> None:

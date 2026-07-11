@@ -30,15 +30,13 @@ class CommandSpec:
 
 def iter_command_specs() -> Iterable[CommandSpec]:
     from .commands import (
-        data_plane,
         live_ops,
         marketdata,
-        paired_experiment,
+        operation_evidence,
         profile,
         recovery,
         repairs,
         reports,
-        research,
         runtime,
         strategy,
     )
@@ -49,11 +47,9 @@ def iter_command_specs() -> Iterable[CommandSpec]:
     yield from recovery.command_specs()
     yield from repairs.command_specs()
     yield from reports.command_specs()
-    yield from research.command_specs()
-    yield from paired_experiment.command_specs()
+    yield from operation_evidence.command_specs()
     yield from profile.command_specs()
     yield from strategy.command_specs()
-    yield from data_plane.command_specs()
 
 
 def command_registry() -> Mapping[str, CommandSpec]:

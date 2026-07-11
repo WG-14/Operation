@@ -27,7 +27,7 @@ from bithumb_bot.research.data_plane import (
 from bithumb_bot.research.execution_calibration import build_calibration_artifact
 from bithumb_bot.research.experiment_manifest import load_manifest
 from bithumb_bot.research.hashing import sha256_prefixed
-from bithumb_bot.cli.commands.research import command_specs
+from bithumb_bot.cli.registry import command_registry
 
 
 class _DummyClient:
@@ -38,10 +38,10 @@ class _DummyClient:
         return False
 
 
-def test_research_batch_command_registered() -> None:
-    names = {spec.name for spec in command_specs()}
+def test_research_batch_command_is_not_registered_in_operation_cli() -> None:
+    names = set(command_registry())
 
-    assert "research-batch" in names
+    assert "research-batch" not in names
 
 
 @pytest.fixture
