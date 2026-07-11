@@ -12,7 +12,7 @@ from .approved_profile import (
     verify_profile_against_runtime,
 )
 from .config import settings
-from .research.strategy_spec import SMA_WITH_FILTER_SPEC
+from .operation_strategy.spec import SMA_WITH_FILTER_SPEC
 
 
 @dataclass(frozen=True)

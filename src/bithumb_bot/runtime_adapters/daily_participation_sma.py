@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from bithumb_bot.research.strategy_spec import SMA_WITH_FILTER_SPEC
+from bithumb_bot.operation_strategy.spec import SMA_WITH_FILTER_SPEC
 from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeConfig
 from bithumb_bot.runtime_sma_snapshot_builder import build_sma_with_filter_runtime_decision_from_feature_snapshot
 from bithumb_bot.runtime_strategy_decision import RuntimeStrategyDecisionResult

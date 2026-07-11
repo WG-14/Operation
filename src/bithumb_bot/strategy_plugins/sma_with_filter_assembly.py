@@ -12,7 +12,7 @@ from bithumb_bot.core.sma_policy import (
     _stable_hash,
 )
 from bithumb_bot.market_regime.policy import normalize_live_regime_policy
-from bithumb_bot.research.strategy_spec import (
+from bithumb_bot.operation_strategy.spec import (
     exit_policy_hash,
     materialize_strategy_parameters,
     runtime_bound_behavior_parameter_names,

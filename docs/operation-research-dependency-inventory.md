@@ -30,12 +30,12 @@ boundary: they may test both sides during the transition.
 
 | Category | Files | Separation meaning |
 | --- | ---: | --- |
-| runtime strategy registry/spec/capability | 27 | Shared plugin registry/specification contracts are the primary coupling. |
+| runtime strategy registry/spec/capability | 22 | Shared plugin registry/capability contracts remain the primary coupling after the SMA specification extraction. |
 | approved profile/promotion/evidence | 6 | Promotion custody and evidence validation must retain their fail-closed checks while moved. |
 | CLI command | 0 | Operation CLI no longer imports research-owned command helpers. |
 | generic utility | 0 | Historical backfill now uses the operations-owned `bithumb_bot.date_range.DateRange`. |
 | test/document/script | 1 | Only the research-backed strategy contract test helper remains. |
-| **Total** | **34** | **Files with reviewed temporary research-import coupling.** |
+| **Total** | **29** | **Files with reviewed temporary research-import coupling.** |
 
 Counts describe files, not individual imported modules. See the JSON allowlist
 for the complete file-by-file inventory and exact import modules.
@@ -46,8 +46,15 @@ the existing inclusive UTC start/end timestamp and `as_dict()` contract without
 a research dependency.
 
 Channel-breakout research diagnostic wrapper removal is complete. The two
-research-only script wrappers have left Operation; the only remaining
-`test/document/script` entry is `src/bithumb_bot/strategy_contract_testing.py`.
+research-only script wrappers and their unreferenced research-only runbook have
+left Operation; the only remaining `test/document/script` entry is
+`src/bithumb_bot/strategy_contract_testing.py`.
+
+The Operation-owned `bithumb_bot.operation_strategy.spec` now carries the SMA
+specification contract for five low-risk operational consumers. It preserves
+the existing research-compatible schema and hashes without calling the research
+strategy registry. This is a bounded specification extraction, not a strategy
+registry or plugin migration.
 
 ## Next migration targets
 
@@ -55,11 +62,11 @@ Do not reintroduce the completed historical backfill date-range or
 channel-breakout diagnostic wrapper dependencies into Operation scripts or
 commands. Move these remaining bounded modules in this order:
 
-1. The next large task is to extract the minimal Operation-owned runtime
-   strategy registry/spec/capability interfaces
-   required by `runtime_strategy_set.py`, `runtime_strategy_decision.py`,
-   `runtime_data_provider.py`, `runtime_adapter_bootstrap.py`, and `config.py`.
-   This is a contract extraction, not a shared package/submodule creation.
+1. Extract the remaining minimal Operation-owned runtime strategy capability
+   and registry interfaces required by `runtime_strategy_set.py`,
+   `runtime_strategy_decision.py`, `runtime_data_provider.py`,
+   `runtime_adapter_bootstrap.py`, and `config.py`. This is a contract
+   extraction, not a shared package/submodule creation.
 2. Move approved-profile/promotion/evidence custody only after the above
    interfaces are stable. Preserve all lineage, deployment-policy, and
    production-calibration validation as fail-closed gates.

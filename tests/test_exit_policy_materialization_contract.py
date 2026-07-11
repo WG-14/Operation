@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from bithumb_bot.operation_strategy.spec import StrategySpecError as OperationStrategySpecError
 from bithumb_bot.research.strategy_registry import (
     ResearchStrategyPlugin,
     StrategyRuntimeCapabilities,
@@ -103,7 +104,7 @@ def test_exit_policy_from_parameters_dispatches_to_plugin_materializer() -> None
 
 def test_custom_strategy_rule_is_not_added_to_core_supported_rule_set() -> None:
     reload_research_strategy_plugins_for_tests()
-    with pytest.raises(StrategySpecError, match="unsupported rule"):
+    with pytest.raises((StrategySpecError, OperationStrategySpecError), match="unsupported rule"):
         exit_policy_from_parameters(
             "sma_with_filter",
             {

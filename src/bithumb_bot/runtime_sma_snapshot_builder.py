@@ -27,7 +27,7 @@ from .strategy_plugins.sma_with_filter_contract import SMA_DECISION_EVIDENCE_CON
 from .strategy_plugins.sma_with_filter_projector import SmaWithFilterSnapshotProjector
 from .strategy_plugins.sma_with_filter_projector import SmaWithFilterRuntimeProjectionResult
 from .strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
-from .research.strategy_spec import materialized_strategy_parameters_hash
+from .operation_strategy.spec import materialized_strategy_parameters_hash
 from .runtime_position_state_normalizer import (
     load_last_reconcile_metadata,
 )

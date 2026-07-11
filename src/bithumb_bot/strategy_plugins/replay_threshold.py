@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from bithumb_bot.runtime_data_provider import RuntimeDataRequirementResolver, SQLiteRuntimeDataProvider
-from bithumb_bot.research.strategy_spec import StrategyParameterSchema, StrategySpec
+from bithumb_bot.operation_strategy.spec import StrategyParameterSchema, StrategySpec
 from bithumb_bot.strategy_authoring import (
     ReplayCompatibleStrategyExtension,
     build_replay_compatible_strategy_plugin,

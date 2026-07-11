@@ -14,6 +14,7 @@ source "$PROJECT_ROOT/scripts/lib/pytest_workspace.sh"
 # Curated P0/P1 operation safety gate. Research validation and performance suites
 # are intentionally excluded; their ownership remains with dedicated research runners.
 OPERATION_TESTS=(
+  tests/test_operation_strategy_spec.py
   tests/test_operation_research_import_boundary.py
   tests/test_operation_date_range.py
   tests/test_operator_commands_research_boundary.py
