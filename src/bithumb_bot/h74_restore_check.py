@@ -10,7 +10,7 @@ from .h74_observation import (
     h74_parameter_hash,
 )
 from .runtime_strategy_set import h74_runtime_adapter_materialized_values_from_settings
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 
 
 RESTORE_REQUIRED_KEYS = (

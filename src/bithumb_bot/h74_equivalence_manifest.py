@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .h74_observation import H74_SOURCE_CANDIDATE_ID, H74_SOURCE_OBSERVATION_PARAMETERS
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 from .experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
 
 

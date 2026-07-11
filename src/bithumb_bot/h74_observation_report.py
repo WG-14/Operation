@@ -9,7 +9,7 @@ from typing import Any
 from .live_trade_classification import classify_h74_live_trade
 from .h74_cycle_classification import classify_h74_cycle
 from .h74_pnl_attribution import build_pnl_attribution, build_terminal_residual, pnl_attribution_passes
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 
 
 KST = timezone(timedelta(hours=9))

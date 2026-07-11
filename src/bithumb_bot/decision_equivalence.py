@@ -21,7 +21,7 @@ from .lifecycle_evidence import (
     CanonicalLifecycleEvidenceBundle,
     validate_lifecycle_evidence_scope,
 )
-from .research.hashing import content_hash_payload, sha256_prefixed
+from .artifact_hashing import content_hash_payload, sha256_prefixed
 
 
 DECISION_EQUIVALENCE_SCHEMA_VERSION = 2

@@ -4,7 +4,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 
 
 class DBSnapshotManifestError(ValueError):

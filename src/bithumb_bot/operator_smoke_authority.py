@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import runtime_code_provenance, settings
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 from .storage_io import write_json_atomic
 
 
