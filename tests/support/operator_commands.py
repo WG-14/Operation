@@ -2865,7 +2865,7 @@ def test_broker_diagnose_success_output(monkeypatch, tmp_path, capsys):
     original_live_order_qty_step = settings.LIVE_ORDER_QTY_STEP
     original_min_order_notional_krw = settings.MIN_ORDER_NOTIONAL_KRW
     original_live_order_max_qty_decimals = settings.LIVE_ORDER_MAX_QTY_DECIMALS
-    original_approved_strategy_profile_path = settings.APPROVED_STRATEGY_PROFILE_PATH
+    original_operation_approval_path = settings.OPERATION_APPROVAL_PATH
 
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "MAX_ORDER_KRW", 10000.0)
@@ -2878,7 +2878,7 @@ def test_broker_diagnose_success_output(monkeypatch, tmp_path, capsys):
     object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", 0.0001)
     object.__setattr__(settings, "MIN_ORDER_NOTIONAL_KRW", 5000.0)
     object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", 8)
-    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", str(tmp_path / "approved-profile.json"))
+    object.__setattr__(settings, "OPERATION_APPROVAL_PATH", str(tmp_path / "operation-approval.json"))
 
     monkeypatch.setenv("NOTIFIER_WEBHOOK_URL", "https://example.com/hook")
     monkeypatch.setenv("NOTIFIER_ENABLED", "true")
@@ -2974,7 +2974,7 @@ def test_broker_diagnose_success_output(monkeypatch, tmp_path, capsys):
         object.__setattr__(settings, "LIVE_ORDER_QTY_STEP", original_live_order_qty_step)
         object.__setattr__(settings, "MIN_ORDER_NOTIONAL_KRW", original_min_order_notional_krw)
         object.__setattr__(settings, "LIVE_ORDER_MAX_QTY_DECIMALS", original_live_order_max_qty_decimals)
-        object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", original_approved_strategy_profile_path)
+        object.__setattr__(settings, "OPERATION_APPROVAL_PATH", original_operation_approval_path)
 
     out = capsys.readouterr().out
     assert "[BROKER-READINESS]" in out
@@ -8553,10 +8553,10 @@ def test_flatten_position_operator_clean_closeout_does_not_call_strategy_live_pr
     _configure_residual_closeout_settings(monkeypatch)
     monkeypatch.setenv("MODE", "live")
     monkeypatch.setenv("STRATEGY_NAME", "daily_participation_sma")
-    monkeypatch.delenv("APPROVED_STRATEGY_PROFILE_PATH", raising=False)
+    monkeypatch.delenv("OPERATION_APPROVAL_PATH", raising=False)
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "STRATEGY_NAME", "daily_participation_sma")
-    object.__setattr__(settings, "APPROVED_STRATEGY_PROFILE_PATH", "")
+    object.__setattr__(settings, "OPERATION_APPROVAL_PATH", "")
     configure_bithumb_test_auth(settings)
 
     def _raise_strategy_preflight(_cfg):

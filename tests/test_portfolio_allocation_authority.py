@@ -44,6 +44,7 @@ from bithumb_bot.portfolio_allocation import (
     SignalAggregator,
 )
 from bithumb_bot.portfolio_target import PortfolioTarget
+from bithumb_bot.risk_contract import RiskPolicy
 from bithumb_bot.strategy_preference import (
     StrategyPreference,
     StrategyPreferenceSet,
@@ -63,6 +64,17 @@ from bithumb_bot.runtime_strategy_set import (
 )
 from bithumb_bot.submit_authority_policy import submit_authority_policy_from_settings
 from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+
+
+@pytest.fixture(autouse=True)
+def _operation_execution_contract() -> None:
+    """Give runtime-request fixtures an explicit current execution contract."""
+    original = settings.EXECUTION_FILL_REFERENCE_POLICY
+    object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", "next_candle_open")
+    try:
+        yield
+    finally:
+        object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", original)
 
 
 class _Readiness:
@@ -248,32 +260,55 @@ def _runtime_result(
     )
 
 
-def _bind_unit_approved_profiles(
+def _bind_unit_operation_approvals(
     monkeypatch: pytest.MonkeyPatch,
     *specs: RuntimeStrategySpec,
 ) -> tuple[RuntimeStrategySpec, ...]:
     from bithumb_bot import runtime_strategy_set
 
+    risk_policy = {
+        "schema_version": 1,
+        "max_daily_loss_krw": 50_000.0,
+        "max_position_loss_pct": 0.0,
+        "max_daily_order_count": 10,
+        "max_trade_count_per_day": 10,
+        "max_drawdown_pct": 0.0,
+        "cooldown_after_loss_min": 0,
+        "kill_switch": False,
+        "max_open_positions": 1,
+        "unresolved_order_policy": "block",
+        "policy_status": "enabled",
+        "missing_policy": "fail_closed_for_live",
+        "source": "unit_operation_approval",
+    }
+    risk_policy_hash = RiskPolicy(**risk_policy).policy_hash()
     profiles: dict[str, dict[str, object]] = {}
     bound_specs: list[RuntimeStrategySpec] = []
     for idx, spec in enumerate(specs):
         instance = str(spec.strategy_instance_id or f"{spec.strategy_name}_{idx}")
-        profile_path = f"/tmp/bithumb-bot-unit-approved-profiles/{instance}.json"
-        profile_hash = f"sha256:unit-profile-{instance}"
+        profile_path = f"/tmp/bithumb-bot-unit-operation-approvals/{instance}.json"
+        profile_hash = f"sha256:unit-operation-approval-{instance}"
         bound = replace(
             spec,
             approved_profile_path=profile_path,
             approved_profile_hash=profile_hash,
         )
         profiles[profile_path] = {
-            "profile_mode": "small_live",
-            "profile_content_hash": profile_hash,
+            "schema_version": 1,
+            "content_hash": profile_hash,
+            "profile_mode": "small_live",  # compatibility view consumed by the retained runtime adapter
+            "allowed_modes": ["small_live"],
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "strategy_name": bound.strategy_name,
+            "strategy_parameters_hash": "sha256:unit-parameters",
+            "strategy_spec_hash": "sha256:unit-spec",
+            "strategy_plugin_contract_hash": "sha256:unit-plugin",
+            "exit_policy_hash": "sha256:unit-exit-policy",
+            "risk_policy_hash": risk_policy_hash,
+            "execution_contract_hash": "sha256:unit-execution-contract",
+            "max_order_krw": 70_000.0,
             "strategy_parameters": dict(bound.parameters or {}),
-            "risk_policy": {
-                "policy_status": "enabled",
-                "missing_policy": "fail_closed_for_live",
-                "source": "unit_approved_profile",
-            },
+            "risk_policy": dict(risk_policy),
             "risk_enforcement_mode": "enforced",
             "missing_risk_policy_behavior": "fail_closed_for_live",
         }
@@ -2066,6 +2101,7 @@ def test_target_position_state_schema_is_pair_level_actual_target_state(tmp_path
 
 def test_live_performance_gate_uses_allocator_selected_contributions_not_global_strategy(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -2118,7 +2154,7 @@ def test_live_performance_gate_uses_allocator_selected_contributions_not_global_
             parameters=_complete_canary_parameters(CANARY_ORDER_SIDE="HOLD", CANARY_ORDER_REASON="unit_hold"),
         )
         loser_spec = RuntimeStrategySpec("sma_with_filter", strategy_instance_id="unselected_sell", priority=20, parameters=_complete_sma_parameters())
-        buy_spec, hold_spec, loser_spec = _bind_unit_approved_profiles(monkeypatch, buy_spec, hold_spec, loser_spec)
+        buy_spec, hold_spec, loser_spec = _bind_unit_operation_approvals(monkeypatch, buy_spec, hold_spec, loser_spec)
         bundle = _unit_result_bundle(
             RuntimeStrategySet(source="unit", strategies=(buy_spec, hold_spec, loser_spec)),
             (
@@ -2127,7 +2163,11 @@ def test_live_performance_gate_uses_allocator_selected_contributions_not_global_
                 ("SELL", "sma_with_filter", loser_spec),
             ),
         )
-        result = planner.plan_runtime_strategy_results(object(), bundle, updated_ts=456)
+        conn = ensure_db(str(tmp_path / "selected-contributions.sqlite"))
+        try:
+            result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+        finally:
+            conn.close()
     finally:
         for key, value in old_values.items():
             object.__setattr__(settings, key, value)
@@ -2143,6 +2183,7 @@ def test_live_performance_gate_uses_allocator_selected_contributions_not_global_
 
 def test_selected_buy_performance_gate_failure_blocks_before_submit_plan(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -2189,7 +2230,7 @@ def test_selected_buy_performance_gate_failure_blocks_before_submit_plan(
             priority=10,
             parameters=_complete_canary_parameters(CANARY_ORDER_SIDE="HOLD", CANARY_ORDER_REASON="unit_hold"),
         )
-        buy_spec, hold_spec = _bind_unit_approved_profiles(monkeypatch, buy_spec, hold_spec)
+        buy_spec, hold_spec = _bind_unit_operation_approvals(monkeypatch, buy_spec, hold_spec)
         bundle = _unit_result_bundle(
             RuntimeStrategySet(source="unit", strategies=(buy_spec, hold_spec)),
             (
@@ -2197,7 +2238,11 @@ def test_selected_buy_performance_gate_failure_blocks_before_submit_plan(
                 ("HOLD", "canary_non_sma", hold_spec),
             ),
         )
-        result = planner.plan_runtime_strategy_results(object(), bundle, updated_ts=456)
+        conn = ensure_db(str(tmp_path / "selected-performance-block.sqlite"))
+        try:
+            result = planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+        finally:
+            conn.close()
     finally:
         for key, value in old_values.items():
             object.__setattr__(settings, key, value)
@@ -2317,7 +2362,7 @@ def test_selected_performance_gate_uses_real_strategy_instance_filter(
             priority=20,
             parameters=_complete_canary_parameters(CANARY_ORDER_REASON="loser"),
         )
-        selected, unselected = _bind_unit_approved_profiles(monkeypatch, selected, unselected)
+        selected, unselected = _bind_unit_operation_approvals(monkeypatch, selected, unselected)
         bundle = _unit_result_bundle(
             RuntimeStrategySet(source="unit", strategies=(selected, unselected)),
             (
@@ -2392,7 +2437,7 @@ def test_selected_failing_instance_blocks_even_when_same_name_pair_history_passe
             priority=20,
             parameters=_complete_canary_parameters(CANARY_ORDER_REASON="winner"),
         )
-        selected, unselected = _bind_unit_approved_profiles(monkeypatch, selected, unselected)
+        selected, unselected = _bind_unit_operation_approvals(monkeypatch, selected, unselected)
         bundle = _unit_result_bundle(
             RuntimeStrategySet(source="unit", strategies=(selected, unselected)),
             (
@@ -2416,6 +2461,7 @@ def test_selected_failing_instance_blocks_even_when_same_name_pair_history_passe
 
 def test_performance_gate_threshold_changes_execution_plan_hash_when_blocking(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
 
@@ -2447,12 +2493,16 @@ def test_performance_gate_threshold_changes_execution_plan_hash_when_blocking(
             priority=10,
             parameters=_complete_canary_parameters(),
         )
-        (buy_spec,) = _bind_unit_approved_profiles(monkeypatch, buy_spec)
+        (buy_spec,) = _bind_unit_operation_approvals(monkeypatch, buy_spec)
         bundle = RuntimeStrategyDecisionResultBundle(
             strategy_set=RuntimeStrategySet(source="unit", strategies=(buy_spec,)),
             results=(_runtime_result("BUY", "canary_non_sma", spec=buy_spec),),
         )
-        return planner.plan_runtime_strategy_results(object(), bundle, updated_ts=456)
+        conn = ensure_db(str(tmp_path / f"performance-gate-{min_sample}.sqlite"))
+        try:
+            return planner.plan_runtime_strategy_results(conn, bundle, updated_ts=456)
+        finally:
+            conn.close()
 
     old_values = {
         "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,

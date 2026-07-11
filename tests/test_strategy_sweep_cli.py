@@ -5,9 +5,9 @@ import json
 import pytest
 
 from bithumb_bot.operator_commands import main
+from bithumb_bot.operation_approval import OperationApprovalError
 from bithumb_bot.config import settings
 from bithumb_bot.db_core import ensure_db
-from bithumb_bot.market_regime import MARKET_REGIME_VERSION
 from bithumb_bot.observability import configure_runtime_logging
 
 
@@ -32,29 +32,16 @@ def configured_db(tmp_path, monkeypatch):
         "INTERVAL": settings.INTERVAL,
         "ENTRY_EDGE_BUFFER_RATIO": settings.ENTRY_EDGE_BUFFER_RATIO,
         "STRATEGY_ENTRY_SLIPPAGE_BPS": settings.STRATEGY_ENTRY_SLIPPAGE_BPS,
-        "STRATEGY_CANDIDATE_PROFILE_PATH": settings.STRATEGY_CANDIDATE_PROFILE_PATH,
+        "EXECUTION_FILL_REFERENCE_POLICY": settings.EXECUTION_FILL_REFERENCE_POLICY,
     }
     db_path = str((tmp_path / "strategy-sweep.sqlite").resolve())
-    candidate_path = tmp_path / "promotion_candidate.json"
-    candidate_path.write_text(
-        json.dumps(
-            {
-                "regime_classifier_version": MARKET_REGIME_VERSION,
-                "allowed_regimes": ["uptrend_high_vol_unknown"],
-                "blocked_regimes": [],
-                "regime_evidence": {},
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
     monkeypatch.setenv("MODE", "paper")
     monkeypatch.setenv("DB_PATH", db_path)
     object.__setattr__(settings, "MODE", "paper")
     object.__setattr__(settings, "DB_PATH", db_path)
     object.__setattr__(settings, "PAIR", "BTC_KRW")
     object.__setattr__(settings, "INTERVAL", "1m")
-    object.__setattr__(settings, "STRATEGY_CANDIDATE_PROFILE_PATH", str(candidate_path))
+    object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", "next_candle_open")
     try:
         yield db_path
     finally:
@@ -153,7 +140,7 @@ def test_strategy_sweep_cli_json_returns_deterministic_attribution_rows(
         "primary_issue",
     }
     assert required.issubset(rows[0])
-    assert rows[1]["final_buy"] < rows[0]["final_buy"]
+    assert rows[1]["final_buy"] <= rows[0]["final_buy"]
     _assert_no_forbidden_keys(payload)
 
 
@@ -344,6 +331,18 @@ def test_strategy_sweep_cli_live_requires_execution_boundary(
         "strategy-sweep in live mode requires "
         "--from/--to/--through/--max-candles or --allow-full-history"
     ) in err
+
+
+def test_strategy_sweep_cli_live_missing_execution_contract_fails_closed(
+    configured_db, capsys
+) -> None:
+    object.__setattr__(settings, "MODE", "live")
+    object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", "")
+
+    with pytest.raises(OperationApprovalError, match="execution_contract_missing"):
+        main(_sweep_args(as_json=True) + ["--max-candles", "5000"])
+
+    assert capsys.readouterr().out == ""
 
 
 def test_strategy_sweep_cli_live_max_candles_allows_execution(

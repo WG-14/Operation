@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ from bithumb_bot.evidence_bundle import (
     create_evidence_bundle,
     verify_evidence_bundle,
 )
-from bithumb_bot import profile_cli
 
 
 def _artifact(path: Path) -> Path:
@@ -46,41 +44,7 @@ def test_evidence_bundle_rejects_path_escape(tmp_path: Path) -> None:
         verify_evidence_bundle(bundle)
 
 
-def test_profile_generate_from_bundle_after_root_move(tmp_path: Path, monkeypatch) -> None:
-    source = _artifact(tmp_path / "promotion.json")
-    bundle = tmp_path / "bundle"
-    create_evidence_bundle(bundle_root=bundle, artifacts={"promotion": source})
-    moved = tmp_path / "moved_bundle"
-    shutil.move(str(bundle), moved)
-    out = tmp_path / "profile.json"
-
-    monkeypatch.setattr(
-        profile_cli,
-        "build_approved_profile",
-        lambda **kwargs: {
-            "profile_content_hash": "sha256:profile",
-            "profile_mode": kwargs["mode"],
-            "source_promotion_content_hash": "sha256:promotion",
-            "candidate_profile_hash": "sha256:candidate",
-            "manifest_hash": "sha256:manifest",
-            "dataset_content_hash": "sha256:dataset",
-        },
-    )
-    monkeypatch.setattr(profile_cli, "write_approved_profile_atomic", lambda path, profile, manager=None: Path(path))
-
-    status = profile_cli.cmd_profile_generate(
-        promotion_path="",
-        mode="paper",
-        out_path=str(out),
-        market="KRW-BTC",
-        interval="1m",
-        bundle_root=str(moved),
-    )
-
-    assert status == 0
-
-
-def test_promotion_validation_run_path_not_required_when_bundle_verified(tmp_path: Path) -> None:
+def test_verified_bundle_contains_no_absolute_source_path(tmp_path: Path) -> None:
     source = _artifact(tmp_path / "promotion.json")
     bundle = create_evidence_bundle(bundle_root=tmp_path / "bundle", artifacts={"promotion": source})
 

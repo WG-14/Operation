@@ -71,8 +71,7 @@ def _settings_with_strategy_parameters_json(raw_json: str) -> SimpleNamespace:
         LIVE_DRY_RUN=True,
         LIVE_REAL_ORDER_ARMED=False,
         STRATEGY_PARAMETERS_JSON=raw_json,
-        APPROVED_STRATEGY_PROFILE_PATH="",
-        STRATEGY_APPROVED_PROFILE_PATH="",
+        OPERATION_APPROVAL_PATH="",
     )
 
 
@@ -136,11 +135,11 @@ def test_live_mode_rejects_strategy_parameters_json_even_in_paper_legacy_scope()
         )
 
 
-def test_approved_profile_path_rejects_strategy_parameters_json_fallback() -> None:
+def test_operation_approval_path_rejects_strategy_parameters_json_fallback() -> None:
     settings_obj = _settings_with_strategy_parameters_json(
         '{"CANARY_ORDER_START_INDEX":0,"CANARY_ORDER_SIDE":"BUY","CANARY_ORDER_REASON":"unit"}'
     )
-    settings_obj.APPROVED_STRATEGY_PROFILE_PATH = "/runtime/profiles/canary.json"
+    settings_obj.OPERATION_APPROVAL_PATH = "/runtime/approvals/canary.json"
     resolver = ParameterAuthorityResolver(settings_obj=settings_obj, authority_scope="paper_legacy")
 
     with pytest.raises(RuntimeError, match="strict_runtime_rejects_strategy_parameters_json_fallback"):
@@ -214,8 +213,7 @@ def test_live_like_manifest_rejects_legacy_parameter_authority_instances(monkeyp
                 LIVE_REAL_ORDER_ARMED=False,
                 PAIR="KRW-BTC",
                 INTERVAL="1m",
-                APPROVED_STRATEGY_PROFILE_PATH="",
-                STRATEGY_APPROVED_PROFILE_PATH="",
+                OPERATION_APPROVAL_PATH="",
             ),
         )
 

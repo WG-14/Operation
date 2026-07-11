@@ -13,7 +13,7 @@ from bithumb_bot.cli.context import AppContext
 from bithumb_bot.cli.dispatch import dispatch
 from bithumb_bot.cli.parser import build_parser
 from bithumb_bot.cli.registry import command_registry
-from bithumb_bot.approved_profile import ApprovedProfileError, validate_approved_profile
+from bithumb_bot.operation_approval import OperationApprovalError, validate_operation_approval
 from bithumb_bot.db_core import ensure_db
 from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.operator_smoke import (
@@ -46,7 +46,7 @@ def _live_settings(db_path: Path, **overrides):
         PAIR="KRW-BTC",
         BITHUMB_API_KEY="operator-key",
         BITHUMB_API_SECRET="x" * 64,
-        APPROVED_STRATEGY_PROFILE_PATH="",
+        OPERATION_APPROVAL_PATH="",
     )
     return replace(base, **overrides)
 
@@ -256,13 +256,13 @@ def test_smoke_buy_uses_operator_execution_smoke_identity() -> None:
     assert plan.origin == "operator_smoke"
 
 
-def test_smoke_buy_does_not_satisfy_approved_profile_required() -> None:
+def test_smoke_buy_does_not_satisfy_operation_approval_contract() -> None:
     payload = build_operator_smoke_authority_payload(
         expires_at=__import__("datetime").datetime(2099, 1, 1, tzinfo=__import__("datetime").timezone.utc)
     )
 
-    with pytest.raises(ApprovedProfileError):
-        validate_approved_profile(payload)
+    with pytest.raises(OperationApprovalError):
+        validate_operation_approval(payload)
 
 
 def test_cmd_smoke_buy_constructs_broker_with_caller(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -558,14 +558,14 @@ def test_smoke_buy_without_reference_price_does_not_create_one_btc_intent(
         conn.close()
 
 
-def test_smoke_buy_dispatch_to_submit_without_approved_profile(
+def test_smoke_buy_dispatch_to_submit_without_operation_approval(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import bithumb_bot.operator_smoke as smoke
 
     db_path = _live_roots(monkeypatch, tmp_path)
     conn = ensure_db(str(db_path))
-    cfg = _live_settings(db_path, APPROVED_STRATEGY_PROFILE_PATH="")
+    cfg = _live_settings(db_path, OPERATION_APPROVAL_PATH="")
     captured: dict[str, object] = {}
     broker_factory_call: dict[str, object] = {}
     monkeypatch.setattr(smoke, "settings", cfg)

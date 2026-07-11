@@ -48,7 +48,7 @@ def test_live_rejects_plugin_from_settings_fallback() -> None:
         )
 
 
-def test_live_multi_strategy_rejects_global_profile_fallback() -> None:
+def test_live_multi_strategy_rejects_global_operation_approval_fallback() -> None:
     cfg = replace(settings, MODE="live", LIVE_DRY_RUN=True, LIVE_REAL_ORDER_ARMED=False)
 
     with pytest.raises(RuntimeError, match="spec_bound_approved_profile_path_missing_for_runtime_strategy"):
@@ -96,7 +96,7 @@ def test_promotion_adapter_with_db_bound_decide_is_rejected(monkeypatch: pytest.
 
 
 def test_production_path_permits_only_profile_or_runtime_spec_parameter_source() -> None:
-    cfg = replace(settings, MODE="paper", APPROVED_STRATEGY_PROFILE_PATH="", STRATEGY_APPROVED_PROFILE_PATH="")
+    cfg = replace(settings, MODE="paper", OPERATION_APPROVAL_PATH="")
     request = RuntimeDecisionRequestBuilder(settings_obj=cfg, authority_scope="promotion").build_for_spec(
         RuntimeStrategySpec(
             "canary_non_sma",

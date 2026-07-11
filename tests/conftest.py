@@ -34,6 +34,12 @@ from tests.support.test_workspace import (
     workspace_run_id,
     workspace_suite_name,
 )
+from tests.support.operation_strategy_plugin import register_test_only_operation_strategy_plugin
+
+
+def pytest_configure() -> None:
+    """Keep test-only strategy registrations outside production discovery."""
+    register_test_only_operation_strategy_plugin()
 
 
 def _path_manager_for_runtime_root(runtime_root: Path) -> PathManager:

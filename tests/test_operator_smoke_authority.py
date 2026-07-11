@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.approved_profile import ApprovedProfileError, validate_approved_profile
+from bithumb_bot.operation_approval import OperationApprovalError, validate_operation_approval
 from bithumb_bot.execution_authority import execution_authority_from_payload, require_authority_operation
 from bithumb_bot.storage_io import write_json_atomic
 from bithumb_bot.operator_smoke_authority import (
@@ -27,22 +27,22 @@ def test_smoke_authority_declares_not_promotion_evidence() -> None:
     assert payload["promotion_grade"] is False
 
 
-def test_operator_smoke_authority_not_accepted_as_approved_profile() -> None:
+def test_operator_smoke_authority_not_accepted_as_operation_approval() -> None:
     payload = build_operator_smoke_authority_payload(
         expires_at=datetime.now(timezone.utc) + timedelta(days=1)
     )
 
-    with pytest.raises(ApprovedProfileError):
-        validate_approved_profile(payload)
+    with pytest.raises(OperationApprovalError):
+        validate_operation_approval(payload)
 
 
-def test_operator_smoke_authority_not_accepted_by_profile_generate() -> None:
+def test_operator_smoke_authority_not_accepted_as_operation_approval_payload() -> None:
     payload = build_operator_smoke_authority_payload(
         expires_at=datetime.now(timezone.utc) + timedelta(days=1)
     )
 
-    with pytest.raises(ApprovedProfileError):
-        validate_approved_profile(payload)
+    with pytest.raises(OperationApprovalError):
+        validate_operation_approval(payload)
 
 
 def test_smoke_authority_expired_blocks_smoke_buy() -> None:
