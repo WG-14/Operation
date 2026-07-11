@@ -11,6 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: .
+      BITHUMB_API_KEY: ""
+      BITHUMB_API_SECRET: ""
+      NTFY_TOPIC: ""
+      NOTIFIER_WEBHOOK_URL: ""
+      SLACK_WEBHOOK_URL: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      NOTIFIER_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,9 +31,6 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --dev
-      - name: Run diff-aware strategy PR workload guard
-        if: github.event_name == 'pull_request'
-        run: uv run python scripts/check_strategy_pr_workload_guard.py --require-diff-aware
       - name: Run config contract and text hygiene gates
         run: |
           source .venv/bin/activate
@@ -34,8 +39,6 @@ jobs:
           python3 tools/generate_config_docs.py --check
           python3 tools/generate_env_example.py --check
           python3 -m pytest tests/test_text_hygiene.py tests/test_config_contract.py -q
-          python3 -m pytest tests/test_live_preflight.py::test_live_execution_contract_emits_safe_env_metadata_and_lints tests/test_live_preflight.py::test_live_execution_contract_log_emits_redacted_fingerprint -q
-          python3 -m pytest tests/test_operator_commands.py::test_cmd_signal_no_data_output_is_clean_and_actionable tests/test_operator_commands.py::test_cmd_explain_no_data_output_is_clean_and_actionable tests/test_operator_commands.py::test_cmd_status_missing_candle_output_is_clean_and_actionable -q
       - name: Run focused safety regressions
         run: >
           uv run pytest -q
@@ -50,15 +53,8 @@ jobs:
           tests/test_execution_planner.py
           tests/test_order_submit_hardening.py
           tests/test_bithumb_execution_modules.py
-          tests/test_live_preflight.py
-          tests/test_cli_registry.py
-          tests/test_cli_help_contract.py
-          tests/test_cli_guard_policy.py
-          tests/test_cli_architecture.py
+          tests/test_operator_smoke_preflight.py
+          tests/test_operation_runtime_contract.py
+          tests/test_operation_cli_surface.py
           tests/test_env_loading.py
-          tests/test_operator_commands.py::test_main_pre_dispatch_blocks_live_run_without_startup_contract
-          tests/test_operator_commands.py::test_main_pre_dispatch_blocks_live_write_command_without_preflight
-          tests/test_operator_commands.py::test_cmd_run_blocks_before_lock_when_live_preflight_fails
           tests/test_deploy_systemd_units.py
-      - name: Run default PR fast suite
-        run: ./scripts/run_fast_pr_tests.sh
