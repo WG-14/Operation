@@ -219,34 +219,6 @@ def test_requirement_aggregation_preserves_normalization_priority_payload_and_ha
     ).content_hash()
 
 
-# Remove this transitional parity test when the research directory is finally removed.
-@pytest.mark.parametrize(
-    ("strategy_name", "parameters"),
-    (
-        ("sma_with_filter", {"SMA_LONG": 8, "SMA_FILTER_VOL_WINDOW": 5}),
-        ("daily_participation_sma", {"SMA_LONG": 8, "SMA_FILTER_VOL_WINDOW": 5}),
-        ("canary_non_sma", {}),
-        ("safe_hold", {}),
-        ("__test_top_of_book_required__", {}),
-    ),
-)
-def test_operation_data_requirement_resolver_matches_research_during_transition(
-    strategy_name: str,
-    parameters: dict[str, object],
-) -> None:
-    from bithumb_bot.research.strategy_registry import research_strategy_data_requirements
-
-    runtime_adapter_bootstrap.ensure_runtime_decision_adapters_registered()
-    spec = _spec(strategy_name, "parity", parameters=parameters)
-    research = research_strategy_data_requirements(strategy_name, runtime_strategy_spec=spec)
-    operation = operation_strategy_data_requirements(strategy_name, runtime_strategy_spec=spec)
-
-    assert operation.required_data == research.required_data
-    assert operation.optional_data == research.optional_data
-    assert operation.unsupported_without == research.unsupported_without
-    assert operation.normalized_capabilities() == research.normalized_capabilities()
-    assert operation.capability_contract_payload() == research.capability_contract_payload()
-
 
 def test_runtime_data_provider_has_no_direct_research_import() -> None:
     path = Path("src/bithumb_bot/runtime_data_provider.py")

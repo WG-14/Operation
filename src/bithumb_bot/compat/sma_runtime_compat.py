@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 
-from bithumb_bot.research.strategy_registry import runtime_strategy_parameter_env_keys
-from bithumb_bot.research.strategy_spec import SMA_WITH_FILTER_SPEC
+from bithumb_bot.operation_strategy.spec import SMA_WITH_FILTER_SPEC
 
 
 LEGACY_DEFAULT_RUNTIME_STRATEGY = SMA_WITH_FILTER_SPEC.strategy_name
@@ -20,7 +19,7 @@ def legacy_default_strategy_name() -> str:
 
 
 def legacy_sma_strategy_parameter_env_keys() -> tuple[str, ...]:
-    return runtime_strategy_parameter_env_keys(LEGACY_DEFAULT_RUNTIME_STRATEGY)
+    return tuple(SMA_WITH_FILTER_SPEC.accepted_parameter_names)
 
 
 def legacy_default_strategy_allowed_for_contract(

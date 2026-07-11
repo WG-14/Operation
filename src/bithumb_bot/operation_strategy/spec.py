@@ -206,7 +206,11 @@ SMA_WITH_FILTER_SPEC = StrategySpec(
 def strategy_spec_for_name(strategy_name: str) -> StrategySpec:
     if strategy_name in {"sma_with_filter", "test_top_of_book_required", "__test_top_of_book_required__"}:
         return SMA_WITH_FILTER_SPEC
-    raise StrategySpecError(f"unsupported research strategy: {strategy_name}")
+    try:
+        from .registry import OperationStrategyRegistryError, resolve_operation_strategy_plugin
+        return resolve_operation_strategy_plugin(strategy_name).spec
+    except OperationStrategyRegistryError as exc:
+        raise StrategySpecError(f"unsupported operation strategy: {strategy_name}") from exc
 
 
 def runtime_bound_behavior_parameter_names_for_spec(strategy_spec: object) -> tuple[str, ...]:
@@ -317,6 +321,62 @@ def materialized_strategy_parameters_hash(parameter_values: dict[str, Any]) -> s
 
 def exit_policy_hash(policy: dict[str, Any]) -> str:
     return sha256_prefixed(policy)
+
+
+COMMON_EXIT_RULE_NAMES = frozenset({"stop_loss", "max_holding_time", "take_profit"})
+
+
+def common_exit_policy_materialization(
+    *,
+    strategy_name: str,
+    parameter_values: dict[str, Any],
+    strategy_spec: object,
+    materialization_mode: str,
+):
+    """Operation fallback for common-rule and no-exit plugins.
+
+    Plugin-owned rules deliberately cannot fall through this path; that keeps
+    exit authority fail-closed while preserving old common/no-exit payloads.
+    """
+    from bithumb_bot.artifact_hashing import sha256_prefixed
+    from .plugin import ExitPolicyMaterialization
+
+    schema_rules = tuple(str(item).strip().lower() for item in getattr(strategy_spec, "exit_policy_schema", {}).get("rules") or ())
+    if not schema_rules:
+        policy = {
+            "schema_version": 1, "strategy_name": strategy_name, "rules": [],
+            "common_rules": [], "strategy_rules": [],
+            "entry_exit_policy": "strategy_emits_no_exit_intent",
+            "stop_loss": {"enabled": False, "disabled_when_zero": True},
+            "max_holding_time": {"enabled": False, "disabled_when_zero": True},
+            "take_profit": {"enabled": False, "disabled_when_zero": True},
+        }
+        config = {"schema_version": 1, "strategy_name": strategy_name, "rules": []}
+        source = "default_no_exit_materializer"
+    else:
+        strategy_owned = sorted(set(schema_rules) - COMMON_EXIT_RULE_NAMES)
+        if strategy_owned:
+            raise StrategySpecError("strategy exit policy materializer required for strategy-owned rule(s): " + ",".join(strategy_owned))
+        values = materialize_strategy_parameters_for_spec(strategy_spec, parameter_values)
+        rules = _normalize_exit_rule_names(str(values.get("STRATEGY_EXIT_RULES") or ""))
+        stop_loss = float(values.get("STRATEGY_EXIT_STOP_LOSS_RATIO") or 0.0)
+        max_holding = int(values.get("STRATEGY_EXIT_MAX_HOLDING_MIN") or 0)
+        take_profit = float(values.get("TAKE_PROFIT_RATIO") or 0.0)
+        policy = {
+            "schema_version": 1, "strategy_name": strategy_name, "rules": list(rules),
+            "common_rules": [rule for rule in rules if rule in COMMON_EXIT_RULE_NAMES], "strategy_rules": [],
+            "stop_loss": {"enabled": "stop_loss" in rules and stop_loss > 0.0, "stop_loss_ratio": stop_loss, "disabled_when_zero": True, "evaluation_price_basis": "closed_candle_mark", "intrabar_stop_modeled": False, "limitation_reasons": ["intra_candle_path_unavailable", "candle_close_stop_may_exit_later_than_real_stop"]},
+            "max_holding_time": {"enabled": "max_holding_time" in rules and max_holding > 0, "max_holding_min": max_holding, "disabled_when_zero": True},
+            "take_profit": {"enabled": "take_profit" in rules and take_profit > 0.0, "take_profit_ratio": take_profit, "disabled_when_zero": True, "evaluation_price_basis": "closed_candle_mark"},
+            "trailing_stop": {"enabled": False, "trailing_stop_ratio": 0.0, "disabled_when_zero": True, "evaluation_status": "diagnostic_policy_bound_not_runtime_evaluated"},
+            "break_even_stop": {"enabled": False, "evaluation_status": "diagnostic_policy_bound_not_runtime_evaluated"},
+            "opposite_signal_exit": {"enabled": False, "evaluation_status": "diagnostic_policy_bound_not_runtime_evaluated"},
+            "regime_change_exit": {"enabled": False, "evaluation_status": "diagnostic_policy_bound_not_runtime_evaluated"},
+        }
+        config = {key: value for key, value in policy.items() if key not in {"common_rules", "strategy_rules"}}
+        source = "default_common_exit_policy_materializer"
+    contract = {"schema_version": 1, "strategy_name": strategy_name, "materializer_module": None, "materializer_qualname": None, "exit_policy_source": source}
+    return ExitPolicyMaterialization(policy, sha256_prefixed(policy), sha256_prefixed(contract), config, sha256_prefixed(config), source, materialization_mode)
 
 
 def _normalize_exit_rule_names(raw: str) -> tuple[str, ...]:

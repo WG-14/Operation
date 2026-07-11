@@ -11,11 +11,10 @@ from bithumb_bot.core.sma_policy import (
     _stable_position_policy_input,
 )
 from bithumb_bot.market_regime.thresholds import MarketRegimeThresholds
-from bithumb_bot.research.dataset_snapshot import DatasetSnapshot
-from bithumb_bot.research.strategy_spec import materialized_strategy_parameters_hash
+from bithumb_bot.operation_strategy.spec import materialized_strategy_parameters_hash
 from bithumb_bot.strategy_decision_input import StrategyDecisionInputBundle
 from bithumb_bot.strategy_policy_contract import PositionSnapshot
-from bithumb_bot.strategy_plugins import sma_with_filter_events
+from bithumb_bot.market_regime import classify_market_regime_from_arrays
 
 from .sma_with_filter_assembly import (
     MaterializationMode,
@@ -250,7 +249,7 @@ class SmaWithFilterSnapshotProjector:
         self,
         *,
         event: Any,
-        dataset: DatasetSnapshot,
+        dataset: Any,
         candle_index: int,
         position: PositionSnapshot,
         parameter_values: dict[str, Any],
@@ -386,7 +385,7 @@ class SmaWithFilterSnapshotProjector:
     def project_features_from_dataset(
         self,
         *,
-        dataset: DatasetSnapshot,
+        dataset: Any,
         candle_index: int,
         materialized: MaterializedSmaWithFilterParameters,
         through_ts_ms: int | None,
@@ -451,7 +450,7 @@ class SmaWithFilterSnapshotProjector:
         overextended_max_return_ratio = float(materialized.values["SMA_FILTER_OVEREXT_MAX_RETURN_RATIO"])
         min_gap_ratio = float(materialized.values["SMA_FILTER_GAP_MIN_RATIO"])
         min_volatility_ratio = float(materialized.values["SMA_FILTER_VOL_MIN_RANGE_RATIO"])
-        market_regime_snapshot = sma_with_filter_events.classify_market_regime_from_arrays(
+        market_regime_snapshot = classify_market_regime_from_arrays(
             closes=[float(value) for value in closes],
             highs=[float(value) for value in highs],
             lows=[float(value) for value in lows],

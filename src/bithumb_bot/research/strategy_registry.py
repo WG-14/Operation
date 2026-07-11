@@ -1026,7 +1026,16 @@ def resolve_research_strategy_plugin(strategy_name: str) -> ResearchStrategyPlug
     try:
         return _RESEARCH_STRATEGY_PLUGINS[key]
     except KeyError as exc:
-        raise ResearchStrategyRegistryError(f"unsupported research strategy: {key}") from exc
+        # Residual promotion/profile custody may inspect an Operation runtime
+        # contract. Runtime discovery itself never traverses this bridge.
+        from bithumb_bot.operation_strategy.registry import (
+            OperationStrategyRegistryError,
+            resolve_operation_strategy_plugin,
+        )
+        try:
+            return resolve_operation_strategy_plugin(key)  # type: ignore[return-value]
+        except OperationStrategyRegistryError:
+            raise ResearchStrategyRegistryError(f"unsupported research strategy: {key}") from exc
 
 
 def resolve_research_strategy(strategy_name: str) -> ResearchStrategyRunner:

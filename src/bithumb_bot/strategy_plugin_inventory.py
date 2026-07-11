@@ -4,10 +4,10 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from bithumb_bot.research.strategy_registry import (
-    ResearchStrategyRegistryError,
-    list_research_strategy_plugins,
-    resolve_research_strategy_plugin,
+from bithumb_bot.operation_strategy.registry import (
+    OperationStrategyRegistryError as ResearchStrategyRegistryError,
+    list_operation_strategy_plugins as list_research_strategy_plugins,
+    resolve_operation_strategy_plugin as resolve_research_strategy_plugin,
 )
 
 
@@ -214,32 +214,23 @@ def _unknown_strategy_verdict(strategy_name: str, target: str, reason: str) -> d
 
 
 def _strategy_plugin_sources_by_name() -> dict[str, StrategyPluginSource]:
-    from bithumb_bot.strategy_plugins import coerce_loaded_strategy_plugins, metadata
-    from bithumb_bot.strategy_plugins.builtin_manifest import iter_builtin_strategy_plugin_exports
+    from importlib import metadata
+    from bithumb_bot.operation_strategy.discovery import ENTRY_POINT_GROUP
 
-    sources: dict[str, StrategyPluginSource] = {}
-    for plugin_export in iter_builtin_strategy_plugin_exports():
-        loaded = plugin_export.load()
-        for plugin in coerce_loaded_strategy_plugins(loaded):
-            sources.setdefault(
-                plugin.name,
-                StrategyPluginSource(
-                    source="built_in_manifest",
-                    manifest_object_path=plugin_export.object_path,
-                ),
-            )
-
+    sources: dict[str, StrategyPluginSource] = {
+        plugin.name: StrategyPluginSource(source="built_in_manifest", manifest_object_path="bithumb_bot.operation_strategy.builtin:BUILTIN_OPERATION_STRATEGY_PLUGINS")
+        for plugin in list_research_strategy_plugins()
+    }
     entry_points = metadata.entry_points()
     if hasattr(entry_points, "select"):
-        selected = entry_points.select(group="bithumb_bot.strategy_plugins")
+        selected = entry_points.select(group=ENTRY_POINT_GROUP)
     elif isinstance(entry_points, dict):
-        selected = entry_points.get("bithumb_bot.strategy_plugins", ())
+        selected = entry_points.get(ENTRY_POINT_GROUP, ())
     else:
         selected = [
             item
             for item in entry_points
-            if str(getattr(item, "group", "bithumb_bot.strategy_plugins"))
-            == "bithumb_bot.strategy_plugins"
+            if str(getattr(item, "group", ENTRY_POINT_GROUP)) == ENTRY_POINT_GROUP
         ]
     for entry_point in sorted(
         selected,
@@ -248,13 +239,9 @@ def _strategy_plugin_sources_by_name() -> dict[str, StrategyPluginSource]:
             str(getattr(item, "value", "")),
         ),
     ):
-        for plugin in coerce_loaded_strategy_plugins(entry_point.load()):
-            sources.setdefault(
-                plugin.name,
-                StrategyPluginSource(
-                    source="entry_point",
-                    entry_point_name=str(getattr(entry_point, "name", "")),
-                    entry_point_value=str(getattr(entry_point, "value", "")),
-                ),
-            )
+        loaded = entry_point.load()
+        loaded = loaded() if callable(loaded) else loaded
+        plugins = (loaded,) if hasattr(loaded, "name") else loaded
+        for plugin in plugins:
+            sources.setdefault(plugin.name, StrategyPluginSource(source="entry_point", entry_point_name=str(getattr(entry_point, "name", "")), entry_point_value=str(getattr(entry_point, "value", ""))))
     return sources

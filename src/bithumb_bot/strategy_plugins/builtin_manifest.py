@@ -22,40 +22,8 @@ class BuiltinStrategyPluginExport:
 
 BUILTIN_STRATEGY_PLUGIN_EXPORTS: tuple[BuiltinStrategyPluginExport, ...] = (
     BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.sma_with_filter_plugin",
-        "SMA_WITH_FILTER_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.daily_participation_sma",
-        "DAILY_PARTICIPATION_SMA_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.baseline_plugins",
-        "NOOP_BASELINE_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.baseline_plugins",
-        "BUY_AND_HOLD_BASELINE_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.safe_hold_plugin",
-        "SAFE_HOLD_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.canary_non_sma",
-        "CANARY_NON_SMA_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.replay_threshold",
-        "REPLAY_THRESHOLD_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.threshold_research_only",
-        "THRESHOLD_RESEARCH_ONLY_PLUGIN",
-    ),
-    BuiltinStrategyPluginExport(
-        "bithumb_bot.strategy_plugins.channel_breakout_research",
-        "CHANNEL_BREAKOUT_WITH_REGIME_FILTER_PLUGIN",
+        "bithumb_bot.operation_strategy.builtin",
+        "BUILTIN_OPERATION_STRATEGY_PLUGINS",
     ),
 )
 

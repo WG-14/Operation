@@ -24,6 +24,7 @@ from .capabilities import (
     StrategyRuntimeCapabilities,
 )
 from .spec import materialize_strategy_parameters_for_spec
+from .plugin import ExitPolicyMaterialization, OperationStrategyPlugin
 
 
 class OperationStrategyRegistryError(ValueError):
@@ -162,10 +163,29 @@ _TEST_TOP_OF_BOOK_REQUIRED_STRATEGY = "__test_top_of_book_required__"
 
 
 def register_operation_strategy_plugin(
-    registration: OperationStrategyRegistration,
+    registration: OperationStrategyRegistration | OperationStrategyPlugin,
     *,
     replace: bool = False,
 ) -> None:
+    if isinstance(registration, OperationStrategyPlugin):
+        registration = OperationStrategyRegistration(
+            name=registration.name, version=registration.version, spec=registration.spec,
+            required_data=registration.required_data, optional_data=registration.optional_data,
+            runtime_replay_builder=registration.runtime_replay_builder,
+            runtime_parameter_adapter=registration.runtime_parameter_adapter,
+            runtime_decision_adapter_factory=registration.runtime_decision_adapter_factory,
+            runtime_feature_snapshot_builder=registration.runtime_feature_snapshot_builder,
+            single_replay_bundle_builder=registration.single_replay_bundle_builder,
+            policy_assembly_factory=registration.policy_assembly_factory,
+            runtime_data_requirement_builder=registration.runtime_data_requirement_builder,
+            exit_policy_materializer=registration.exit_policy_materializer,
+            runtime_capabilities=registration.runtime_capabilities,
+            decision_evidence_contract=registration.decision_evidence_contract,
+            decision_contract_version=registration.decision_contract_version,
+            diagnostics_namespace=registration.diagnostics_namespace,
+            compatibility_contract_payload=registration.contract_payload(),
+            compatibility_contract_hash=registration.contract_hash(),
+        )
     if not isinstance(registration, OperationStrategyRegistration):
         raise OperationStrategyRegistryError(
             f"operation strategy plugin invalid type: {type(registration).__name__}"
@@ -177,6 +197,8 @@ def register_operation_strategy_plugin(
 
 
 def resolve_operation_strategy_plugin(strategy_name: str) -> OperationStrategyRegistration:
+    from .discovery import ensure_operation_strategy_plugins_discovered
+    ensure_operation_strategy_plugins_discovered()
     key = _normalized_strategy_name(strategy_name)
     try:
         return _OPERATION_STRATEGY_PLUGINS[key]
@@ -268,6 +290,8 @@ def operation_strategy_data_requirements(
 
 
 def list_operation_strategy_plugins() -> tuple[OperationStrategyRegistration, ...]:
+    from .discovery import ensure_operation_strategy_plugins_discovered
+    ensure_operation_strategy_plugins_discovered()
     return tuple(_OPERATION_STRATEGY_PLUGINS[name] for name in sorted(_OPERATION_STRATEGY_PLUGINS))
 
 
@@ -321,8 +345,58 @@ def operation_strategy_runtime_capability_issues(
 
 def clear_operation_strategy_registry_for_tests() -> None:
     _OPERATION_STRATEGY_PLUGINS.clear()
+    from .discovery import reset_operation_strategy_discovery_for_tests
+    reset_operation_strategy_discovery_for_tests()
 
 
 def reload_operation_strategy_plugins_for_tests() -> None:
     """Test reset alias kept symmetrical with the legacy registry reset API."""
     clear_operation_strategy_registry_for_tests()
+
+
+def operation_exit_policy_materialization_from_parameters(
+    strategy_name: str,
+    parameter_values: dict[str, Any],
+    *,
+    materialization_mode: str = "runtime_strategy_instance",
+) -> ExitPolicyMaterialization:
+    """Materialize common, no-exit, or plugin-owned runtime exit policy.
+
+    The returned hashes remain bound to the materializer identity and payload;
+    callers must preserve them rather than re-deriving a looser policy.
+    """
+    from .spec import common_exit_policy_materialization
+
+    plugin = resolve_operation_strategy_plugin(strategy_name)
+    materializer = plugin.exit_policy_materializer
+    if materializer is None:
+        return common_exit_policy_materialization(
+            strategy_name=strategy_name,
+            parameter_values=parameter_values,
+            strategy_spec=plugin.spec,
+            materialization_mode=materialization_mode,
+        )
+    raw = materializer(strategy_name, dict(parameter_values))
+    if isinstance(raw, ExitPolicyMaterialization):
+        return raw
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("exit_policy"), Mapping):
+        raise OperationStrategyRegistryError(f"exit_policy_materializer_result_invalid:{strategy_name}")
+    policy = dict(raw["exit_policy"])
+    config = dict(raw.get("exit_policy_config") or policy)
+    source = str(raw.get("exit_policy_source") or "operation_plugin_exit_policy_materializer")
+    contract = {
+        "schema_version": 1, "strategy_name": plugin.name,
+        "materializer_module": getattr(materializer, "__module__", None),
+        "materializer_qualname": getattr(materializer, "__qualname__", None),
+        "exit_policy_source": source,
+    }
+    from bithumb_bot.artifact_hashing import sha256_prefixed
+    return ExitPolicyMaterialization(
+        exit_policy=policy,
+        exit_policy_hash=str(raw.get("exit_policy_hash") or sha256_prefixed(policy)),
+        exit_policy_contract_hash=str(raw.get("exit_policy_contract_hash") or sha256_prefixed(contract)),
+        exit_policy_config=config,
+        exit_policy_config_hash=str(raw.get("exit_policy_config_hash") or sha256_prefixed(config)),
+        exit_policy_source=source,
+        exit_policy_materialization_mode=str(raw.get("exit_policy_materialization_mode") or materialization_mode),
+    )

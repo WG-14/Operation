@@ -23,13 +23,13 @@ from .legacy_compat.runtime_parameters import (
     settings_derived_fallback,
     strategy_parameters_json_fallback,
 )
-from .research.strategy_registry import (
-    ResearchStrategyRegistryError,
-    resolve_research_strategy_plugin,
+from .operation_strategy.registry import (
+    OperationStrategyRegistryError as ResearchStrategyRegistryError,
+    resolve_operation_strategy_plugin as resolve_research_strategy_plugin,
+    operation_exit_policy_materialization_from_parameters,
 )
-from .research.strategy_spec import (
+from .operation_strategy.spec import (
     exit_policy_hash,
-    exit_policy_materialization_from_parameters,
     materialize_strategy_parameters,
     materialized_strategy_parameters_hash,
     runtime_bound_behavior_parameter_names,
@@ -188,7 +188,6 @@ def _plugin_accepts_empty_runtime_parameters(plugin: object | None) -> bool:
     return (
         capabilities is not None
         and spec is not None
-        and bool(getattr(capabilities, "runtime_decision_supported", False))
         and not bool(getattr(capabilities, "approved_profile_required", True))
         and not bool(getattr(capabilities, "live_dry_run_allowed", False))
         and not bool(getattr(capabilities, "live_real_order_allowed", False))
@@ -609,7 +608,7 @@ def derive_strategy_instance_id(
     if not resolved_exit_policy_hash:
         try:
             resolved_exit_policy_hash = str(
-                exit_policy_materialization_from_parameters(
+                operation_exit_policy_materialization_from_parameters(
                     spec.strategy_name,
                     dict(materialized_parameters),
                     materialization_mode="runtime_strategy_instance_identity",
@@ -1527,7 +1526,7 @@ def _runtime_exit_policy_materialization(
             source=profile.get("exit_policy_source") or "approved_profile_exit_policy",
             mode=profile.get("exit_policy_materialization_mode") or "approved_profile",
         )
-        materialized = exit_policy_materialization_from_parameters(
+        materialized = operation_exit_policy_materialization_from_parameters(
             spec.strategy_name,
             dict(parameters),
             materialization_mode="runtime_profile_verification",
@@ -1535,7 +1534,7 @@ def _runtime_exit_policy_materialization(
         if materialized["exit_policy_hash"] != resolved["exit_policy_hash"]:
             raise RuntimeError(f"runtime_exit_policy_materialized_hash_mismatch:{spec.strategy_name}")
         return resolved
-    materialized = exit_policy_materialization_from_parameters(
+    materialized = operation_exit_policy_materialization_from_parameters(
         spec.strategy_name,
         dict(parameters),
         materialization_mode="runtime_strategy_instance",
@@ -1661,14 +1660,7 @@ class RuntimeDecisionRequestBuilder:
         )
         parameters = dict(authority.materialized_parameters)
         strategy_parameters_hash = authority.strategy_parameters_hash
-        try:
-            settings_runtime_contract = runtime_contract_from_settings(cfg)
-        except (ResearchStrategyRegistryError, ApprovedProfileError):
-            if (
-                not _plugin_accepts_empty_runtime_parameters(plugin)
-                and authority.parameter_source != "runtime_strategy_spec"
-            ):
-                raise
+        if _plugin_accepts_empty_runtime_parameters(plugin):
             settings_runtime_contract = {
                 "schema_version": 1,
                 "mode": str(getattr(cfg, "MODE", "")),
@@ -1677,6 +1669,20 @@ class RuntimeDecisionRequestBuilder:
                 "interval": str(spec.interval or getattr(cfg, "INTERVAL", "")),
                 "strategy_parameters": {},
             }
+        else:
+            try:
+                settings_runtime_contract = runtime_contract_from_settings(cfg)
+            except (ResearchStrategyRegistryError, ApprovedProfileError):
+                if authority.parameter_source != "runtime_strategy_spec":
+                    raise
+                settings_runtime_contract = {
+                    "schema_version": 1,
+                    "mode": str(getattr(cfg, "MODE", "")),
+                    "strategy_name": spec.strategy_name,
+                    "market": str(spec.pair or getattr(cfg, "PAIR", "")),
+                    "interval": str(spec.interval or getattr(cfg, "INTERVAL", "")),
+                    "strategy_parameters": {},
+                }
         runtime_contract = dict(settings_runtime_contract)
         runtime_contract["strategy_name"] = spec.strategy_name
         runtime_contract["market"] = str(spec.pair or getattr(cfg, "PAIR", ""))
@@ -2225,7 +2231,7 @@ class RuntimeStrategyDecisionCollector:
                 raise RuntimeError(
                     f"spec_bound_approved_profile_hash_missing_for_runtime_strategy:{spec.strategy_name}"
                 )
-        from .research.strategy_registry import strategy_runtime_capability_issues
+        from .operation_strategy.registry import operation_strategy_runtime_capability_issues as strategy_runtime_capability_issues
 
         issues = strategy_runtime_capability_issues(
             spec.strategy_name,

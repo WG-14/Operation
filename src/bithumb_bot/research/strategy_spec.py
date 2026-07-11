@@ -313,7 +313,16 @@ def strategy_spec_for_name(strategy_name: str) -> StrategySpec:
 
         return resolve_research_strategy_plugin(strategy_name).spec
     except ResearchStrategyRegistryError as exc:
-        raise StrategySpecError(f"unsupported research strategy: {strategy_name}") from exc
+        # Promotion/evidence compatibility may still need an Operation-owned
+        # runtime specification after runtime plugin discovery has cut over.
+        from bithumb_bot.operation_strategy.registry import (
+            OperationStrategyRegistryError,
+            resolve_operation_strategy_plugin,
+        )
+        try:
+            return resolve_operation_strategy_plugin(strategy_name).spec
+        except OperationStrategyRegistryError:
+            raise StrategySpecError(f"unsupported research strategy: {strategy_name}") from exc
 
 
 def runtime_bound_behavior_parameter_names(strategy_name: str) -> tuple[str, ...]:

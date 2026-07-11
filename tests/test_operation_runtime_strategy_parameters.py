@@ -236,25 +236,6 @@ def test_spec_object_helpers_preserve_sma_name_helper_payload_hash_and_sources()
     )
 
 
-# Remove this transitional parity test when the research directory is finally removed.
-def test_research_and_operation_settings_parameter_extraction_parity() -> None:
-    from bithumb_bot.research.strategy_registry import runtime_strategy_parameters_from_settings
-
-    for cfg in (
-        _sma_settings(),
-        _sma_settings(STRATEGY_PARAMETERS_JSON='{"SMA_SHORT": 8, "SMA_LONG": 34}'),
-    ):
-        assert operation_runtime_strategy_parameters_from_settings("sma_with_filter", cfg) == (
-            runtime_strategy_parameters_from_settings("sma_with_filter", cfg)
-        )
-
-    invalid = _sma_settings(STRATEGY_PARAMETERS_JSON='{"SMA_SHORT": true, "SMA_LONG": 30}')
-    with pytest.raises(ValueError) as research_error:
-        runtime_strategy_parameters_from_settings("sma_with_filter", invalid)
-    with pytest.raises(ValueError) as operation_error:
-        operation_runtime_strategy_parameters_from_settings("sma_with_filter", invalid)
-    assert str(operation_error.value) == str(research_error.value)
-
 
 @pytest.mark.parametrize(
     "relative_path",

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..execution_reality_contract import build_execution_reality_contract
-from ..research.execution_model import ExecutionRequest, StressExecutionModel
+from ..operation_execution_model import ExecutionRequest, StressExecutionModel
 
 
 @dataclass(frozen=True)

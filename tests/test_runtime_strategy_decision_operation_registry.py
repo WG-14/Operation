@@ -39,14 +39,11 @@ def _registered_canary():
 
 
 def test_empty_operation_registry_is_populated_by_runtime_adapter_bootstrap() -> None:
-    from bithumb_bot.research import strategy_registry
-
-    strategy_registry._RESEARCH_STRATEGY_PLUGINS = {}
-    strategy_registry._DISCOVERED_STRATEGY_PLUGINS_LOADED = False
     clear_operation_strategy_registry_for_tests()
     runtime_adapter_bootstrap.reset_runtime_decision_adapter_bootstrap_for_tests()
 
-    assert list_operation_strategy_plugins() == ()
+    runtime_adapter_bootstrap.ensure_runtime_decision_adapters_registered()
+    assert list_operation_strategy_plugins()
     adapter_names = list_runtime_decision_adapters()
 
     assert adapter_names
@@ -62,27 +59,11 @@ def test_repeated_bootstrap_and_adapter_listing_are_idempotent() -> None:
     assert list_runtime_decision_adapters() == first
 
 
-# Remove this transitional parity test when the research directory is finally removed.
-def test_research_and_operation_registries_expose_the_same_runtime_adapter_names() -> None:
-    from bithumb_bot.research.strategy_registry import list_research_strategy_plugins
-
-    expected = tuple(
-        sorted(
-            plugin.name
-            for plugin in list_research_strategy_plugins()
-            if plugin.runtime_capabilities.promotion_runtime_decisions_supported
-            and plugin.runtime_decision_adapter_factory is not None
-        )
-    )
-
-    assert list_runtime_decision_adapters() == expected
-
-
 def test_operation_registry_resolves_normal_runtime_adapter_and_unknown_is_none() -> None:
-    adapter = get_runtime_decision_adapter("canary_non_sma")
+    adapter = get_runtime_decision_adapter("sma_with_filter")
 
     assert adapter is not None
-    assert adapter.strategy_name == "canary_non_sma"
+    assert adapter.strategy_name == "sma_with_filter"
     assert get_runtime_decision_adapter("unknown_runtime_strategy") is None
 
 

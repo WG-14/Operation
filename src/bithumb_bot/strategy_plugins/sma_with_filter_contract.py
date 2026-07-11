@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from bithumb_bot.research.strategy_registry import (
+from bithumb_bot.operation_strategy.capabilities import (
     DataCapabilityRequirement,
     ResearchStrategyDataRequirements,
 )
-from bithumb_bot.research.strategy_spec import SMA_WITH_FILTER_SPEC
+from bithumb_bot.operation_strategy.spec import SMA_WITH_FILTER_SPEC
 from bithumb_bot.strategy_evidence_contract import DecisionEvidenceContract
 
 

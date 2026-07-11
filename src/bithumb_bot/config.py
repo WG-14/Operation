@@ -645,7 +645,7 @@ def validate_live_strategy_selection(cfg: Settings) -> None:
         strategy_name=strategy_name,
         approved_profile_path=approved_profile_path,
     )
-    from .research.strategy_registry import strategy_runtime_capability_issues
+    from .operation_strategy.registry import operation_strategy_runtime_capability_issues as strategy_runtime_capability_issues
 
     issues = strategy_runtime_capability_issues(
         strategy_name,
@@ -668,10 +668,10 @@ def validate_live_strategy_selection(cfg: Settings) -> None:
 
 def validate_runtime_strategy_set_selection(cfg: Settings) -> None:
     """Validate the exact active runtime strategy set before the run loop starts."""
-    from .research.strategy_registry import (
-        ResearchStrategyRegistryError,
-        resolve_research_strategy_plugin,
-        strategy_runtime_capability_issues,
+    from .operation_strategy.registry import (
+        OperationStrategyRegistryError as ResearchStrategyRegistryError,
+        resolve_operation_strategy_plugin as resolve_research_strategy_plugin,
+        operation_strategy_runtime_capability_issues as strategy_runtime_capability_issues,
     )
     from .runtime_strategy_decision import get_runtime_decision_adapter
     from .runtime_strategy_set import (

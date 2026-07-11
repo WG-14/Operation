@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .research.strategy_registry import list_research_strategy_plugins
+from .operation_strategy.discovery import ensure_operation_strategy_plugins_discovered
 
 
 _REGISTERED = False
@@ -11,7 +11,7 @@ def ensure_runtime_decision_adapters_registered() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    list_research_strategy_plugins()
+    ensure_operation_strategy_plugins_discovered()
     _REGISTERED = True
 
 

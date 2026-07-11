@@ -13,9 +13,7 @@ from bithumb_bot.operation_strategy.capabilities import (
     RuntimeParameterAdapter,
     StrategyRuntimeCapabilities,
     normalized_data_capabilities,
-)
-
-
+    )
 def test_data_capability_requirement_normalizes_and_preserves_full_golden_payload() -> None:
     requirement = DataCapabilityRequirement(
         name=" Candles ",
@@ -267,13 +265,3 @@ def test_operation_strategy_capabilities_does_not_import_research() -> None:
         )
         for node in ast.walk(source)
     )
-
-
-def test_research_registry_reexports_operation_capability_class_objects_during_transition() -> None:
-    """Remove when the research directory is deleted and this compatibility path no longer exists."""
-    from bithumb_bot.research import strategy_registry
-
-    assert strategy_registry.DataCapabilityRequirement is DataCapabilityRequirement
-    assert strategy_registry.ResearchStrategyDataRequirements is ResearchStrategyDataRequirements
-    assert strategy_registry.RuntimeParameterAdapter is RuntimeParameterAdapter
-    assert strategy_registry.StrategyRuntimeCapabilities is StrategyRuntimeCapabilities

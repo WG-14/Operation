@@ -11,13 +11,9 @@ from bithumb_bot.core.sma_policy import (
     SmaPolicyConfig,
     _stable_hash,
 )
-from bithumb_bot.research.backtest_types import BacktestRun, BacktestRunContext
-from bithumb_bot.research.dataset_snapshot import DatasetSnapshot
-from bithumb_bot.research.execution_model import ExecutionModel
-from bithumb_bot.research.experiment_manifest import ExecutionTimingPolicy, PortfolioPolicy
-from bithumb_bot.research.strategy_registry import ResearchStrategyPlugin
-from bithumb_bot.research.strategy_registry import RuntimeParameterAdapter
-from bithumb_bot.research.strategy_spec import (
+from bithumb_bot.operation_strategy.capabilities import RuntimeParameterAdapter, StrategyRuntimeCapabilities
+from bithumb_bot.operation_strategy.plugin import OperationStrategyPlugin
+from bithumb_bot.operation_strategy.spec import (
     SMA_WITH_FILTER_SPEC,
     StrategyParameterSchema,
     StrategySpec,
@@ -37,18 +33,12 @@ from bithumb_bot.strategy.sma_decision_assembler import evaluate_sma_final_decis
 from bithumb_bot.strategy_decision_input import StrategyDecisionInputBundle
 from bithumb_bot.strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
 from bithumb_bot.strategy_policy_contract import StrategyDecisionV2
-from bithumb_bot.strategy_authoring import (
-    PromotionGradeStrategyExtension,
-    build_live_eligible_strategy_plugin,
-    research_plugin_from_event_builder,
-)
 from bithumb_bot.strategy_plugins.daily_participation_contract import DAILY_PARTICIPATION_DECISION_EVIDENCE_CONTRACT
 from bithumb_bot.strategy_plugins.daily_participation_diagnostics import daily_participation_diagnostics_count_builder
 from bithumb_bot.strategy_plugins.sma_with_filter_contract import sma_runtime_data_requirements
 from bithumb_bot.strategy_plugins.sma_with_filter_assembly import MaterializationMode
 from bithumb_bot.strategy_plugins.sma_with_filter_assembly import SmaWithFilterPolicyAssembly
 from bithumb_bot.strategy_plugins.sma_with_filter_projector import SmaWithFilterSnapshotProjector
-from bithumb_bot.strategy_plugins.sma_with_filter_events import SmaWithFilterDecisionAdapter
 from bithumb_bot.runtime_adapters.daily_participation_sma import DailyParticipationSmaRuntimeDecisionAdapter
 from bithumb_bot.runtime_adapters.sma_with_filter import build_sma_with_filter_runtime_feature_snapshot
 
@@ -147,9 +137,8 @@ def materialize_daily_participation_sma_parameters(
 
 
 def runtime_parameters_from_env(env: dict[str, str]) -> dict[str, Any]:
-    from bithumb_bot.research import sma_with_filter_plugin as base_runtime
-
-    values = base_runtime.runtime_parameters_from_env(env)
+    from bithumb_bot.operation_strategy.builtin import _sma_params_from_env
+    values = _sma_params_from_env(env)
 
     def _value(key: str, default: str) -> str:
         return str(env.get(key, default)).strip() or default
@@ -178,9 +167,8 @@ def runtime_parameters_from_env(env: dict[str, str]) -> dict[str, Any]:
 
 
 def runtime_parameters_from_settings(cfg: object) -> dict[str, Any]:
-    from bithumb_bot.research import sma_with_filter_plugin as base_runtime
-
-    values = base_runtime.runtime_parameters_from_settings(cfg)
+    from bithumb_bot.operation_strategy.builtin import _sma_params_from_settings
+    values = _sma_params_from_settings(cfg)
     values.update(
         {
             "DAILY_PARTICIPATION_ENABLED": bool(getattr(cfg, "DAILY_PARTICIPATION_ENABLED", False)),
@@ -658,7 +646,7 @@ def build_runtime_replay_strategy(
     profile: dict[str, Any],
     candidate_regime_policy: dict[str, Any] | None = None,
 ) -> Any:
-    from bithumb_bot.research.sma_with_filter_plugin import build_runtime_replay_strategy as build_base
+    from bithumb_bot.operation_strategy.builtin import _sma_replay as build_base
 
     params = profile.get("strategy_parameters") if isinstance(profile.get("strategy_parameters"), dict) else {}
     daily_values = materialize_strategy_parameters(
@@ -951,66 +939,12 @@ def exit_policy_materializer(strategy_name: str, parameter_values: dict[str, Any
     }
 
 
-def build_daily_participation_sma_research_events(
-    *,
-    dataset: DatasetSnapshot,
-    parameter_values: dict[str, Any],
-    fee_rate: float,
-    slippage_bps: float,
-    execution_timing_policy: ExecutionTimingPolicy,
-    portfolio_policy: Any | None = None,
-    context: Any | None = None,
-) -> tuple[Any, ...]:
-    del portfolio_policy, context
-    return SmaWithFilterDecisionAdapter(
-        parameter_values=parameter_values,
-        fee_rate=fee_rate,
-        slippage_bps=slippage_bps,
-        timing_policy=execution_timing_policy,
-        strategy_name="daily_participation_sma",
-    ).build_events(dataset)
-
-
-def run_daily_participation_sma_backtest(
-    dataset: DatasetSnapshot,
-    parameter_values: dict[str, Any],
-    fee_rate: float,
-    slippage_bps: float,
-    parameter_stability_score: float | None = None,
-    execution_model: ExecutionModel | None = None,
-    execution_timing_policy: ExecutionTimingPolicy | None = None,
-    portfolio_policy: PortfolioPolicy | None = None,
-    context: BacktestRunContext | None = None,
-) -> BacktestRun:
-    from bithumb_bot.research.backtest_runner import run_plugin_backtest
-
-    return run_plugin_backtest(
-        plugin=DAILY_PARTICIPATION_SMA_PLUGIN,
-        dataset=dataset,
-        parameter_values=parameter_values,
-        fee_rate=fee_rate,
-        slippage_bps=slippage_bps,
-        parameter_stability_score=parameter_stability_score,
-        execution_model=execution_model,
-        execution_timing_policy=execution_timing_policy,
-        portfolio_policy=portfolio_policy,
-        context=context,
-    )
-
-
-_RESEARCH_PLUGIN = research_plugin_from_event_builder(
-    strategy_name="daily_participation_sma",
+DAILY_PARTICIPATION_SMA_PLUGIN = OperationStrategyPlugin(
+    name="daily_participation_sma",
+    version="daily_participation_sma.operation_runtime.v1",
     spec=DAILY_PARTICIPATION_SMA_SPEC,
-    version=DAILY_PARTICIPATION_SMA_SPEC.strategy_version,
     required_data=DAILY_PARTICIPATION_SMA_SPEC.required_data,
     optional_data=DAILY_PARTICIPATION_SMA_SPEC.optional_data,
-    build_research_events=build_daily_participation_sma_research_events,
-    diagnostics_namespace="daily_participation_sma",
-    diagnostics_count_builder=daily_participation_diagnostics_count_builder,
-    research_parameter_materializer=materialize_daily_participation_sma_parameters,
-)
-
-_PROMOTION_EXTENSION = PromotionGradeStrategyExtension(
     runtime_replay_builder=build_runtime_replay_strategy,
     runtime_parameter_adapter=RuntimeParameterAdapter(
         from_env=runtime_parameters_from_env,
@@ -1045,21 +979,11 @@ _PROMOTION_EXTENSION = PromotionGradeStrategyExtension(
             "DAILY_PARTICIPATION_FALLBACK_MODE",
         ),
     ),
-    research_policy_decision_builder=research_policy_decision_builder,
     exit_policy_materializer=exit_policy_materializer,
     runtime_decision_adapter_factory=runtime_decision_adapter_factory,
     runtime_feature_snapshot_builder=runtime_feature_snapshot_builder,
     policy_assembly_factory=policy_assembly_factory,
-    live_dry_run_allowed=True,
-    live_real_order_allowed=True,
-    approved_profile_required=True,
-    fail_closed_reason="daily_participation_sma_capability_missing",
+    runtime_capabilities=StrategyRuntimeCapabilities(True, True, live_dry_run_allowed=True, live_real_order_allowed=True, approved_profile_required=True, fail_closed_reason="daily_participation_sma_capability_missing"),
     decision_evidence_contract=DAILY_PARTICIPATION_DECISION_EVIDENCE_CONTRACT,
     runtime_data_requirement_builder=sma_runtime_data_requirements,
 )
-
-DAILY_PARTICIPATION_SMA_PLUGIN = build_live_eligible_strategy_plugin(
-    research=_RESEARCH_PLUGIN,
-    extension=_PROMOTION_EXTENSION,
-    runner=run_daily_participation_sma_backtest,
-).to_research_strategy_plugin()

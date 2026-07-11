@@ -27,8 +27,6 @@ def _capabilities() -> StrategyRuntimeCapabilities:
         runtime_replay_supported=True,
         fail_closed_reason="unit_test_capability_missing",
     )
-
-
 def _registration(
     name: str = "unit_strategy",
     *,
@@ -188,35 +186,3 @@ def test_operation_registry_module_has_no_research_import_boundary() -> None:
         module == "bithumb_bot.research" or module.startswith("bithumb_bot.research.")
         for module in imported_modules
     )
-
-
-# Remove this transitional compatibility test when the research directory is finally removed.
-def test_research_discovery_dual_registers_equivalent_operation_projections() -> None:
-    from bithumb_bot.research.strategy_registry import (
-        StrategyRuntimeCapabilities as ResearchStrategyRuntimeCapabilities,
-        list_research_strategy_plugins,
-        reload_research_strategy_plugins_for_tests,
-    )
-
-    reload_research_strategy_plugins_for_tests()
-    research_plugins = {plugin.name: plugin for plugin in list_research_strategy_plugins()}
-    operation_registrations = {
-        registration.name: registration for registration in list_operation_strategy_plugins()
-    }
-
-    assert set(operation_registrations) == set(research_plugins)
-    assert ResearchStrategyRuntimeCapabilities is StrategyRuntimeCapabilities
-    for name, research_plugin in research_plugins.items():
-        registration = operation_registrations[name]
-        assert registration.name == research_plugin.name
-        assert registration.version == research_plugin.version
-        assert registration.contract_hash() == research_plugin.contract_hash()
-        assert registration.required_data == research_plugin.required_data
-        assert registration.optional_data == research_plugin.optional_data
-        assert registration.runtime_capabilities is research_plugin.runtime_capabilities
-        assert isinstance(registration.runtime_capabilities, StrategyRuntimeCapabilities)
-        assert registration.runtime_replay_builder is research_plugin.runtime_replay_builder
-        assert registration.runtime_parameter_adapter is research_plugin.runtime_parameter_adapter
-        assert registration.runtime_decision_adapter_factory is research_plugin.runtime_decision_adapter_factory
-        assert registration.runtime_data_requirement_builder is research_plugin.runtime_data_requirement_builder
-        assert registration.policy_assembly_factory is research_plugin.policy_assembly_factory
