@@ -31,7 +31,7 @@ from bithumb_bot.recovery import (
     reconcile_with_broker,
 )
 import bithumb_bot.recovery as recovery_module
-from tests.test_failsafe import _set_live_runtime_paths, _unit_runtime_strategy_set_manifest
+from tests.support.operation_runtime import set_live_runtime_paths, unit_runtime_strategy_set_manifest
 from tests.support.live_auth import TEST_BITHUMB_API_KEY, TEST_BITHUMB_API_SECRET
 
 
@@ -45,7 +45,7 @@ def isolated_db(tmp_path, monkeypatch):
     db_path = tmp_path / "restart_regression.sqlite"
 
     monkeypatch.setenv("DB_PATH", str(db_path))
-    _set_live_runtime_paths(monkeypatch, base_dir=tmp_path.resolve())
+    set_live_runtime_paths(monkeypatch, base_dir=tmp_path.resolve())
     object.__setattr__(settings, "DB_PATH", str(db_path))
     object.__setattr__(settings, "MODE", "paper")
 
@@ -3404,10 +3404,10 @@ def _patch_single_tick_run_loop(monkeypatch) -> None:
     monkeypatch.setattr("bithumb_bot.compat.engine_legacy.validate_live_mode_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         "bithumb_bot.compat.engine_legacy.normalized_runtime_strategy_set_manifest",
-        _unit_runtime_strategy_set_manifest,
+        unit_runtime_strategy_set_manifest,
     )
     current_db_path = Path(settings.DB_PATH).resolve()
-    _set_live_runtime_paths(
+    set_live_runtime_paths(
         monkeypatch,
         base_dir=current_db_path.parent / "live-runtime",
         db_path=current_db_path,

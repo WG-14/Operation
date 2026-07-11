@@ -113,6 +113,7 @@ def test_source_does_not_add_static_alternate_order_submit_posts() -> None:
 
 def test_live_execution_contract_fingerprint_includes_explicit_env_provenance() -> None:
     original_mode = settings.MODE
+    original_fill_reference_policy = settings.EXECUTION_FILL_REFERENCE_POLICY
     base_env = {
         "source_key": "BITHUMB_ENV_FILE_LIVE",
         "env_file": "/runtime/env/live.env",
@@ -128,10 +129,12 @@ def test_live_execution_contract_fingerprint_includes_explicit_env_provenance() 
     try:
         object.__setattr__(settings, "MODE", "live")
         object.__setattr__(settings, "STRATEGY_NAME", "sma_with_filter")
+        object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", "first_orderbook_after_decision")
         base_summary = live_execution_contract_summary(settings, env_summary=base_env)
         drifted_summary = live_execution_contract_summary(settings, env_summary=drifted_env)
     finally:
         object.__setattr__(settings, "MODE", original_mode)
+        object.__setattr__(settings, "EXECUTION_FILL_REFERENCE_POLICY", original_fill_reference_policy)
 
     assert base_summary["explicit_env"] == base_env
     assert live_execution_contract_fingerprint(base_summary) != live_execution_contract_fingerprint(

@@ -87,7 +87,7 @@ def test_operator_smoke_preflight_allows_live_armed_without_approved_profile(
     )
     try:
         validate_operator_smoke_preflight(
-            cfg=_live_settings(db_path, APPROVED_STRATEGY_PROFILE_PATH=""),
+            cfg=_live_settings(db_path, OPERATION_APPROVAL_PATH=""),
             conn=conn,
             market="KRW-BTC",
             market_preflight=lambda _cfg: None,
@@ -109,7 +109,7 @@ def test_operator_smoke_preflight_rejects_broker_local_mismatch(
     try:
         with pytest.raises(LiveModeValidationError, match="broker_local_mismatch"):
             validate_operator_smoke_preflight(
-                cfg=_live_settings(db_path, APPROVED_STRATEGY_PROFILE_PATH=""),
+                cfg=_live_settings(db_path, OPERATION_APPROVAL_PATH=""),
                 conn=conn,
                 market="KRW-BTC",
                 market_preflight=lambda _cfg: None,
@@ -133,7 +133,7 @@ def test_operator_smoke_preflight_uses_new_entry_fee_blocker_not_closeout_blocke
     )
     try:
         validate_operator_smoke_preflight(
-            cfg=_live_settings(db_path, APPROVED_STRATEGY_PROFILE_PATH=""),
+            cfg=_live_settings(db_path, OPERATION_APPROVAL_PATH=""),
             conn=conn,
             market="KRW-BTC",
             market_preflight=lambda _cfg: None,
@@ -155,7 +155,7 @@ def test_operator_smoke_preflight_blocks_new_entry_fee_blocker(
     try:
         with pytest.raises(LiveModeValidationError, match="new_entry_fee_blocker=true"):
             validate_operator_smoke_preflight(
-                cfg=_live_settings(db_path, APPROVED_STRATEGY_PROFILE_PATH=""),
+                cfg=_live_settings(db_path, OPERATION_APPROVAL_PATH=""),
                 conn=conn,
                 market="KRW-BTC",
                 market_preflight=lambda _cfg: None,

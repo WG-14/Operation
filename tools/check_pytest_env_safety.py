@@ -15,8 +15,7 @@ from bithumb_bot.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS  # noqa: 
 RUNNERS = (
     PROJECT_ROOT / "scripts" / "run_full_pytest_tests.sh",
     PROJECT_ROOT / "scripts" / "run_fast_pr_tests.sh",
-    PROJECT_ROOT / "scripts" / "run_research_nightly_tests.sh",
-    PROJECT_ROOT / "scripts" / "run_parallel_research_safety_tests.sh",
+    PROJECT_ROOT / "scripts" / "run_operation_tests.sh",
 )
 HELPER = PROJECT_ROOT / "scripts" / "lib" / "pytest_workspace.sh"
 CONFTEST = PROJECT_ROOT / "tests" / "conftest.py"
