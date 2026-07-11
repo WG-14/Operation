@@ -6,7 +6,7 @@ import os
 from dataclasses import asdict
 
 from .notifier import NotificationResult, format_event, is_configured, notify, resolve_ntfy_server
-from .research.cli import resolve_research_notification_policy
+from .notification_policy import resolve_operation_notification_policy
 
 
 def _present_hash(value: str) -> str | None:
@@ -42,12 +42,12 @@ def notification_configuration_payload(*, policy: str | None = None) -> dict[str
         "webhook_configured": bool(webhook_url),
         "slack_configured": bool(slack_url),
         "telegram_configured": bool(telegram_token and telegram_chat_id),
-        "policy": resolve_research_notification_policy(policy),
+        "policy": resolve_operation_notification_policy(policy),
     }
 
 
 def notification_probe(*, policy: str | None = None) -> NotificationResult:
-    resolved_policy = resolve_research_notification_policy(policy)
+    resolved_policy = resolve_operation_notification_policy(policy)
     return notify(
         format_event("notification_diagnose_probe", source_command="notification-diagnose"),
         event_name="notification_diagnose_probe",

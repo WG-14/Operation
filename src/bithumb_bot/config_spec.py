@@ -195,6 +195,7 @@ DECLARED_ENV_NAMES: tuple[str, ...] = (
     "NTFY_TOPIC",
     "NTFY_URL",
     "OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC",
+    "OPERATION_NOTIFICATION_POLICY",
     "PAIR",
     "PAPER_EXECUTION_LATENCY_MS",
     "PAPER_EXECUTION_MODEL",
@@ -373,6 +374,10 @@ DESCRIPTIONS = {
     ),
     "NOTIFIER_DEDUPE_WINDOW_SEC": (
         "Notifier duplicate suppression window in seconds. Internal operational setting, documented for reproducibility."
+    ),
+    "OPERATION_NOTIFICATION_POLICY": (
+        "Operation command notification policy: best_effort, require_delivery, or disabled. "
+        "Takes priority over deprecated RESEARCH_NOTIFICATION_POLICY compatibility fallback."
     ),
     "NTFY_SERVER": "Standard ntfy server base URL. NTFY_URL is a deprecated compatibility alias.",
     "NTFY_URL": "Deprecated compatibility alias for NTFY_SERVER; NTFY_SERVER takes priority when both are set.",

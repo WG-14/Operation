@@ -2,7 +2,7 @@
 
 This file is generated from `src/bithumb_bot/config_spec.py`.
 Schema version: `config_spec_v1`
-Spec hash: `sha256:d22b938725262c3add3efd8bce4f9d5eae2542b94d9e80294e4b7d6d0fe8855c`
+Spec hash: `sha256:30c809011ee213bb50bf9386d2deb87f766a26e4cd31ed77d26b0d87e760d074`
 
 | Name | Type | Scope | Default | Live required | Secret | Deprecated/Ignored | Safety | Validation | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -161,6 +161,7 @@ Spec hash: `sha256:d22b938725262c3add3efd8bce4f9d5eae2542b94d9e80294e4b7d6d0fe88
 | `NTFY_TOPIC` | string | common |  | no | no | no | P1 |  | NTFY_TOPIC runtime configuration. |
 | `NTFY_URL` | string | common |  | no | no | deprecated | P1 |  | Deprecated compatibility alias for NTFY_SERVER; NTFY_SERVER takes priority when both are set. |
 | `OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC` | number | common |  | no | no | no | P1 |  | OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC runtime configuration. |
+| `OPERATION_NOTIFICATION_POLICY` | string | common |  | no | no | no | P1 |  | Operation command notification policy: best_effort, require_delivery, or disabled. Takes priority over deprecated RESEARCH_NOTIFICATION_POLICY compatibility fallback. |
 | `PAIR` | string | common | `KRW-BTC` | no | no | no | P1 |  | PAIR runtime configuration. |
 | `PAPER_EXECUTION_LATENCY_MS` | number | paper |  | no | no | no | P2 |  | PAPER_EXECUTION_LATENCY_MS runtime configuration. |
 | `PAPER_EXECUTION_MODEL` | string | paper |  | no | no | no | P2 |  | PAPER_EXECUTION_MODEL runtime configuration. |
