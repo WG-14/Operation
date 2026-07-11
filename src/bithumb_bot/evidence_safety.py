@@ -52,15 +52,7 @@ def smoke_only_evidence_rejection_reasons(payload: Mapping[str, Any] | None) -> 
 
 
 def evidence_rejection_reasons(payload: Mapping[str, Any] | None) -> tuple[str, ...]:
-    reasons = list(smoke_only_evidence_rejection_reasons(payload))
-    try:
-        from bithumb_bot.research.artifact_contract import diagnostic_artifact_rejection_reasons
-    except ImportError:
-        diagnostic_reasons: tuple[str, ...] = ()
-    else:
-        diagnostic_reasons = diagnostic_artifact_rejection_reasons(payload)
-    reasons.extend(diagnostic_reasons)
-    return tuple(sorted(set(reasons)))
+    return smoke_only_evidence_rejection_reasons(payload)
 
 
 def smoke_only_evidence_rejection_context(payload: Mapping[str, Any] | None) -> dict[str, object]:

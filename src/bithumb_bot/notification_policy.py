@@ -13,9 +13,7 @@ def resolve_operation_notification_policy(policy: str | None = None) -> str:
     elif "OPERATION_NOTIFICATION_POLICY" in os.environ:
         raw = os.environ["OPERATION_NOTIFICATION_POLICY"]
     else:
-        # Deprecated compatibility only: new operation commands must use
-        # OPERATION_NOTIFICATION_POLICY rather than the research-owned setting.
-        raw = os.getenv("RESEARCH_NOTIFICATION_POLICY", "best_effort")
+        raw = "best_effort"
 
     normalized = str(raw or "best_effort").strip().lower()
     if normalized not in OPERATION_NOTIFICATION_POLICIES:

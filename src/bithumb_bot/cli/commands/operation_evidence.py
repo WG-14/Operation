@@ -8,30 +8,22 @@ from ._helpers import make_spec
 
 
 def _runtime_replay(args: argparse.Namespace, _context) -> int:
-    from bithumb_bot.profile_cli import cmd_runtime_replay_decisions
+    from bithumb_bot.operation_approval import load_operation_approval
 
-    return int(
-        cmd_runtime_replay_decisions(
-            profile_path=str(args.profile),
-            db_path=str(args.db),
-            through_ts_list_path=str(args.through_ts_list),
-            out_path=str(args.out),
-        )
+    approval = load_operation_approval(str(args.approval))
+    print(
+        "runtime replay requires the Operation replay service; "
+        f"approval_hash={approval['content_hash']}"
     )
+    return 1
 
 
 def _replay_decision(args: argparse.Namespace, _context) -> int:
-    from bithumb_bot.profile_cli import cmd_replay_decision
-
-    return int(
-        cmd_replay_decision(
-            db_path=str(args.db),
-            strategy_name=str(args.strategy),
-            candle_ts=int(args.candle_ts),
-            readiness_json_path=None if getattr(args, "readiness_json", None) is None else str(args.readiness_json),
-            as_json=bool(args.json),
-        )
+    print(
+        "single-decision replay is unavailable until an Operation replay service is configured; "
+        f"strategy={args.strategy} candle_ts={args.candle_ts}"
     )
+    return 1
 
 
 def _h74_observation_authority_generate(args: argparse.Namespace, _context) -> int:
@@ -74,8 +66,8 @@ def command_specs() -> list[CommandSpec]:
             "runtime-replay-decisions",
             domain="runtime",
             handler=_runtime_replay,
-            help="replay runtime SMA decisions at explicit closed-candle timestamps",
-            description="Read-only runtime decision replay from SQLite; does not call live broker APIs or submit orders.",
+            help="validate the Operation approval selected for runtime replay",
+            description="Read-only Operation replay boundary; does not call live broker APIs or submit orders.",
             build=_build_runtime_replay,
             **common,
         ),
@@ -83,8 +75,8 @@ def command_specs() -> list[CommandSpec]:
             "replay-decision",
             domain="runtime",
             handler=_replay_decision,
-            help="debug one runtime SMA decision at a closed-candle timestamp",
-            description="Read-only single-decision replay from SQLite; does not call live broker APIs or submit orders.",
+            help="inspect the Operation single-decision replay boundary",
+            description="Read-only Operation decision diagnostic; does not call live broker APIs or submit orders.",
             build=_build_replay_decision,
             **common,
         ),
@@ -137,7 +129,7 @@ def _build_h74_source_observation_authority_generate(parser: argparse.ArgumentPa
 
 
 def _build_runtime_replay(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--profile", required=True)
+    parser.add_argument("--approval", required=True)
     parser.add_argument("--db", required=True)
     parser.add_argument("--through-ts-list", required=True)
     parser.add_argument("--out", required=True)

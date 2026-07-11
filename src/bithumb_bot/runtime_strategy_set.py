@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType, SimpleNamespace
 from typing import Callable, Literal, Mapping
 
-from .approved_profile import (
+from .operation_approval import (
     ApprovedProfileError,
     PROFILE_HASH_FIELD,
     approved_profile_path_from_env,
@@ -98,9 +98,7 @@ def runtime_authority_scope_from_settings(settings_obj: object = settings) -> Ru
         ):
             return "live_real_order"
         return "live_dry_run"
-    if str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
-        return "promotion"
-    if str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip():
+    if str(getattr(settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip():
         return "promotion"
     return "paper_legacy"
 
@@ -1086,8 +1084,7 @@ class RuntimeStrategySetResolver:
         live_like = (
             str(getattr(self._settings, "MODE", "") or "").strip().lower() == "live"
             or bool(getattr(self._settings, "LIVE_DRY_RUN", False))
-            or str(getattr(self._settings, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-            or str(getattr(self._settings, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+            or str(getattr(self._settings, "OPERATION_APPROVAL_PATH", "") or "").strip()
         )
         if isinstance(payload, Mapping):
             structured_runtime_contract = True
@@ -1459,9 +1456,7 @@ class ParameterAuthorityResolver:
             return True
         if str(getattr(self.settings_obj, "MODE", "") or "").strip().lower() == "live":
             return True
-        if str(getattr(self.settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip():
-            return True
-        if str(getattr(self.settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip():
+        if str(getattr(self.settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip():
             return True
         return False
 
@@ -1625,12 +1620,7 @@ class RuntimeDecisionRequestBuilder:
             approved_profile_path = (
                 spec_profile_path
                 or (
-                    str(getattr(self.settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-                    if authority_context.allow_global_profile_fallback
-                    else ""
-                )
-                or (
-                    str(getattr(self.settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+                    str(getattr(self.settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip()
                     if authority_context.allow_global_profile_fallback
                     else ""
                 )
@@ -2488,8 +2478,7 @@ def validate_runtime_strategy_set_profile_binding(
     if not strategy_set.multi_strategy_enabled:
         return ()
     global_profile = (
-        str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-        or str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+        str(getattr(settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip()
         or str(approved_profile_path_from_env() or "").strip()
     )
     issues: list[str] = []
@@ -2589,8 +2578,7 @@ def normalized_runtime_strategy_set_manifest(
             else "global_approved_profile_selector"
         ),
         "global_profile_selector_present": bool(
-            str(getattr(settings_obj, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-            or str(getattr(settings_obj, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+            str(getattr(settings_obj, "OPERATION_APPROVAL_PATH", "") or "").strip()
             or str(approved_profile_path_from_env() or "").strip()
         ),
         "startup_gate_authority": (

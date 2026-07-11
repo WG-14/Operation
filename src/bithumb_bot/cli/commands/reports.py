@@ -59,7 +59,7 @@ def _execution_quality(args: argparse.Namespace, _context) -> None:
         since=args.since,
         market=args.market,
         mode=args.mode,
-        compare_manifest=args.compare_manifest,
+        compare_approval=args.compare_approval,
         output_format=str(args.format),
         group_by=args.by,
         write_calibration=bool(args.write_calibration),
@@ -218,7 +218,7 @@ def command_specs() -> list[CommandSpec]:
         make_spec("decision-telemetry", domain="reports", handler=_decision_telemetry, help="summary of HOLD/blocked decision telemetry", build=lambda p: p.add_argument("--limit", type=int, default=200)),
         make_spec("decision-attribution", domain="reports", handler=_decision_attribution, help="funnel-oriented attribution summary from stored strategy decision context", description="Read-only decision attribution report for strategy_decisions.context_json.", build=_build_decision_attribution, json_output_supported=True),
         make_spec("risk-layer-replay", domain="reports", handler=_risk_layer_replay, help="read-only replay verification for typed runtime risk-layer hashes", description="Read-only risk-layer verifier for strategy, portfolio, and pre-submit decision hashes. Opens SQLite in read-only mode and never calls broker APIs or submits orders.", build=_build_risk_layer_replay, json_output_supported=True),
-        make_spec("execution-quality-report", domain="reports", handler=_execution_quality, help="report signal-submit-fill execution quality against research cost assumptions", description="Materialize and summarize order-level execution quality from strategy decisions, submit evidence, and fills without changing live trading behavior.", build=_build_execution_quality, produces_artifact=True, json_output_supported=True),
+        make_spec("execution-quality-report", domain="reports", handler=_execution_quality, help="report signal-submit-fill execution quality against the Operation execution contract", description="Materialize and summarize order-level execution quality from strategy decisions, submit evidence, and fills without changing live trading behavior.", build=_build_execution_quality, produces_artifact=True, json_output_supported=True),
     ]
 
 
@@ -303,6 +303,6 @@ def _build_execution_quality(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--market")
     parser.add_argument("--mode")
     parser.add_argument("--by", choices=("order_type",))
-    parser.add_argument("--compare-manifest")
+    parser.add_argument("--compare-approval")
     parser.add_argument("--write-calibration", action="store_true")
     parser.add_argument("--format", choices=("text", "json"), default="text")

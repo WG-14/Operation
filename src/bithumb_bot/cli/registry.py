@@ -30,10 +30,10 @@ class CommandSpec:
 
 def iter_command_specs() -> Iterable[CommandSpec]:
     from .commands import (
+        operation_approval,
         live_ops,
         marketdata,
         operation_evidence,
-        profile,
         recovery,
         repairs,
         reports,
@@ -48,7 +48,7 @@ def iter_command_specs() -> Iterable[CommandSpec]:
     yield from repairs.command_specs()
     yield from reports.command_specs()
     yield from operation_evidence.command_specs()
-    yield from profile.command_specs()
+    yield from operation_approval.command_specs()
     yield from strategy.command_specs()
 
 

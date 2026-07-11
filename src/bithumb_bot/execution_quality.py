@@ -15,7 +15,7 @@ from .order_semantics import (
     classify_order_semantics,
 )
 from .execution_reality_contract import contract_hash_matches
-from .research.experiment_manifest import load_manifest
+from .operation_approval import load_operation_approval
 
 
 QUALITY_WITHIN_MODEL = "within_model"
@@ -383,14 +383,16 @@ def _classify_order_type_cost_delta(summary: dict[str, object]) -> str:
     return ORDER_TYPE_COST_DELTA_NO_MATERIAL_DIFFERENCE
 
 
-def load_manifest_max_slippage_bps(path: str | Path | None) -> float | None:
+def load_operation_execution_threshold(path: str | Path | None) -> float | None:
     if path is None:
         return None
-    manifest = load_manifest(path)
-    return max(
-        float(scenario.slippage_bps) + float(scenario.market_order_extra_cost_bps)
-        for scenario in manifest.execution_model.scenarios
-    )
+    approval = load_operation_approval(path)
+    contract_hash = str(approval.get("execution_contract_hash") or "")
+    if not contract_hash.startswith("sha256:"):
+        raise ValueError("operation_approval_execution_contract_hash_missing")
+    # The approval binds the execution contract.  The live quality gate remains
+    # the numeric enforcement point; no historical manifest is consulted.
+    return None
 
 
 def _decode_submit_evidence(raw: object) -> dict[str, Any]:

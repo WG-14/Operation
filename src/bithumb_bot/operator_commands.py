@@ -79,7 +79,7 @@ from .run_lock import read_run_lock_status
 from .runtime_state import disable_trading_until, enable_trading, refresh_open_order_health
 from .notifier import notify
 from .observability import safety_event
-from .approved_profile import (
+from .operation_approval import (
     PROFILE_RUNTIME_COST_MISMATCH_ACTION,
     approved_profile_path_from_env,
     load_approved_profile,
@@ -110,7 +110,7 @@ from .fee_pending_repair import (
 from .execution_quality import (
     ExecutionQualityThresholds,
     format_execution_quality_text,
-    load_manifest_max_slippage_bps,
+    load_operation_execution_threshold,
     refresh_execution_quality_records,
     summarize_execution_quality,
 )
@@ -216,17 +216,6 @@ from .strategy_sweep import (
     summarize_strategy_sweep_results,
 )
 from .strategy_replay import load_replay_candles
-from .profile_cli import (
-    cmd_candidate_regime_policy_equivalence_evidence,
-    cmd_decision_equivalence,
-    cmd_profile_diff,
-    cmd_profile_generate,
-    cmd_profile_promote,
-    cmd_profile_verify,
-    cmd_replay_decision,
-    cmd_research_export_decisions,
-    cmd_runtime_replay_decisions,
-)
 from .storage_io import write_json_atomic
 from .bootstrap import get_last_explicit_env_load_summary
 
@@ -2784,7 +2773,7 @@ def cmd_execution_quality_report(
     since: str | None,
     market: str | None,
     mode: str | None,
-    compare_manifest: str | None,
+    compare_approval: str | None,
     output_format: str,
     group_by: str | None,
     write_calibration: bool = False,
@@ -2795,9 +2784,9 @@ def cmd_execution_quality_report(
         print(f"[EXECUTION-QUALITY] {exc}")
         raise SystemExit(2) from exc
     try:
-        backtest_slippage_bps_max = load_manifest_max_slippage_bps(compare_manifest)
+        backtest_slippage_bps_max = load_operation_execution_threshold(compare_approval)
     except Exception as exc:
-        print(f"[EXECUTION-QUALITY] compare-manifest failed: {exc}")
+        print(f"[EXECUTION-QUALITY] compare-approval failed: {exc}")
         raise SystemExit(2) from exc
 
     conn = ensure_db()

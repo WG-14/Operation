@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .research.hashing import sha256_prefixed
+from .artifact_hashing import sha256_prefixed
 from .storage_io import write_json_atomic
 from .strategy_risk_profile import risk_policy_from_mapping
 from .experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
@@ -37,7 +37,7 @@ H74_SOURCE_OBSERVATION_RISK_CAPITAL_KRW = float(H74_SOURCE_MAX_ORDER_KRW)
 H74_POSITION_MODE = POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
 
 def _h74_observation_parameters() -> dict[str, object]:
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
     from .strategy_plugins.daily_participation_sma import DAILY_PARTICIPATION_SMA_SPEC
 
     parameters = {
@@ -287,7 +287,7 @@ def build_h74_observation_authority_payload(
 ) -> dict[str, Any]:
     expiry = expires_at or (datetime.now(timezone.utc) + timedelta(days=H74_OBSERVATION_WINDOW_DAYS))
     variant = build_h74_capital_scaled_variant()
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
 
     required_behavior_parameters = set(runtime_bound_behavior_parameter_names(H74_STRATEGY_NAME))
     missing = sorted(required_behavior_parameters - set(H74_OBSERVATION_PARAMETERS))
@@ -345,7 +345,7 @@ def build_h74_source_observation_authority_payload(
 ) -> dict[str, Any]:
     expiry = expires_at or (datetime.now(timezone.utc) + timedelta(days=H74_OBSERVATION_WINDOW_DAYS))
     from .config import runtime_code_provenance
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
 
     required_behavior_parameters = set(runtime_bound_behavior_parameter_names(H74_STRATEGY_NAME))
     missing = sorted(required_behavior_parameters - set(H74_SOURCE_OBSERVATION_PARAMETERS))
@@ -575,7 +575,7 @@ def verify_h74_observation_authority(
     if expected_hash != actual_hash:
         raise H74ObservationAuthorityError("h74_observation_authority_hash_mismatch")
     bound = dict(payload.get("hash_bound_parameters") or {})
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
 
     required_behavior_parameters = set(runtime_bound_behavior_parameter_names(H74_STRATEGY_NAME))
     missing_bound = sorted(required_behavior_parameters - set(bound))
@@ -667,7 +667,7 @@ def verify_h74_source_observation_authority(
     if bound_risk_policy_hash != risk_policy_hash:
         raise H74ObservationAuthorityError("h74_source_observation_authority_bound_risk_policy_hash_mismatch")
     _verify_h74_source_observation_risk_policy(risk_policy_payload)
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
 
     required_behavior_parameters = set(runtime_bound_behavior_parameter_names(H74_STRATEGY_NAME))
     missing_bound = sorted(required_behavior_parameters - set(bound))
@@ -935,7 +935,7 @@ def _verify_h74_source_observation_risk_policy(policy_payload: dict[str, object]
 
 
 def h74_runtime_values_from_settings(settings_obj: object) -> dict[str, object]:
-    from .research.strategy_spec import runtime_bound_behavior_parameter_names
+    from .operation_strategy.spec import runtime_bound_behavior_parameter_names
 
     values = {
         "strategy_name": str(getattr(settings_obj, "STRATEGY_NAME", H74_STRATEGY_NAME) or H74_STRATEGY_NAME),

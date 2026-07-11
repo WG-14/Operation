@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .approved_profile import compute_file_content_hash
+from .operation_approval import compute_file_content_hash
 from .storage_io import write_json_atomic
 
 

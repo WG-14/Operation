@@ -41,7 +41,7 @@ class EnvVarSpec:
 
 DECLARED_ENV_NAMES: tuple[str, ...] = (
     "ACTIVE_STRATEGIES",
-    "APPROVED_STRATEGY_PROFILE_PATH",
+    "OPERATION_APPROVAL_PATH",
     "ARCHIVE_ROOT",
     "BACKUP_DIR",
     "BACKUP_ROOT",
@@ -207,7 +207,6 @@ DECLARED_ENV_NAMES: tuple[str, ...] = (
     "PAPER_FEE_RATE_ESTIMATE",
     "PRETRADE_BALANCE_BUFFER_BPS",
     "PRE_TRADE_ECONOMICS_BLOCKING_ENABLED",
-    "RESEARCH_NOTIFICATION_POLICY",
     "REQUIRE_BROKER_LOCAL_CONVERGENCE",
     "RESIDUAL_BUY_SIZING_MODE",
     "RESIDUAL_INVENTORY_MODE",
@@ -375,15 +374,9 @@ DESCRIPTIONS = {
     "NOTIFIER_DEDUPE_WINDOW_SEC": (
         "Notifier duplicate suppression window in seconds. Internal operational setting, documented for reproducibility."
     ),
-    "OPERATION_NOTIFICATION_POLICY": (
-        "Operation command notification policy: best_effort, require_delivery, or disabled. "
-        "Takes priority over deprecated RESEARCH_NOTIFICATION_POLICY compatibility fallback."
-    ),
+    "OPERATION_NOTIFICATION_POLICY": "Operation command notification policy: best_effort, require_delivery, or disabled.",
     "NTFY_SERVER": "Standard ntfy server base URL. NTFY_URL is a deprecated compatibility alias.",
     "NTFY_URL": "Deprecated compatibility alias for NTFY_SERVER; NTFY_SERVER takes priority when both are set.",
-    "RESEARCH_NOTIFICATION_POLICY": (
-        "Research command notification policy: best_effort, require_delivery, or disabled. Defaults to best_effort."
-    ),
     "DB_PATH": "Compatibility override for the mode-specific SQLite trade ledger path.",
     "RUN_LOCK_PATH": "Compatibility override for the mode-specific run lock path.",
     "SNAPSHOT_ROOT": "Compatibility override for snapshot output under the backup bucket.",

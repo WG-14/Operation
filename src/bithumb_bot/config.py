@@ -39,7 +39,7 @@ from .config_spec import (
     config_spec_hash,
     settings_contract_failures,
 )
-from .approved_profile import (
+from .operation_approval import (
     approved_profile_path_from_env,
     expected_profile_modes_for_runtime,
     runtime_contract_from_settings,
@@ -394,11 +394,7 @@ class RuntimeProfileBindingReport:
 
 
 def _global_approved_profile_selector(cfg: object) -> str:
-    return (
-        str(getattr(cfg, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-        or str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
-        or str(approved_profile_path_from_env() or "").strip()
-    )
+    return str(getattr(cfg, "OPERATION_APPROVAL_PATH", "") or "").strip()
 
 
 def _resolve_runtime_strategy_set_for_live_startup(cfg: Settings):
@@ -422,10 +418,7 @@ class H74SourceObservationAuthoritySelection:
 
 
 def _approved_strategy_profile_path_from_cfg(cfg: Settings) -> str:
-    return (
-        str(getattr(cfg, "APPROVED_STRATEGY_PROFILE_PATH", "") or "").strip()
-        or str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
-    )
+    return str(getattr(cfg, "OPERATION_APPROVAL_PATH", "") or "").strip()
 
 
 def _h74_source_observation_authority_selection(
@@ -734,12 +727,12 @@ def validate_runtime_strategy_set_selection(cfg: Settings) -> None:
             or (
                 ""
                 if strategy_set.multi_strategy_enabled
-                else str(cfg.APPROVED_STRATEGY_PROFILE_PATH or "").strip()
+                else str(cfg.OPERATION_APPROVAL_PATH or "").strip()
             )
             or (
                 ""
                 if strategy_set.multi_strategy_enabled
-                else str(getattr(cfg, "STRATEGY_APPROVED_PROFILE_PATH", "") or "").strip()
+                else ""
             )
         )
         try:
@@ -949,9 +942,7 @@ class Settings:
     STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO: float = float(
         os.getenv("STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO", "0")
     )
-    STRATEGY_APPROVED_PROFILE_PATH: str = os.getenv("STRATEGY_APPROVED_PROFILE_PATH", "").strip()
-    APPROVED_STRATEGY_PROFILE_PATH: str = approved_profile_path_from_env()
-    STRATEGY_CANDIDATE_PROFILE_PATH: str = os.getenv("STRATEGY_CANDIDATE_PROFILE_PATH", "").strip()
+    OPERATION_APPROVAL_PATH: str = approved_profile_path_from_env()
     H74_SOURCE_OBSERVATION_AUTHORITY_PATH: str = os.getenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "").strip()
     H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH: str = os.getenv(
         "H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH",
@@ -1433,7 +1424,7 @@ def validate_live_mode_preflight(cfg: Settings) -> None:
         selection_kind == "single_strategy"
         and not bool(cfg.LIVE_DRY_RUN)
         and bool(cfg.LIVE_REAL_ORDER_ARMED)
-        and not str(cfg.APPROVED_STRATEGY_PROFILE_PATH or "").strip()
+        and not str(cfg.OPERATION_APPROVAL_PATH or "").strip()
         and not str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
     ):
         issues.append("approved_profile_missing")
@@ -1987,13 +1978,13 @@ def live_env_contract_lint_findings(cfg: Settings) -> tuple[dict[str, object], .
         selection_kind = _runtime_selection_kind(strategy_set)
     except Exception:
         selection_kind = "single_strategy"
-    profile_path = str(cfg.APPROVED_STRATEGY_PROFILE_PATH or "").strip()
+    profile_path = str(cfg.OPERATION_APPROVAL_PATH or "").strip()
     if profile_path.startswith("<") and profile_path.endswith(">"):
         findings.append(
             _config_lint_finding(
                 "approved_profile_placeholder",
                 legacy="approved_profile_placeholder",
-                details={"key": "APPROVED_STRATEGY_PROFILE_PATH"},
+                details={"key": "OPERATION_APPROVAL_PATH"},
             )
         )
     deprecated_keys = [
@@ -2066,7 +2057,7 @@ def live_env_contract_lint_findings(cfg: Settings) -> tuple[dict[str, object], .
             _config_lint_finding(
                 "approved_profile_not_configured",
                 legacy="approved_profile_not_configured",
-                details={"key": "APPROVED_STRATEGY_PROFILE_PATH"},
+                details={"key": "OPERATION_APPROVAL_PATH"},
             )
         )
     explicit_env_file = str(os.getenv("BITHUMB_ENV_FILE") or "").strip()

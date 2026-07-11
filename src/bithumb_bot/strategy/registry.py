@@ -3,7 +3,7 @@ from __future__ import annotations
 """Smoke-only registry for snapshot strategy policies.
 
 Production runtime strategy lifecycle behavior is declared by
-``ResearchStrategyPlugin`` in ``bithumb_bot.research.strategy_registry``.
+the Operation strategy plugin registry.
 Legacy DB-bound registries are isolated under ``bithumb_bot.compat``.
 """
 
