@@ -111,20 +111,41 @@ def test_codex_pipeline_preserves_failure_packet_flow() -> None:
     assert 'codex_input_file="$("${PACKET_SCRIPT}")"' in text
 
 
-def test_codex_default_pipeline_preserves_post_push_remote_verify_and_success_notify() -> None:
+def test_codex_default_pipeline_ends_normal_flow_after_git_push_without_remote_verification() -> None:
     text = Path("scripts/run_codex_pipeline.sh").read_text(encoding="utf-8")
 
-    push_index = text.index('run_stage "git push" git push')
-    remote_index = text.index('stage="remote EC2 verification"', push_index)
-    ssh_index = text.index('"REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE} bash -s" < "${REMOTE_VERIFY_SCRIPT}"', remote_index)
-    notify_index = text.index('notify "bithumb-bot pipeline succeeded"', ssh_index)
+    assert text.rstrip().endswith('run_stage "git push" git push')
+    for forbidden in (
+        "E" + "C2",
+        "BITHUMB_" + "EC2",
+        "SSH" + "_KEY",
+        "REMOTE_" + "VERIFY",
+        "remote_" + "verify",
+        "remote_" + "verify_live.sh",
+    ):
+        assert forbidden not in text
+    assert re.search(r"\bssh\s", text) is None
 
-    assert push_index < remote_index < ssh_index < notify_index
-    assert "remote_verify_exit=0" in text
-    assert "remote_verify_exit=$?" in text
-    assert 'echo "[PIPELINE] success"' in text
-    assert 'notify "bithumb-bot pipeline failed"' in text
-    assert 'exit "${remote_verify_exit}"' in text
+
+def test_codex_pytest_pipeline_has_no_remote_verification_or_ssh_flow() -> None:
+    text = Path("scripts/run_codex_pytest_pipeline.sh").read_text(encoding="utf-8")
+
+    push_index = text.index('run_stage "git push" git push')
+    commit_push_branch_end = text.index("  else", push_index)
+
+    assert push_index < commit_push_branch_end
+    assert "notify" not in text[push_index:commit_push_branch_end]
+    for forbidden in (
+        "E" + "C2",
+        "BITHUMB_" + "EC2",
+        "SSH" + "_KEY",
+        "REMOTE_" + "VERIFY",
+        "remote_" + "verify",
+        "remote_" + "verify_live.sh",
+        "CODEX_PYTEST_" + "REMOTE_" + "VERIFY",
+    ):
+        assert forbidden not in text
+    assert re.search(r"\bssh\s", text) is None
 
 
 def test_codex_repair_prompt_uses_8_worker_worksteal_wrapper_command() -> None:

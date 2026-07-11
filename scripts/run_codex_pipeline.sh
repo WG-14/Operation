@@ -5,22 +5,16 @@ set -euo pipefail
 # 1. read scripts/codex_request.txt
 # 2. run Codex against this repository in Default Patch Mode
 # 3. commit and push Codex changes
-# 4. run smoke EC2 verification with live.verify.env
-# 5. notify the final EC2 verification result through ntfy
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 
 REQUEST_FILE="${CODEX_REQUEST_FILE:-${SCRIPT_DIR}/codex_request.txt}"
-REMOTE_VERIFY_SCRIPT="${REMOTE_VERIFY_SCRIPT:-${SCRIPT_DIR}/remote_verify_live.sh}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-${SCRIPT_DIR}/notify_ntfy.sh}"
 CODEX_BIN="${CODEX_BIN:-codex}"
-SSH_KEY="${BITHUMB_EC2_SSH_KEY:-${HOME}/.ssh/bithumb-bot-paper.pem}"
-EC2_TARGET="${BITHUMB_EC2_TARGET:-ec2-user@3.39.93.137}"
 
 # This script is Default Patch Mode only. Full pytest validation belongs to
 # scripts/run_codex_pytest_pipeline.sh.
-REMOTE_VERIFY_MODE="${REMOTE_VERIFY_MODE:-smoke}"
 CODEX_PYTEST_GUARD_DIR=""
 
 stage="preflight"
@@ -270,27 +264,12 @@ EOF
 
 cd "${PROJECT_ROOT}"
 
-case "${REMOTE_VERIFY_MODE}" in
-  smoke)
-    ;;
-  full)
-    fail "REMOTE_VERIFY_MODE=full is not allowed in Default Patch Mode; use ./scripts/run_codex_pytest_pipeline.sh"
-    ;;
-  *)
-    fail "invalid REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE}; expected smoke"
-    ;;
-esac
-
 if [[ ! -f "${REQUEST_FILE}" ]]; then
   fail "request file not found: ${REQUEST_FILE}"
 fi
 
 if [[ ! -s "${REQUEST_FILE}" ]]; then
   fail "request file is empty: ${REQUEST_FILE}"
-fi
-
-if [[ ! -x "${REMOTE_VERIFY_SCRIPT}" ]]; then
-  fail "remote verify script is not executable: ${REMOTE_VERIFY_SCRIPT}"
 fi
 
 if [[ ! -x "${NOTIFY_SCRIPT}" ]]; then
@@ -303,10 +282,6 @@ fi
 
 if ! command -v "${CODEX_BIN}" >/dev/null 2>&1; then
   fail "Codex binary not found: ${CODEX_BIN}"
-fi
-
-if [[ ! -f "${SSH_KEY}" ]]; then
-  fail "SSH key not found: ${SSH_KEY}"
 fi
 
 request_rel="$(realpath --relative-to="${PROJECT_ROOT}" "${REQUEST_FILE}")"
@@ -337,32 +312,3 @@ run_stage "check repo runtime artifacts" ./scripts/check_repo_runtime_artifacts.
 run_stage "git add ." git add .
 run_stage "git commit -m apply" git commit -m "apply"
 run_stage "git push" git push
-
-stage="remote EC2 verification"
-echo
-echo "[PIPELINE] ${stage} (REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE})"
-if ssh \
-    -i "${SSH_KEY}" \
-    -o BatchMode=yes \
-    -o StrictHostKeyChecking=accept-new \
-    "${EC2_TARGET}" \
-    "REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE} bash -s" < "${REMOTE_VERIFY_SCRIPT}"; then
-  remote_verify_exit=0
-else
-  remote_verify_exit=$?
-fi
-
-stage="complete"
-if [[ "${remote_verify_exit}" -eq 0 ]]; then
-  notify "bithumb-bot pipeline succeeded" "default" \
-    "Codex changes were committed, pushed, and verified on EC2 with REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE}."
-  echo
-  echo "[PIPELINE] success"
-  exit 0
-fi
-
-notify "bithumb-bot pipeline failed" "high" \
-  "Codex changes were committed and pushed, but EC2 verification completed with one or more failed stages in REMOTE_VERIFY_MODE=${REMOTE_VERIFY_MODE}."
-echo
-echo "[PIPELINE] EC2 verification completed with failed stages" >&2
-exit "${remote_verify_exit}"

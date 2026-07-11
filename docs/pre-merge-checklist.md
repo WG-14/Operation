@@ -120,8 +120,9 @@ Selector-less full pytest is long-running/full validation and is not the
 default PR check. Use `./scripts/run_full_pytest_tests.sh` or the dedicated
 pytest pipeline for full-suite repair or final full validation when required.
 
-`scripts/run_codex_pytest_pipeline.sh` is Codex full-pytest repair automation
-that may commit, push, and perform EC2 smoke verification.
+The Codex pipelines perform local validation, commit, and push only. EC2
+connection, deployment, and remote verification are not responsibilities of
+`scripts/run_codex_pipeline.sh` or `scripts/run_codex_pytest_pipeline.sh`.
 
 ## Codex pipeline notification runbook
 
