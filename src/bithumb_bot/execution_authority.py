@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -10,7 +9,6 @@ from .operator_smoke_authority import OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE
 
 
 APPROVED_PROFILE_AUTHORITY_TYPE = "approved_profile_authority"
-LIVE_OBSERVATION_AUTHORITY_TYPE = "live_observation_authority"
 OPERATOR_SMOKE_AUTHORITY_TYPE = "operator_smoke_authority"
 EMERGENCY_CLOSEOUT_AUTHORITY_TYPE = "emergency_closeout_authority"
 
@@ -125,14 +123,3 @@ def require_authority_operation(authority: ExecutionAuthority, operation: str) -
             "execution_authority_operation_not_allowed:"
             f"authority_type={authority.authority_type}:operation={operation}"
         )
-
-
-def validate_live_observation_authority_complete_for_runtime(authority: ExecutionAuthority) -> None:
-    if authority.authority_type != LIVE_OBSERVATION_AUTHORITY_TYPE:
-        raise ValueError("live_observation_authority_required")
-    if not (authority.parameter_authority and authority.exit_policy_authority and authority.risk_authority):
-        raise ValueError("live_observation_authority_requires_parameter_exit_and_risk_authority")
-    if authority.expires_at:
-        expires_at = datetime.fromisoformat(authority.expires_at.replace("Z", "+00:00"))
-        if expires_at <= datetime.now(timezone.utc):
-            raise ValueError("live_observation_authority_expired")

@@ -54,10 +54,6 @@ class ExecutionQualityRecord:
     strategy_name: str | None
     strategy_instance_id: str | None
     entry_signal_source: str | None
-    fallback_mode: str | None
-    daily_count_snapshot_hash: str | None
-    participation_policy_hash: str | None
-    participation_decision_hash: str | None
     mode: str | None
     market: str | None
     side: str | None
@@ -448,15 +444,11 @@ def _signal_context_prices(row: sqlite3.Row | None) -> tuple[float | None, float
     return reference, bid, ask, spread_bps(best_bid=bid, best_ask=ask)
 
 
-def _decision_context_daily_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
+def _decision_context_strategy_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
     if row is None:
         return {
             "strategy_instance_id": None,
             "entry_signal_source": None,
-            "fallback_mode": None,
-            "daily_count_snapshot_hash": None,
-            "participation_policy_hash": None,
-            "participation_decision_hash": None,
         }
     context = _decode_submit_evidence(row["context_json"])
     def _find(key: str) -> str | None:
@@ -478,10 +470,6 @@ def _decision_context_daily_fields(row: sqlite3.Row | None) -> dict[str, str | N
     return {
         "strategy_instance_id": _find("strategy_instance_id"),
         "entry_signal_source": _find("entry_signal_source"),
-        "fallback_mode": _find("fallback_mode"),
-        "daily_count_snapshot_hash": _find("daily_count_snapshot_hash"),
-        "participation_policy_hash": _find("participation_policy_hash"),
-        "participation_decision_hash": _find("participation_decision_hash"),
     }
 
 
@@ -587,8 +575,6 @@ def build_execution_quality_record(
         """
         SELECT client_order_id, submit_attempt_id, exchange_order_id, status, side, order_type,
                price, qty_req, qty_filled, strategy_name, strategy_instance_id,
-               daily_count_snapshot_hash, daily_participation_policy_hash, participation_decision_hash,
-               daily_participation_fallback_mode,
                entry_decision_id, exit_decision_id, created_ts,
                effective_min_trade_qty, qty_step, min_notional_krw
         FROM orders
@@ -632,17 +618,10 @@ def build_execution_quality_record(
     confirmation = _event_by_type(events, "submit_attempt_recorded")
     intent = _event_by_type(events, "intent_created")
     signal_ref, signal_bid, signal_ask, signal_spread = _signal_context_prices(decision)
-    daily_fields = _decision_context_daily_fields(decision)
-    if str(order["strategy_name"] or "").strip().lower() == "daily_participation_sma":
-        daily_fields = {
-            **daily_fields,
-            "strategy_instance_id": daily_fields["strategy_instance_id"] or str(order["strategy_instance_id"] or "") or None,
-            "entry_signal_source": daily_fields["entry_signal_source"] or "daily_participation_fallback",
-            "fallback_mode": daily_fields["fallback_mode"] or str(order["daily_participation_fallback_mode"] or "") or None,
-            "daily_count_snapshot_hash": daily_fields["daily_count_snapshot_hash"] or str(order["daily_count_snapshot_hash"] or "") or None,
-            "participation_policy_hash": daily_fields["participation_policy_hash"] or str(order["daily_participation_policy_hash"] or "") or None,
-            "participation_decision_hash": daily_fields["participation_decision_hash"] or str(order["participation_decision_hash"] or "") or None,
-        }
+    strategy_fields = _decision_context_strategy_fields(decision)
+    strategy_fields["strategy_instance_id"] = (
+        strategy_fields["strategy_instance_id"] or str(order["strategy_instance_id"] or "") or None
+    )
     submit_sent_ts, submit_response_ts, submit_ref, submit_bid, submit_ask, submit_spread = _submit_evidence_prices(confirmation)
     contract_fields = _submit_evidence_contract_fields(confirmation)
     execution_contract_fields = _submit_execution_contract_fields(confirmation)
@@ -768,12 +747,8 @@ def build_execution_quality_record(
         submit_attempt_id=str(order["submit_attempt_id"]) if order["submit_attempt_id"] else None,
         decision_id=int(decision_id) if decision_id is not None else None,
         strategy_name=str(order["strategy_name"] or (decision["strategy_name"] if decision else "")) or None,
-        strategy_instance_id=daily_fields["strategy_instance_id"],
-        entry_signal_source=daily_fields["entry_signal_source"],
-        fallback_mode=daily_fields["fallback_mode"],
-        daily_count_snapshot_hash=daily_fields["daily_count_snapshot_hash"],
-        participation_policy_hash=daily_fields["participation_policy_hash"],
-        participation_decision_hash=daily_fields["participation_decision_hash"],
+        strategy_instance_id=strategy_fields["strategy_instance_id"],
+        entry_signal_source=strategy_fields["entry_signal_source"],
         mode=str(intent["mode"]) if intent is not None and intent["mode"] else None,
         market=str((confirmation or preflight or intent)["symbol"]) if (confirmation or preflight or intent) is not None and (confirmation or preflight or intent)["symbol"] else None,
         side=side,

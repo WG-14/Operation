@@ -27,11 +27,6 @@ from bithumb_bot.operator_smoke import (
 from bithumb_bot.operator_smoke_authority import (
     build_operator_smoke_authority_payload,
 )
-from bithumb_bot.runtime.daily_participation_claims import (
-    DailyParticipationClaimKey,
-    ensure_daily_participation_claims_schema,
-    pending_daily_participation_claim_count,
-)
 import bithumb_bot.operator_smoke_preflight as smoke_preflight
 
 
@@ -318,37 +313,6 @@ def test_broker_open_order_count_uses_market_scoped_recovery_recent_orders() -> 
     assert count == 2
     assert broker.recovery_calls == [{"market": "KRW-BTC", "limit": 30}]
     assert broker.open_order_calls == []
-
-
-def test_smoke_buy_not_counted_as_daily_participation_event(tmp_path: Path) -> None:
-    import sqlite3
-
-    conn = sqlite3.connect(tmp_path / "smoke.sqlite")
-    conn.row_factory = sqlite3.Row
-    ensure_daily_participation_claims_schema(conn)
-    conn.execute(
-        """
-        INSERT INTO daily_participation_claims(
-            strategy_instance_id, pair, kst_day, participation_policy_hash,
-            status, retry_allowed, created_ts, updated_ts
-        )
-        VALUES (?, ?, ?, ?, ?, 0, 1, 1)
-        """,
-        (f"{OPERATOR_SMOKE_STRATEGY_NAME}:run123", "KRW-BTC", "2026-06-19", "sha256:policy", "submitted"),
-    )
-    conn.commit()
-
-    count = pending_daily_participation_claim_count(
-        conn,
-        key=DailyParticipationClaimKey(
-            strategy_instance_id="daily_participation_sma:KRW-BTC:1m",
-            pair="KRW-BTC",
-            kst_day="2026-06-19",
-            participation_policy_hash="sha256:policy",
-        ),
-    )
-
-    assert count == 0
 
 
 def test_smoke_buy_cli_handler_does_not_call_broker_create_order_directly() -> None:

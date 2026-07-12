@@ -78,7 +78,7 @@ def test_out_of_window_hold_flat_desired_exposure_does_not_create_buy_plan() -> 
     try:
         plan = _target_plan(
             final_signal="HOLD",
-            final_reason="outside_daily_participation_window",
+            final_reason="strategy_hold",
             previous_target_exposure_krw=100_000.0,
         )
     finally:
@@ -107,37 +107,3 @@ def test_final_signal_buy_allows_target_delta_buy() -> None:
     assert plan["submit_expected"] is True
     assert plan["entry_authority_status"] == "ALLOW"
     assert plan["entry_authority_reason_code"] == "strategy_final_signal_buy"
-
-
-def test_daily_participation_fallback_allowed_allows_target_delta_buy() -> None:
-    old = _set_target_delta()
-    try:
-        plan = _target_plan(
-            final_signal="HOLD",
-            final_reason="daily_participation_fallback_allowed",
-            previous_target_exposure_krw=100_000.0,
-        )
-    finally:
-        _restore(old)
-
-    assert plan["target_delta_side"] == "BUY"
-    assert plan["submit_expected"] is True
-    assert plan["entry_authority_status"] == "ALLOW"
-    assert plan["entry_authority_reason_code"] == "daily_participation_entry"
-
-
-def test_restart_target_state_daily_participation_fallback_allowed_can_buy() -> None:
-    old = _set_target_delta()
-    try:
-        plan = _target_plan(
-            final_signal="HOLD",
-            final_reason="daily_participation_fallback_allowed",
-            previous_target_exposure_krw=100_000.0,
-        )
-    finally:
-        _restore(old)
-
-    assert plan["target_delta_side"] == "BUY"
-    assert plan["submit_expected"] is True
-    assert plan["entry_authority_status"] == "ALLOW"
-    assert plan["entry_authority_reason_code"] == "daily_participation_entry"

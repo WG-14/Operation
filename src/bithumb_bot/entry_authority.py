@@ -4,20 +4,17 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from .decision_equivalence import sha256_prefixed
-from .experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
 
 
 ENTRY_AUTHORITY_GATE = "entry_authority"
 ENTRY_AUTHORITY_ALLOW = "ALLOW"
 ENTRY_AUTHORITY_BLOCK = "BLOCK"
 ENTRY_AUTHORITY_REASON_FINAL_SIGNAL_BUY = "strategy_final_signal_buy"
-ENTRY_AUTHORITY_REASON_DAILY_PARTICIPATION = "daily_participation_entry"
 ENTRY_AUTHORITY_REASON_OPERATOR_OR_RECOVERY = "explicit_operator_or_recovery_buy_authority"
 ENTRY_AUTHORITY_REASON_EXISTING_TARGET_REBALANCE = "existing_target_rebalance"
 ENTRY_AUTHORITY_REASON_NOT_REQUIRED = "not_new_buy_exposure"
 ENTRY_AUTHORITY_REASON_BLOCKED = "target_delta_entry_without_strategy_buy_authority"
 
-DAILY_PARTICIPATION_ALLOW_REASONS = frozenset({"daily_participation_fallback_allowed"})
 EXPLICIT_BUY_AUTHORITIES = frozenset(
     {
         "manual_operator_entry",
@@ -84,7 +81,6 @@ def evaluate_entry_authority(
         previous_target_exposure = max(0.0, float(payload.get("previous_target_exposure_krw") or 0.0))
     except (TypeError, ValueError):
         previous_target_exposure = 0.0
-    daily_reason = _first_text(payload, "daily_participation_reason_code", "final_reason", "reason")
     explicit_authority = _first_text(payload, "entry_authority_source", "authority_source", "buy_authority_source")
     existing_target_rebalance = (
         new_buy_exposure
@@ -92,11 +88,6 @@ def evaluate_entry_authority(
         and current_exposure > 1e-9
         and target_exposure <= previous_target_exposure + 1e-9
     )
-    if (
-        str(payload.get("position_mode") or "").strip() == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-        and final_signal == "HOLD"
-    ):
-        existing_target_rebalance = False
     input_payload = {
         "side": normalized_side,
         "current_exposure_krw": current_exposure,
@@ -104,7 +95,6 @@ def evaluate_entry_authority(
         "previous_target_exposure_krw": previous_target_exposure,
         "delta_krw": delta,
         "final_signal": final_signal,
-        "daily_participation_reason_code": daily_reason,
         "explicit_authority": explicit_authority,
         "existing_target_rebalance": existing_target_rebalance,
     }
@@ -122,10 +112,6 @@ def evaluate_entry_authority(
         reason_code = ENTRY_AUTHORITY_REASON_EXISTING_TARGET_REBALANCE
         status = ENTRY_AUTHORITY_ALLOW
         source = "existing_target_rebalance"
-    elif daily_reason in DAILY_PARTICIPATION_ALLOW_REASONS:
-        reason_code = ENTRY_AUTHORITY_REASON_DAILY_PARTICIPATION
-        status = ENTRY_AUTHORITY_ALLOW
-        source = "daily_participation_fallback_allowed"
     elif explicit_authority in EXPLICIT_BUY_AUTHORITIES:
         reason_code = ENTRY_AUTHORITY_REASON_OPERATOR_OR_RECOVERY
         status = ENTRY_AUTHORITY_ALLOW

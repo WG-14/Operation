@@ -8,7 +8,7 @@ def test_desired_exposure_does_not_activate_target_without_entry_authority() -> 
     try:
         plan = _target_plan(
             final_signal="HOLD",
-            final_reason="outside_daily_participation_window",
+            final_reason="strategy_hold",
             previous_target_exposure_krw=100_000.0,
         )
     finally:
@@ -25,7 +25,7 @@ def test_entry_authority_activates_nonzero_target_state() -> None:
     try:
         plan = _target_plan(
             final_signal="BUY",
-            final_reason="daily_participation_fallback_allowed",
+            final_reason="sma_cross",
             previous_target_exposure_krw=100_000.0,
         )
     finally:
@@ -41,7 +41,7 @@ def test_hold_flat_state_keeps_target_inactive_after_restart() -> None:
     try:
         plan = _target_plan(
             final_signal="HOLD",
-            final_reason="outside_daily_participation_window",
+            final_reason="strategy_hold",
             previous_target_exposure_krw=100_000.0,
         )
     finally:

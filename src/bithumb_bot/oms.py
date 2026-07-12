@@ -10,11 +10,6 @@ import sqlite3
 
 from .db_core import ensure_db
 from .config import settings
-from .runtime.daily_participation_claims import (
-    DailyParticipationClaimKey,
-    sync_daily_participation_claim_from_order_status,
-    upsert_daily_participation_claim,
-)
 
 
 OPEN_ORDER_STATUSES = (
@@ -739,11 +734,6 @@ def create_order(
     entry_authority_status: str | None = None,
     decision_kst_hour: int | None = None,
     local_intent_state: str | None = None,
-    daily_participation_policy_hash: str | None = None,
-    daily_count_snapshot_hash: str | None = None,
-    participation_decision_hash: str | None = None,
-    daily_participation_kst_day: str | None = None,
-    daily_participation_fallback_mode: str | None = None,
     probe_run_id: str | None = None,
     status: str = "NEW",
     ts_ms: int | None = None,
@@ -764,11 +754,9 @@ def create_order(
                 executable_lot_count, final_intended_qty, final_submitted_qty, decision_reason_code,
                 intent_type, authority_source, entry_authority_source, entry_authority_status, decision_kst_hour,
                 local_intent_state,
-                daily_participation_policy_hash, daily_count_snapshot_hash, participation_decision_hash,
-                daily_participation_kst_day, daily_participation_fallback_mode,
                 created_ts, updated_ts, last_error
             )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 normalized_probe_run_id,
@@ -805,37 +793,11 @@ def create_order(
                 entry_authority_status,
                 (int(decision_kst_hour) if decision_kst_hour is not None else None),
                 local_intent_state,
-                daily_participation_policy_hash,
-                daily_count_snapshot_hash,
-                participation_decision_hash,
-                daily_participation_kst_day,
-                daily_participation_fallback_mode,
                 ts,
                 ts,
                 None,
             ),
         )
-        if (
-            str(strategy_name or "").strip().lower() == "daily_participation_sma"
-            and str(side or "").strip().upper() == "BUY"
-            and str(daily_participation_policy_hash or "").strip()
-            and str(daily_participation_kst_day or "").strip()
-        ):
-            upsert_daily_participation_claim(
-                conn,
-                key=DailyParticipationClaimKey(
-                    strategy_instance_id=str(strategy_instance_id or ""),
-                    pair=str(symbol or settings.PAIR),
-                    kst_day=str(daily_participation_kst_day or ""),
-                    participation_policy_hash=str(daily_participation_policy_hash or ""),
-                ),
-                status="claim_pending" if status == "PENDING_SUBMIT" else "submitted",
-                ts_ms=ts,
-                client_order_id=client_order_id,
-                daily_count_snapshot_hash=daily_count_snapshot_hash,
-                participation_decision_hash=participation_decision_hash,
-                fallback_mode=daily_participation_fallback_mode,
-            )
         _record_order_event(
             conn,
                 client_order_id=client_order_id,
@@ -891,12 +853,6 @@ def record_submit_started(
             mode=mode,
             qty=qty,
             message=message or "submit intent staged before broker dispatch",
-        )
-        sync_daily_participation_claim_from_order_status(
-            conn,
-            client_order_id=client_order_id,
-            status="PENDING_SUBMIT",
-            ts_ms=ts,
         )
         if own_conn:
             conn.commit()
@@ -1243,12 +1199,6 @@ def set_status(
             event_ts=ts,
             order_status=status,
             message=last_error,
-        )
-        sync_daily_participation_claim_from_order_status(
-            conn,
-            client_order_id=client_order_id,
-            status=status,
-            ts_ms=ts,
         )
         if own_conn:
             conn.commit()

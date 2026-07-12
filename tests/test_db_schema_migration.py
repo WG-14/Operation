@@ -14,12 +14,12 @@ def _insert_backfill_fixture(conn: sqlite3.Connection) -> None:
         """,
         (
             1,
-            "daily_participation_sma",
+            "sma_with_filter",
             "BUY",
             "fixture",
             json.dumps(
                 {
-                    "strategy_instance_id": "daily-participation-runtime",
+                    "strategy_instance_id": "sma-runtime",
                     "runtime_strategy_set_manifest_hash": "sha256:manifest",
                 }
             ),
@@ -50,7 +50,7 @@ def _insert_backfill_fixture(conn: sqlite3.Connection) -> None:
             0.1,
             0.9,
             60.0,
-            "daily_participation_sma",
+            "sma_with_filter",
             decision_id,
         ),
     )
@@ -80,7 +80,7 @@ def test_trade_lifecycle_strategy_scope_backfill_accepts_tuple_rows() -> None:
     finally:
         conn.close()
 
-    assert row[0] == "daily-participation-runtime"
+    assert row[0] == "sma-runtime"
     assert row[1] == "sha256:manifest"
 
 

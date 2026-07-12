@@ -15,7 +15,6 @@ from .decision_envelope import DecisionEnvelope, _thaw_mapping
 from .decision_equivalence import sha256_prefixed
 from .execution_order_rules import resolve_execution_order_rules
 from .execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
-from .experiment_execution_contract import POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
 from .execution_service import (
     ExecutionDecisionSummary,
     ExecutionReadinessPlanningInput,
@@ -92,18 +91,8 @@ READINESS_CONTEXT_KEYS = (
     "position_mode",
     "hold_policy",
     "authority_hash",
-    "authority_parameter_hash",
-    "source_artifact_hash",
     "strategy_instance_id",
-    "cycle_id",
-    "remaining_cycle_qty",
-    "locked_exit_qty",
-    "partial_fill_policy",
-    "startup_gate_hash",
-    "startup_gate",
     "contract_hash",
-    "entry_plan_id",
-    "experiment_execution_contract",
     "cash_available",
 )
 
@@ -1286,16 +1275,8 @@ class ExecutionPlanner:
                         "position_mode",
                         "hold_policy",
                         "authority_hash",
-                        "authority_parameter_hash",
-                        "source_artifact_hash",
                         "strategy_instance_id",
-                        "cycle_id",
-                        "remaining_cycle_qty",
-                        "locked_exit_qty",
-                        "partial_fill_policy",
-                        "startup_gate_hash",
                         "contract_hash",
-                        "entry_plan_id",
                     )
                     if key in readiness_payload
                 }

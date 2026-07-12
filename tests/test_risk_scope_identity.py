@@ -12,7 +12,7 @@ from bithumb_bot.strategy_risk_state import StrategyRiskStateProvider
 
 def _payload(**overrides: object) -> dict[str, object]:
     payload = {
-        "strategy_name": "daily_participation_sma",
+        "strategy_name": "sma_with_filter",
         "strategy_instance_id": "old",
         "pair": "KRW-BTC",
         "interval": "1m",
@@ -54,13 +54,13 @@ def _seed_loss_lifecycle(conn, *, old_instance_id: str, risk_scope_id: str) -> N
     decision_id = conn.execute(
         """
         INSERT INTO strategy_decisions(decision_ts, strategy_name, signal, reason, candle_ts, market_price, context_json)
-        VALUES (?, 'daily_participation_sma', 'BUY', 'unit', ?, 100.0, ?)
+        VALUES (?, 'sma_with_filter', 'BUY', 'unit', ?, 100.0, ?)
         """,
         (
             1_800_000_000_000,
             1_800_000_000_000,
             (
-                '{"strategy_name":"daily_participation_sma",'
+                '{"strategy_name":"sma_with_filter",'
                 f'"strategy_instance_id":"{old_instance_id}",'
                 '"pair":"KRW-BTC","interval":"1m",'
                 f'"risk_scope_id":"{risk_scope_id}"'
@@ -76,7 +76,7 @@ def _seed_loss_lifecycle(conn, *, old_instance_id: str, risk_scope_id: str) -> N
             net_pnl, holding_time_sec, strategy_name, strategy_instance_id,
             owner_strategy_instance_id, owner_risk_scope_id, risk_scope_id, entry_decision_id
         ) VALUES ('KRW-BTC', 1, 2, 'entry', 'exit', ?, ?, 1, 100, 90, -10, 0, -10, 60,
-            'daily_participation_sma', ?, ?, ?, ?, ?)
+            'sma_with_filter', ?, ?, ?, ?, ?)
         """,
         (
             1_800_000_000_000,
@@ -96,13 +96,13 @@ def _seed_scope_decision(conn, *, instance_id: str, risk_scope_id: str, ts: int 
         conn.execute(
             """
             INSERT INTO strategy_decisions(decision_ts, strategy_name, signal, reason, candle_ts, market_price, context_json)
-            VALUES (?, 'daily_participation_sma', 'BUY', 'unit', ?, 100.0, ?)
+            VALUES (?, 'sma_with_filter', 'BUY', 'unit', ?, 100.0, ?)
             """,
             (
                 ts,
                 ts,
                 (
-                    '{"strategy_name":"daily_participation_sma",'
+                    '{"strategy_name":"sma_with_filter",'
                     f'"strategy_instance_id":"{instance_id}",'
                     '"pair":"KRW-BTC","interval":"1m",'
                     f'"risk_scope_id":"{risk_scope_id}"'
@@ -127,7 +127,7 @@ def test_new_lifecycle_insert_records_actual_risk_scope_id(tmp_path) -> None:
         price=100.0,
         qty=1.0,
         fee=0.0,
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         entry_decision_id=decision_id,
     )
     apply_fill_lifecycle(
@@ -141,7 +141,7 @@ def test_new_lifecycle_insert_records_actual_risk_scope_id(tmp_path) -> None:
         price=90.0,
         qty=1.0,
         fee=0.0,
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         entry_decision_id=decision_id,
         exit_decision_id=decision_id,
     )
@@ -170,7 +170,7 @@ def test_strategy_revision_change_preserves_loss_order_trade_and_open_exposure_h
             client_order_id, status, side, pair, order_type, price, qty_req, qty_filled,
             strategy_name, strategy_instance_id, entry_decision_id, created_ts, updated_ts
         ) VALUES ('entry-order', 'filled', 'BUY', 'KRW-BTC', 'limit', 100, 1, 1,
-            'daily_participation_sma', 'old-instance', ?, ?, ?)
+            'sma_with_filter', 'old-instance', ?, ?, ?)
         """,
         (decision_id, 1_800_000_030_000, 1_800_000_030_000),
     )
@@ -180,7 +180,7 @@ def test_strategy_revision_change_preserves_loss_order_trade_and_open_exposure_h
             ts, pair, interval, side, price, qty, fee, cash_after, asset_after,
             client_order_id, strategy_name, entry_decision_id
         ) VALUES (?, 'KRW-BTC', '1m', 'BUY', 100, 1, 0, 0, 1,
-            'entry-order', 'daily_participation_sma', ?)
+            'entry-order', 'sma_with_filter', ?)
         """,
         (1_800_000_040_000, decision_id),
     )
@@ -191,7 +191,7 @@ def test_strategy_revision_change_preserves_loss_order_trade_and_open_exposure_h
             entry_price, qty_open, executable_lot_count, position_state,
             strategy_name, strategy_instance_id, entry_decision_id, entry_decision_linkage
         ) VALUES ('KRW-BTC', 10, 'entry-order', 'fill', ?, 100, 1, 1, 'open_exposure',
-            'daily_participation_sma', 'old-instance', ?, 'direct')
+            'sma_with_filter', 'old-instance', ?, 'direct')
         """,
         (1_800_000_040_000, decision_id),
     )
@@ -199,7 +199,7 @@ def test_strategy_revision_change_preserves_loss_order_trade_and_open_exposure_h
 
     snapshot = StrategyRiskStateProvider(conn).snapshot(
         strategy_instance_id="new-instance",
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         pair="KRW-BTC",
         interval="1m",
         as_of_ts_ms=1_800_000_120_000,
@@ -226,7 +226,7 @@ def test_risk_state_evidence_marks_order_trade_asset_scope_as_risk_scope(tmp_pat
 
     snapshot = StrategyRiskStateProvider(conn).snapshot(
         strategy_instance_id="new-instance",
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         pair="KRW-BTC",
         interval="1m",
         as_of_ts_ms=1_800_000_120_000,
@@ -248,7 +248,7 @@ def test_loss_today_uses_risk_scope_id_not_strategy_instance_id(tmp_path) -> Non
 
     snapshot = StrategyRiskStateProvider(conn).snapshot(
         strategy_instance_id="new-instance",
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         pair="KRW-BTC",
         interval="1m",
         as_of_ts_ms=1_800_000_120_000,
@@ -269,7 +269,7 @@ def test_cooldown_uses_risk_scope_id_not_strategy_instance_id(tmp_path) -> None:
 
     snapshot = StrategyRiskStateProvider(conn).snapshot(
         strategy_instance_id="new-instance",
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         pair="KRW-BTC",
         interval="1m",
         as_of_ts_ms=1_800_000_120_000,

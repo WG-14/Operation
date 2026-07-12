@@ -140,7 +140,7 @@ def test_telemetry_primary_block_gate_from_gate_trace(tmp_path, monkeypatch):
         record_strategy_decision(
             conn,
             decision_ts=1_800_000_000_000,
-            strategy_name="daily_participation_sma",
+            strategy_name="sma_with_filter",
             signal="BUY",
             reason="pre-submit block",
             candle_ts=1_800_000_000_000,
@@ -183,7 +183,7 @@ def test_telemetry_primary_block_gate_from_non_risk_gate_trace(tmp_path, monkeyp
         record_strategy_decision(
             conn,
             decision_ts=1_800_000_000_000,
-            strategy_name="daily_participation_sma",
+            strategy_name="sma_with_filter",
             signal="BUY",
             reason="submit authority block",
             candle_ts=1_800_000_000_000,
@@ -226,7 +226,7 @@ def test_telemetry_reports_entry_authority_block(tmp_path, monkeypatch):
         record_strategy_decision(
             conn,
             decision_ts=1_800_000_000_000,
-            strategy_name="daily_participation_sma",
+            strategy_name="sma_with_filter",
             signal="BUY",
             reason="target delta entry block",
             candle_ts=1_800_000_000_000,
@@ -282,7 +282,7 @@ def test_telemetry_reads_pre_submit_block_from_runtime_cycle_artifact(tmp_path, 
         record_strategy_decision(
             conn,
             decision_ts=1_800_000_000_000,
-            strategy_name="daily_participation_sma",
+            strategy_name="sma_with_filter",
             signal="BUY",
             reason="pre-submit block",
             candle_ts=1_800_000_000_000,

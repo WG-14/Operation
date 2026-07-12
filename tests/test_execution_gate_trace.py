@@ -216,7 +216,7 @@ def test_entry_authority_allow_recorded_for_kst_10_buy() -> None:
             {
                 "gate": "entry_authority",
                 "status": "ALLOW",
-                "reason_code": "daily_participation_entry",
+                "reason_code": "strategy_final_signal_buy",
                 "input_hash": "sha256:entry-input",
                 "evidence_hash": "sha256:entry-evidence",
                 "state_source": "entry_authority_policy",

@@ -78,56 +78,47 @@ def test_fill_slippage_bps_calculated_from_submit_reference_price(tmp_path) -> N
     assert abs(float(row["slippage_bps"]) - 10.0) < 1e-9
 
 
-def test_daily_execution_quality_links_fallback_source_and_slippage_evidence(tmp_path) -> None:
-    db_path = tmp_path / "daily_execution_quality.sqlite"
+def test_execution_quality_links_strategy_source_and_slippage_evidence(tmp_path) -> None:
+    db_path = tmp_path / "execution_quality.sqlite"
     conn = ensure_db(str(db_path))
     try:
         decision_id = record_strategy_decision(
             conn,
             decision_ts=1_700_000_000_000,
-            strategy_name="daily_participation_sma",
+            strategy_name="sma_with_filter",
             signal="BUY",
-            reason="daily_participation_fallback_allowed",
+            reason="sma_cross",
             candle_ts=1_700_000_000_000,
             market_price=100.0,
             context={
-                "strategy_instance_id": "daily:a",
-                "entry_signal_source": "daily_participation_fallback",
-                "fallback_mode": "unconditional_participation",
-                "daily_count_snapshot_hash": "sha256:count",
-                "participation_policy_hash": "sha256:policy",
-                "participation_decision_hash": "sha256:decision",
+                "strategy_instance_id": "sma:a",
+                "entry_signal_source": "strategy_final_signal",
                 "top_of_book": {"best_bid": 99.9, "best_ask": 100.1},
             },
         )
         create_order(
-            client_order_id="daily-quality",
-            submit_attempt_id="attempt-daily-quality",
+            client_order_id="quality",
+            submit_attempt_id="attempt-quality",
             side="BUY",
             qty_req=1.0,
             price=None,
             status="NEW",
-            strategy_name="daily_participation_sma",
-            strategy_instance_id="daily:a",
-            daily_participation_policy_hash="sha256:policy",
-            daily_count_snapshot_hash="sha256:count",
-            participation_decision_hash="sha256:decision",
-            daily_participation_kst_day="2023-11-15",
-            daily_participation_fallback_mode="unconditional_participation",
+            strategy_name="sma_with_filter",
+            strategy_instance_id="sma:a",
             entry_decision_id=decision_id,
             ts_ms=1_700_000_000_010,
             conn=conn,
         )
         record_submit_attempt(
             conn=conn,
-            client_order_id="daily-quality",
-            submit_attempt_id="attempt-daily-quality",
+            client_order_id="quality",
+            submit_attempt_id="attempt-quality",
             symbol="KRW-BTC",
             side="BUY",
             qty=1.0,
             price=100.0,
             submit_ts=1_700_000_000_020,
-            payload_fingerprint="hash-daily",
+            payload_fingerprint="hash-quality",
             broker_response_summary="ok",
             submission_reason_code="confirmed_success",
             exception_class=None,
@@ -137,8 +128,8 @@ def test_daily_execution_quality_links_fallback_source_and_slippage_evidence(tmp
             order_status="NEW",
         )
         add_fill(
-            client_order_id="daily-quality",
-            fill_id="daily-quality-fill",
+            client_order_id="quality",
+            fill_id="quality-fill",
             fill_ts=1_700_000_000_050,
             price=101.0,
             qty=1.0,
@@ -149,8 +140,6 @@ def test_daily_execution_quality_links_fallback_source_and_slippage_evidence(tmp
     finally:
         conn.close()
 
-    assert record.entry_signal_source == "daily_participation_fallback"
-    assert record.participation_policy_hash == "sha256:policy"
     assert record.slippage_vs_submit_ref_bps == pytest.approx(100.0)
     assert record.submit_spread_bps is not None
 

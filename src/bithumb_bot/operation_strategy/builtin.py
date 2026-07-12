@@ -9,7 +9,6 @@ from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDec
 from bithumb_bot.runtime_sma_snapshot import decide_sma_with_filter_runtime_snapshot_from_db
 from bithumb_bot.strategy_evidence_contract import DecisionEvidenceContract, GENERIC_DECISION_EVIDENCE_CONTRACT
 from bithumb_bot.strategy_plugins.sma_with_filter_assembly import MaterializationMode, SmaWithFilterPolicyAssembly
-from bithumb_bot.strategy_plugins.daily_participation_sma import DAILY_PARTICIPATION_SMA_PLUGIN
 
 from .capabilities import DataCapabilityRequirement, OperationStrategyDataRequirements, RuntimeParameterAdapter, StrategyRuntimeCapabilities
 from .plugin import OperationStrategyPlugin
@@ -84,7 +83,6 @@ BUILTIN_OPERATION_STRATEGY_PLUGINS = (
         exit_policy_materializer=_sma_exit_policy, decision_evidence_contract=SMA_DECISION_EVIDENCE_CONTRACT,
         decision_contract_version=SMA_WITH_FILTER_SPEC.decision_contract_version, diagnostics_namespace="sma_with_filter",
     ),
-    DAILY_PARTICIPATION_SMA_PLUGIN,
     OperationStrategyPlugin(
         name="safe_hold", version="safe_hold.runtime.v1", spec=SAFE_HOLD_SPEC,
         runtime_capabilities=StrategyRuntimeCapabilities(False, False, research_only=False, baseline_only=False, live_dry_run_allowed=False, live_real_order_allowed=False, approved_profile_required=False, accepts_empty_runtime_parameters=True, fail_closed_reason="safe_hold_runtime_fallback_not_live_eligible"),

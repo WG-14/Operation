@@ -30,10 +30,6 @@ from .portfolio_target import PortfolioTarget
 from .risk_decision import build_risk_decision_artifact
 from .pre_trade_economics import build_pre_trade_economics_snapshot
 from .strategy_policy_contract import StrategyDecisionV2
-from .strategy_plugins.daily_participation_contract import (
-    daily_participation_submit_payload_error,
-    daily_participation_submit_plan_extra,
-)
 from .submit_authority_policy import (
     evaluate_submit_authority_policy,
     is_pre_submit_risk_approved_for_plan,
@@ -108,19 +104,9 @@ EXECUTION_PLANNING_READINESS_KEYS = frozenset(
         "position_mode",
         "hold_policy",
         "authority_hash",
-        "authority_parameter_hash",
-        "source_artifact_hash",
         "strategy_instance_id",
-        "cycle_id",
-        "remaining_cycle_qty",
-        "locked_exit_qty",
         "residual_inventory_mode",
-        "partial_fill_policy",
-        "startup_gate_hash",
-        "startup_gate",
         "contract_hash",
-        "entry_plan_id",
-        "experiment_execution_contract",
         "authority_source",
     }
 )
@@ -405,19 +391,9 @@ class TypedExecutionPlanningInput:
             "position_mode",
             "hold_policy",
             "authority_hash",
-            "authority_parameter_hash",
-            "source_artifact_hash",
             "strategy_instance_id",
             "residual_inventory_mode",
-            "partial_fill_policy",
-            "cycle_id",
-            "remaining_cycle_qty",
-            "locked_exit_qty",
-            "startup_gate_hash",
-            "startup_gate",
             "contract_hash",
-            "entry_plan_id",
-            "experiment_execution_contract",
         ):
             if observability_key in observability:
                 payload[observability_key] = observability[observability_key]
@@ -500,9 +476,6 @@ class ExecutionSubmitPlan:
         if extra:
             payload.update(extra)
         payload.setdefault("submit_plan_hash", self.content_hash())
-        daily_error = daily_participation_submit_payload_error(payload)
-        if daily_error is not None:
-            raise ValueError(daily_error)
         if _pre_submit_risk_required_for_live_real(payload) and str(
             payload.get("pre_submit_risk_decision_hash") or ""
         ).strip():
@@ -2242,11 +2215,8 @@ def _build_execution_decision_summary_from_authority_payload(
                 "pre_submit_risk_decision_authority": "RuntimeRiskEngineAdapter.evaluate_pre_submit",
             }
             for observability_key in (
-                "position_mode", "hold_policy", "authority_hash", "authority_parameter_hash",
-                "source_artifact_hash", "strategy_instance_id", "residual_inventory_mode",
-                "partial_fill_policy", "cycle_id", "remaining_cycle_qty", "locked_exit_qty",
-                "startup_gate_hash", "startup_gate", "contract_hash", "entry_plan_id",
-                "experiment_execution_contract",
+                "position_mode", "hold_policy", "authority_hash", "strategy_instance_id",
+                "residual_inventory_mode", "contract_hash",
             ):
                 if observability_key in payload:
                     target_plan_extra[observability_key] = payload[observability_key]
@@ -2431,9 +2401,6 @@ def _build_execution_decision_summary_from_authority_payload(
                     buy_submit_plan,
                     {"pre_trade_economics": pre_trade_economics},
                 )
-            daily_extra = daily_participation_submit_plan_extra(payload)
-            if daily_extra:
-                buy_submit_plan = _with_submit_plan_extra(buy_submit_plan, daily_extra)
     elif raw == "SELL" or final == "SELL":
         if strategy_candidate is not None and final == "SELL":
             action = "EXIT_STRATEGY_POSITION"

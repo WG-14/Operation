@@ -22,7 +22,7 @@ def _persisted_strategy_fixture(
     policy = RiskPolicy(max_daily_loss_krw=1000.0, source="unit")
     snapshot = StrategyRiskStateProvider(conn).snapshot(
         strategy_instance_id="instance-a",
-        strategy_name="daily_participation_sma",
+        strategy_name="sma_with_filter",
         pair="KRW-BTC",
         interval="1m",
         as_of_ts_ms=1_800_000_000_000,
@@ -148,7 +148,7 @@ def _persisted_strategy_fixture(
             INSERT INTO strategy_decisions(
                 decision_ts, strategy_name, signal, reason, candle_ts, market_price,
                 execution_plan_id, context_json
-            ) VALUES (?, 'daily_participation_sma', 'HOLD', 'unit', ?, 100.0, ?, ?)
+            ) VALUES (?, 'sma_with_filter', 'HOLD', 'unit', ?, 100.0, ?, ?)
             """,
             (
                 1_800_000_000_000,
