@@ -248,6 +248,5 @@ def build_live_pipeline_smoke_plan_payload(
             "execution_mode": "live_pipeline_smoke",
             "candle_checkpoint_authority": "smoke_step_checkpoint",
             "market_reference_source": "latest_closed_candle_or_top_of_book",
-            "normal_h74_strategy_performance_authority": False,
         },
     }

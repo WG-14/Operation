@@ -40,25 +40,6 @@ from .submit_authority_policy import (
     submit_authority_policy_from_settings,
 )
 from .target_position import TargetPositionSettings, build_target_position_decision
-from .experiment_execution_contract import (
-    POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT,
-    current_h74_experiment_execution_contract_from_payload,
-)
-from .h74_readiness_certificate import _file_hash, validate_h74_readiness_certificate
-from .h74_position_ownership import (
-    H74PositionOwnershipError,
-    h74_fixed_position_ownership_missing_fields,
-    h74_position_ownership_contract_from_payload,
-    ownership_payload_fields,
-)
-from .h74_cycle_state import build_h74_cycle_id, build_h74_cycle_closeout_plan_from_payload
-from .h74_submit_identity import H74SubmitIdentityError, resolve_h74_sell_identity
-from .h74_submit_semantics import (
-    H74_ENTRY_SUBMIT_SEMANTICS,
-    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
-    H74_ENTRY_SUBMIT_SEMANTICS_NAME,
-    H74_SOURCE_MAX_ORDER_KRW,
-)
 from .virtual_target_state import assert_not_live_submit_authority
 
 if False:  # pragma: no cover
@@ -67,7 +48,6 @@ if False:  # pragma: no cover
 RUN_LOG = logging.getLogger("bithumb_bot.run")
 EXECUTION_SUBMIT_PLAN_SCHEMA_VERSION = 1
 EXECUTION_SUBMIT_PLAN_AUTHORITY_LABEL = "ExecutionSubmitPlan.final_payload.v1"
-H74_EXECUTION_STRATEGY_NAME = "daily_participation_" "sma"
 
 
 EXECUTION_PLANNING_READINESS_KEYS = frozenset(
@@ -132,31 +112,16 @@ EXECUTION_PLANNING_READINESS_KEYS = frozenset(
         "source_artifact_hash",
         "strategy_instance_id",
         "cycle_id",
-        "h74_cycle_id",
         "remaining_cycle_qty",
-        "h74_remaining_cycle_qty",
-        "h74_cycle_inventory",
         "locked_exit_qty",
-        "h74_cycle_inventory_error",
-        "h74_open_cycle_count",
         "residual_inventory_mode",
         "partial_fill_policy",
-        "h74_startup_gate_status",
-        "h74_startup_gate_reason_code",
         "startup_gate_hash",
         "startup_gate",
         "contract_hash",
-        "h74_position_ownership_contract_hash",
-        "h74_position_ownership_contract",
-        "h74_cycle_ownership_error",
-        "h74_entry_plan_client_order_id",
         "entry_plan_id",
         "experiment_execution_contract",
         "authority_source",
-        "h74_source_authority_hash",
-        "h74_source_authority",
-        "h74_execution_path_probe_run_id",
-        "h74_fixed_position_contract_active",
     }
 )
 
@@ -436,41 +401,26 @@ class TypedExecutionPlanningInput:
                 }
             )
         observability = dict(self.observability_context)
-        for h74_key in (
+        for observability_key in (
             "position_mode",
             "hold_policy",
             "authority_hash",
             "authority_parameter_hash",
             "source_artifact_hash",
-            "h74_source_authority_hash",
             "strategy_instance_id",
             "residual_inventory_mode",
             "partial_fill_policy",
             "cycle_id",
-            "h74_cycle_id",
             "remaining_cycle_qty",
-            "h74_remaining_cycle_qty",
             "locked_exit_qty",
-            "h74_cycle_inventory_error",
-            "h74_open_cycle_count",
-            "h74_cycle_inventory",
-            "h74_startup_gate_status",
-            "h74_startup_gate_reason_code",
             "startup_gate_hash",
             "startup_gate",
             "contract_hash",
-            "h74_position_ownership_contract_hash",
-            "h74_position_ownership_contract",
-            "h74_cycle_ownership_error",
-            "h74_entry_plan_client_order_id",
             "entry_plan_id",
             "experiment_execution_contract",
-            "h74_source_authority",
-            "h74_execution_path_probe_run_id",
-            "h74_fixed_position_contract_active",
         ):
-            if h74_key in observability:
-                payload[h74_key] = observability[h74_key]
+            if observability_key in observability:
+                payload[observability_key] = observability[observability_key]
         return payload
 
 
@@ -489,53 +439,6 @@ class ResidualSellCandidate:
 class ResidualSellPreSubmitProof:
     passed: bool
     reasons: tuple[str, ...]
-
-
-H74_SUBMIT_SEMANTIC_FIELDS = frozenset(
-    {
-        "sizing_mode",
-        "quote_notional_krw",
-        "submit_semantics",
-        "fill_qty_authority",
-        "position_mode",
-        "exchange_order_type",
-        "exchange_submit_field",
-        "exchange_submit_notional_krw",
-        "exchange_submit_qty",
-        "quote_notional_authority",
-        "submit_semantics_authority",
-    }
-)
-
-
-@dataclass(frozen=True)
-class H74SubmitSemantics:
-    sizing_mode: str
-    quote_notional_krw: float | None
-    submit_semantics: str
-    fill_qty_authority: str
-    position_mode: str
-    exchange_order_type: str
-    exchange_submit_field: str
-    exchange_submit_notional_krw: float | None
-    exchange_submit_qty: float | None
-    quote_notional_authority: str | None = None
-    submit_semantics_authority: str | None = None
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "sizing_mode": self.sizing_mode,
-            "quote_notional_krw": self.quote_notional_krw,
-            "submit_semantics": self.submit_semantics,
-            "fill_qty_authority": self.fill_qty_authority,
-            "position_mode": self.position_mode,
-            "exchange_order_type": self.exchange_order_type,
-            "exchange_submit_field": self.exchange_submit_field,
-            "exchange_submit_notional_krw": self.exchange_submit_notional_krw,
-            "exchange_submit_qty": self.exchange_submit_qty,
-            "quote_notional_authority": self.quote_notional_authority,
-            "submit_semantics_authority": self.submit_semantics_authority,
-        }
 
 
 @dataclass(frozen=True)
@@ -557,17 +460,10 @@ class ExecutionSubmitPlan:
     scope_key_hash: str = ""
     portfolio_target_hash: str = ""
     submit_authority_policy_hash: str = ""
-    h74_submit_semantics: H74SubmitSemantics | None = None
     extra_payload: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         assert_not_live_submit_authority(self.extra_payload)
-        forbidden = sorted(H74_SUBMIT_SEMANTIC_FIELDS.intersection(self.extra_payload))
-        if forbidden:
-            raise ValueError(
-                "execution_submit_plan_extra_payload_reserved_h74_semantics:"
-                + ",".join(forbidden)
-            )
 
     def as_dict(self) -> dict[str, object]:
         payload = {
@@ -593,10 +489,6 @@ class ExecutionSubmitPlan:
         ):
             if str(value or "").strip():
                 payload[key] = value
-        if self.h74_submit_semantics is not None:
-            h74_payload = self.h74_submit_semantics.as_dict()
-            payload.update(h74_payload)
-            payload["h74_submit_semantics"] = h74_payload
         payload.update(dict(self.extra_payload))
         return payload
 
@@ -606,12 +498,6 @@ class ExecutionSubmitPlan:
     def as_final_payload(self, *, extra: dict[str, object] | None = None) -> dict[str, object]:
         payload = self.as_dict()
         if extra:
-            reserved = sorted(H74_SUBMIT_SEMANTIC_FIELDS.intersection(extra))
-            if reserved:
-                raise ValueError(
-                    "execution_submit_plan_final_payload_extra_reserved_h74_semantics:"
-                    + ",".join(reserved)
-                )
             payload.update(extra)
         payload.setdefault("submit_plan_hash", self.content_hash())
         daily_error = daily_participation_submit_payload_error(payload)
@@ -1171,12 +1057,6 @@ def _with_submit_plan_extra(
     plan: ExecutionSubmitPlan,
     extra: dict[str, object],
 ) -> ExecutionSubmitPlan:
-    reserved = sorted(H74_SUBMIT_SEMANTIC_FIELDS.intersection(extra))
-    if reserved:
-        raise ValueError(
-            "execution_submit_plan_extra_payload_reserved_h74_semantics:"
-            + ",".join(reserved)
-        )
     merged = dict(plan.extra_payload)
     merged.update(extra)
     return replace(plan, extra_payload=merged)
@@ -1480,10 +1360,6 @@ def _operator_live_pipeline_smoke_authorized_target_plan(
     if bool(target_plan.get("normal_strategy_gate_modified")):
         return False
     if bool(decision_context.get("normal_strategy_gate_modified")):
-        return False
-    if bool(target_plan.get("normal_h74_strategy_performance_authority")):
-        return False
-    if bool(decision_context.get("normal_h74_strategy_performance_authority")):
         return False
     plan_pair = str(target_plan.get("pair") or target_plan.get("authoritative_pair") or "").strip().upper()
     settings_pair = str(getattr(settings, "PAIR", "") or "").strip().upper()
@@ -1794,168 +1670,6 @@ def _portfolio_target_authority_error(
     return None
 
 
-def _h74_execution_path_probe_authority_allows_submit(
-    payload: Mapping[str, object],
-    settings_obj: object,
-) -> bool:
-    from .h74_authority_alignment import (
-        load_h74_authority_payload,
-        validate_h74_authority_file_env_alignment,
-    )
-    from .h74_observation import H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE
-    from .h74_pre_submit_evidence import require_pre_submit_bundle_hash
-
-    run_id = str(
-        getattr(settings_obj, "H74_EXECUTION_PATH_PROBE_RUN_ID", "")
-        or os.environ.get("H74_EXECUTION_PATH_PROBE_RUN_ID", "")
-        or ""
-    ).strip()
-    if not run_id:
-        return False
-    payload_run_id = str(payload.get("h74_execution_path_probe_run_id") or "").strip()
-    if not payload_run_id or payload_run_id != run_id:
-        return False
-    if str(getattr(settings_obj, "MODE", "") or "").strip().lower() != "live":
-        return False
-    if not bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False)):
-        return False
-    if bool(getattr(settings_obj, "LIVE_DRY_RUN", True)):
-        return False
-    if bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False)):
-        return False
-    if str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
-        return False
-    if (
-        str(payload.get("strategy") or payload.get("strategy_name") or "").strip().lower()
-        != H74_EXECUTION_STRATEGY_NAME
-    ):
-        return False
-    if not bool(payload.get("h74_fixed_position_contract_active")):
-        return False
-    authority_path = str(
-        getattr(settings_obj, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "")
-        or os.environ.get("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "")
-        or ""
-    ).strip()
-    if not authority_path:
-        return False
-    authority_file = Path(authority_path).expanduser()
-    if not authority_file.is_file():
-        return False
-
-    class _H74ProbeSettingsDefaults:
-        def __init__(self, base: object) -> None:
-            self._base = base
-
-        def __getattr__(self, name: str) -> object:
-            if name == "DAILY_PARTICIPATION_MAX_ORDER_KRW":
-                return H74_SOURCE_MAX_ORDER_KRW
-            return getattr(self._base, name)
-
-    def _exact_number(value: object, expected: float) -> bool:
-        try:
-            return float(value) == float(expected)
-        except (TypeError, ValueError):
-            return False
-
-    alignment_settings_obj = (
-        settings_obj
-        if hasattr(settings_obj, "DAILY_PARTICIPATION_MAX_ORDER_KRW")
-        else _H74ProbeSettingsDefaults(settings_obj)
-    )
-    try:
-        authority_payload = load_h74_authority_payload(authority_file)
-        alignment = validate_h74_authority_file_env_alignment(
-            authority_file,
-            settings_obj=alignment_settings_obj,
-            raise_on_mismatch=True,
-        )
-    except Exception:
-        return False
-    if not bool(alignment.ok):
-        return False
-    expected_authority_type = H74_SOURCE_VARIANT_OBSERVATION_AUTHORITY_ARTIFACT_TYPE
-    if str(authority_payload.get("artifact_type") or "") != expected_authority_type:
-        return False
-    if str(authority_payload.get("authority_type") or "") != expected_authority_type:
-        return False
-    if str(authority_payload.get("contract_scope") or "") != "h74_source_variant_live_probe_buy_sell_path_only":
-        return False
-    if str(authority_payload.get("acceptance_track") or "") != "execution_path_probe":
-        return False
-    if str(authority_payload.get("probe_scope") or "") != "buy_sell_path_only":
-        return False
-    if bool(authority_payload.get("production_approval")) is not False:
-        return False
-    if bool(authority_payload.get("equivalence_to_source_candidate")) is not False:
-        return False
-    if not _exact_number(getattr(settings_obj, "MAX_ORDER_KRW", None), H74_SOURCE_MAX_ORDER_KRW):
-        return False
-    daily_max_order = getattr(settings_obj, "DAILY_PARTICIPATION_MAX_ORDER_KRW", None)
-    if daily_max_order is not None and not _exact_number(daily_max_order, H74_SOURCE_MAX_ORDER_KRW):
-        return False
-    bound = dict(authority_payload.get("hash_bound_parameters") or {})
-    expected_bound = {
-        "DAILY_PARTICIPATION_WINDOW_START_HOUR_KST": 0,
-        "DAILY_PARTICIPATION_WINDOW_END_HOUR_KST": 24,
-        "SMA_SHORT": 10,
-        "SMA_LONG": 86,
-        "STRATEGY_EXIT_MAX_HOLDING_MIN": 74,
-        "max_entry_notional_krw": H74_SOURCE_MAX_ORDER_KRW,
-        "DAILY_PARTICIPATION_MAX_ORDER_KRW": H74_SOURCE_MAX_ORDER_KRW,
-    }
-    if not all(_exact_number(bound.get(key), expected) for key, expected in expected_bound.items()):
-        return False
-    evidence_path = str(
-        getattr(settings_obj, "H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH", "")
-        or os.environ.get("H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH", "")
-        or ""
-    ).strip()
-    if not evidence_path:
-        return False
-    try:
-        evidence_payload = json.loads(Path(evidence_path).expanduser().read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if not isinstance(evidence_payload, Mapping):
-        return False
-    try:
-        require_pre_submit_bundle_hash(evidence_payload)
-    except Exception:
-        return False
-    if str(evidence_payload.get("artifact_type") or "") != "h74_pre_submit_evidence_bundle":
-        return False
-    if str(evidence_payload.get("authority_hash") or "") != str(
-        authority_payload.get("authority_content_hash") or ""
-    ):
-        return False
-    if str(evidence_payload.get("env_hash") or "").strip() != str(
-        authority_payload.get("env_hash") or ""
-    ).strip():
-        return False
-    if bool(evidence_payload.get("production_approval")):
-        return False
-    for key in (
-        "research_promotion_evidence",
-        "promotion_grade",
-        "approved_profile_evidence",
-        "equivalence_to_source_candidate",
-    ):
-        if bool(evidence_payload.get(key)):
-            return False
-    if str(evidence_payload.get("research_equivalence_status") or "NOT_APPLICABLE") not in {
-        "",
-        "NOT_APPLICABLE",
-    }:
-        return False
-    return True
-
-
 def _authoritative_target_pair_error(
     *,
     payload: Mapping[str, object],
@@ -2147,40 +1861,11 @@ def _build_execution_decision_summary_from_authority_payload(
             required=execution_engine == "target_delta" and bool(portfolio_target_required),
         )
         target_authority_error = target_authority_error or pair_authority_error
-        h74_readiness_probe_authorized: bool | None = None
         configured_position_mode = str(
             payload.get("position_mode")
             or getattr(settings_obj, "POSITION_MODE", "")
-            or (
-                POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-                if str(payload.get("strategy") or payload.get("strategy_name") or "").strip().lower()
-                == H74_EXECUTION_STRATEGY_NAME
-                and bool(payload.get("h74_fixed_position_contract_active"))
-                else "continuous_notional_target"
-            )
+            or "continuous_notional_target"
         )
-        if (
-            target_authority_error is None
-            and configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-            and raw == "BUY"
-            and str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
-            and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
-            and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
-            and not bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False))
-            and str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower()
-            not in {"1", "true", "yes", "on"}
-        ):
-            cert_path = str(
-                payload.get("h74_readiness_certificate_path")
-                or getattr(settings_obj, "H74_READINESS_CERTIFICATE_PATH", "")
-                or ""
-            ).strip()
-            h74_readiness_probe_authorized = _h74_execution_path_probe_authority_allows_submit(
-                payload,
-                settings_obj,
-            )
-            if not cert_path and not h74_readiness_probe_authorized:
-                target_authority_error = "h74_readiness_certificate_missing"
         authoritative_target_exposure_krw = (
             None
             if portfolio_target is None or target_authority_error is not None
@@ -2204,13 +1889,6 @@ def _build_execution_decision_summary_from_authority_payload(
             authoritative_target_exposure_krw=authoritative_target_exposure_krw,
         )
         target_shadow_decision = target_decision.as_dict()
-        if (
-            target_authority_error is None
-            and configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-            and str(target_decision.delta_side) == "BUY"
-            and str(payload.get("h74_startup_gate_status") or "").strip() == "START_BLOCKED"
-        ):
-            target_authority_error = str(payload.get("h74_startup_gate_reason_code") or "h74_startup_gate_block")
         entry_authority = evaluate_entry_authority(
             payload=payload,
             side=str(target_decision.delta_side),
@@ -2270,246 +1948,6 @@ def _build_execution_decision_summary_from_authority_payload(
                     authority_source="target_delta.desired_delta",
                 )
                 target_sizing_dict = target_sizing.as_dict()
-            if (
-                target_authority_error is None
-                and configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-                and raw == "BUY"
-            ):
-                quantity_contract_hash = str(
-                    (target_sizing_dict or {}).get("quantity_contract_hash")
-                    or payload.get("quantity_contract_hash")
-                    or ""
-                )
-                order_rule_snapshot_hash = str(
-                    payload.get("order_rule_snapshot_hash")
-                    or sha256_prefixed(
-                        {
-                            "pair": authoritative_pair,
-                            "order_rules": execution_order_rules.as_order_rules(),
-                        }
-                    )
-                )
-                fee_slippage_timing_hash = str(
-                    payload.get("fee_slippage_timing_hash")
-                    or sha256_prefixed(
-                        {
-                            "fee": payload.get("fee_comparison"),
-                            "slippage_bps": payload.get("slippage_bps"),
-                            "candle_timing": payload.get("candle_timing"),
-                        }
-                    )
-                )
-                provenance = runtime_code_provenance()
-                current_commit_sha = str(
-                    payload.get("commit_sha")
-                    or payload.get("code_commit_sha")
-                    or provenance.get("commit_sha")
-                    or "unavailable"
-                )
-                env_file = str(os.environ.get("BITHUMB_ENV_FILE") or "")
-                current_contract = current_h74_experiment_execution_contract_from_payload(
-                    payload,
-                    code_commit_sha=current_commit_sha,
-                    env_file_hash=_file_hash(env_file),
-                    quantity_contract_hash=quantity_contract_hash,
-                    order_rule_snapshot_hash=order_rule_snapshot_hash,
-                    fee_slippage_timing_hash=fee_slippage_timing_hash,
-                ).as_payload()
-                payload["experiment_execution_contract"] = current_contract
-                payload["contract_hash"] = str(current_contract["contract_hash"])
-                payload["quantity_contract_hash"] = quantity_contract_hash
-                payload["order_rule_snapshot_hash"] = order_rule_snapshot_hash
-                payload["fee_slippage_timing_hash"] = fee_slippage_timing_hash
-                payload["commit_sha"] = current_commit_sha
-                payload["submit_semantics_hash"] = sha256_prefixed(H74_ENTRY_SUBMIT_SEMANTICS)
-                payload["quote_notional_krw"] = float(H74_SOURCE_MAX_ORDER_KRW)
-                payload["exchange_order_type"] = "price"
-                payload["exchange_submit_field"] = "price"
-                payload["broker_payload_preview_hash"] = sha256_prefixed(
-                    {
-                        "order_type": "price",
-                        "price": float(H74_SOURCE_MAX_ORDER_KRW),
-                        "volume_present": False,
-                    }
-                )
-                if (
-                    str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
-                    and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
-                    and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
-                    and not bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False))
-                    and str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower()
-                    not in {"1", "true", "yes", "on"}
-                ):
-                    cert_path = str(
-                        payload.get("h74_readiness_certificate_path")
-                        or getattr(settings_obj, "H74_READINESS_CERTIFICATE_PATH", "")
-                        or ""
-                    ).strip()
-                    probe_authorized = (
-                        h74_readiness_probe_authorized
-                        if h74_readiness_probe_authorized is not None
-                        else _h74_execution_path_probe_authority_allows_submit(
-                            payload,
-                            settings_obj,
-                        )
-                    )
-                    if not cert_path and not probe_authorized:
-                        target_authority_error = "h74_readiness_certificate_missing"
-                    elif cert_path:
-                        try:
-                            certificate = json.loads(Path(cert_path).read_text(encoding="utf-8"))
-                            verdict = validate_h74_readiness_certificate(
-                                certificate if isinstance(certificate, Mapping) else {},
-                                env_file=env_file,
-                                broker_balance_snapshot_hash=str(payload.get("broker_balance_snapshot_hash") or ""),
-                                current_commit_sha=current_commit_sha,
-                                current_db_schema_hash=str(payload.get("db_schema_hash") or ""),
-                                current_order_rule_fee_authority_hash=str(
-                                    payload.get("order_rule_fee_authority_hash") or ""
-                                ),
-                                current_gate_trace_hash=str(payload.get("gate_trace_hash") or ""),
-                                current_would_submit_plan_hash=str(
-                                    payload.get("would_submit_plan_hash") or ""
-                                ),
-                                current_behavior_comparison_hash=str(
-                                    payload.get("behavior_comparison_hash") or ""
-                                ),
-                                current_contract_hash=str(current_contract["contract_hash"]),
-                                current_submit_semantics_hash=str(
-                                    payload.get("submit_semantics_hash") or ""
-                                ),
-                                current_entry_quote_notional_krw=(
-                                    None
-                                    if payload.get("quote_notional_krw") is None
-                                    else float(payload.get("quote_notional_krw") or 0.0)
-                                ),
-                                current_exchange_order_type=str(
-                                    payload.get("exchange_order_type") or ""
-                                ),
-                                current_exchange_submit_field=str(
-                                    payload.get("exchange_submit_field") or ""
-                                ),
-                                current_broker_payload_preview_hash=str(
-                                    payload.get("broker_payload_preview_hash") or ""
-                                ),
-                                strict=True,
-                            )
-                            if not bool(verdict.get("valid")):
-                                target_authority_error = "h74_certificate_gate_block:" + ",".join(
-                                    str(reason) for reason in verdict.get("reasons", [])
-                                )
-                        except Exception as exc:
-                            target_authority_error = f"h74_certificate_gate_block:{type(exc).__name__}"
-            is_h74_fixed_buy = (
-                configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-                and str(target_decision.delta_side) == "BUY"
-            )
-            h74_closeout_plan = None
-            h74_closeout_error = ""
-            is_h74_fixed_sell = (
-                configured_position_mode == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-                and str(target_decision.delta_side) == "SELL"
-            )
-            h74_sell_identity = None
-            if is_h74_fixed_sell:
-                try:
-                    h74_live_real_submit_path = bool(
-                        str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live"
-                        and bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False))
-                        and not bool(getattr(settings_obj, "LIVE_DRY_RUN", True))
-                        and not bool(getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False))
-                        and str(os.environ.get("H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY") or "").strip().lower()
-                        not in {"1", "true", "yes", "on"}
-                    )
-                    if h74_live_real_submit_path:
-                        identity_conn = ensure_db(str(getattr(settings_obj, "DB_PATH", settings.DB_PATH)))
-                        try:
-                            h74_sell_identity = resolve_h74_sell_identity(
-                                identity_conn,
-                                payload,
-                                pair=authoritative_pair,
-                            )
-                        finally:
-                            identity_conn.close()
-                        payload.update(h74_sell_identity.as_evidence_dict())
-                    h74_closeout_plan = build_h74_cycle_closeout_plan_from_payload(
-                        payload,
-                        target_delta_side=str(target_decision.delta_side),
-                        target_qty=0.0,
-                        risk_approval_status=str(payload.get("pre_submit_risk_status") or ""),
-                        risk_approval_reason_code=str(payload.get("pre_submit_risk_reason_code") or ""),
-                    )
-                    target_sizing = build_target_delta_execution_sizing(
-                        pair=authoritative_pair,
-                        side="SELL",
-                        desired_qty=h74_closeout_plan.closeout_qty,
-                        market_price=float(target_decision.reference_price or 0.0),
-                        min_qty=target_decision.order_rule_min_qty,
-                        qty_step=target_decision.order_rule_qty_step,
-                        min_notional_krw=target_decision.order_rule_min_notional_krw,
-                        max_qty_decimals=getattr(settings_obj, "LIVE_ORDER_MAX_QTY_DECIMALS", 0),
-                        authority_source="h74_cycle_remaining",
-                        h74_closeout=True,
-                        qty_step_authority=(
-                            "exchange"
-                            if float(target_decision.order_rule_qty_step or 0.0) > 0.0
-                            else "local_fallback_min_qty"
-                        ),
-                    )
-                    target_sizing_dict = target_sizing.as_dict()
-                    h74_closeout_plan = replace(
-                        h74_closeout_plan,
-                        closeout_qty=float(target_sizing.final_submitted_qty),
-                        residual_qty=float(target_sizing.residual_qty),
-                        residual_policy=str(target_sizing.residual_policy),
-                        residual_reason=str(target_sizing.residual_reason),
-                    )
-                    if (
-                        float(target_sizing.final_submitted_qty) + 1e-12
-                        < float(h74_closeout_plan.remaining_qty)
-                        and str(target_sizing.residual_policy or "none") == "none"
-                    ):
-                        h74_closeout_error = "h74_closeout_qty_below_remaining_without_residual_policy"
-                except (TypeError, ValueError, H74SubmitIdentityError) as exc:
-                    h74_closeout_error = str(exc)
-            h74_quote_notional_krw = (
-                float(H74_SOURCE_MAX_ORDER_KRW) if is_h74_fixed_buy else None
-            )
-            if is_h74_fixed_buy and not str(payload.get("cycle_id") or payload.get("h74_cycle_id") or "").strip():
-                authority_hash_for_cycle = str(payload.get("authority_hash") or payload.get("h74_source_authority_hash") or "").strip()
-                strategy_instance_for_cycle = str(payload.get("strategy_instance_id") or "").strip()
-                entry_plan_id_for_cycle = str(
-                    payload.get("h74_entry_plan_client_order_id")
-                    or payload.get("entry_plan_id")
-                    or f"h74_entry_plan_{int(payload.get('ts') or payload.get('candle_ts') or 0)}"
-                ).strip()
-                if authority_hash_for_cycle and strategy_instance_for_cycle and entry_plan_id_for_cycle:
-                    cycle_id_for_entry = build_h74_cycle_id(
-                        strategy_instance_id=strategy_instance_for_cycle,
-                        entry_client_order_id=entry_plan_id_for_cycle,
-                        authority_hash=authority_hash_for_cycle,
-                    )
-                    payload["cycle_id"] = cycle_id_for_entry
-                    payload["h74_cycle_id"] = cycle_id_for_entry
-                    payload["h74_entry_plan_client_order_id"] = entry_plan_id_for_cycle
-            if is_h74_fixed_buy:
-                if not str(payload.get("runtime_pair") or "").strip():
-                    payload["runtime_pair"] = str(getattr(settings_obj, "PAIR", "") or "")
-                if not str(payload.get("h74_execution_path_probe_run_id") or "").strip():
-                    payload["h74_execution_path_probe_run_id"] = str(
-                        getattr(settings_obj, "H74_EXECUTION_PATH_PROBE_RUN_ID", "") or ""
-                    )
-            h74_ownership_contract = None
-            h74_ownership_error = str(payload.get("h74_cycle_ownership_error") or "").strip()
-            if is_h74_fixed_buy:
-                try:
-                    h74_ownership_contract = h74_position_ownership_contract_from_payload(payload)
-                except H74PositionOwnershipError as exc:
-                    missing = h74_fixed_position_ownership_missing_fields(payload)
-                    h74_ownership_error = (
-                        "h74_cycle_ownership_required_for_entry"
-                        + (":" + ",".join(sorted(missing)) if missing else "")
-                    )
             target_idempotency_key = None
             if target_sizing is not None and target_sizing.allowed:
                 target_idempotency_key = build_order_intent_key(
@@ -2527,10 +1965,6 @@ def _build_execution_decision_summary_from_authority_payload(
             )
             submit_allowed = bool(target_decision.would_submit and target_sizing is not None and target_sizing.allowed)
             if target_authority_error is not None:
-                submit_allowed = False
-            if h74_ownership_error:
-                submit_allowed = False
-            if h74_closeout_error:
                 submit_allowed = False
             if entry_authority.status == ENTRY_AUTHORITY_BLOCK:
                 submit_allowed = False
@@ -2560,12 +1994,6 @@ def _build_execution_decision_summary_from_authority_payload(
             elif target_authority_error is not None:
                 primary_block_gate = "target_authority"
                 primary_block_reason = str(target_authority_error)
-            elif h74_ownership_error:
-                primary_block_gate = "h74_cycle_ownership"
-                primary_block_reason = h74_ownership_error
-            elif h74_closeout_error:
-                primary_block_gate = "h74_closeout"
-                primary_block_reason = h74_closeout_error
             elif entry_authority.status == ENTRY_AUTHORITY_BLOCK:
                 primary_block_gate = "entry_authority"
                 primary_block_reason = str(entry_authority.reason_code)
@@ -2577,7 +2005,7 @@ def _build_execution_decision_summary_from_authority_payload(
                     if strategy_risk_policy_blocked
                     else (
                     "BLOCK_PORTFOLIO_TARGET_AUTHORITY"
-                    if target_authority_error is not None or h74_ownership_error or h74_closeout_error
+                    if target_authority_error is not None
                     else (
                     "BLOCK_ENTRY_AUTHORITY"
                     if entry_authority.status == ENTRY_AUTHORITY_BLOCK
@@ -2600,21 +2028,9 @@ def _build_execution_decision_summary_from_authority_payload(
                 else sizing_block_reason or target_decision.block_reason
             )
             target_plan_extra = {
-                "intent_type": (
-                    "h74_fixed_fill_quote_notional_buy"
-                    if is_h74_fixed_buy
-                    else "target_delta_rebalance"
-                ),
-                "strategy_context": (
-                    "h74_source_observation"
-                    if is_h74_fixed_buy
-                    else "target_delta"
-                ),
-                "authority_source": (
-                    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY
-                    if is_h74_fixed_buy
-                    else "target_delta"
-                ),
+                "intent_type": "target_delta_rebalance",
+                "strategy_context": "target_delta",
+                "authority_source": "target_delta",
                 "entry_authority": entry_authority.as_dict(),
                 "entry_authority_status": entry_authority.status,
                 "entry_authority_reason_code": entry_authority.reason_code,
@@ -2657,42 +2073,17 @@ def _build_execution_decision_summary_from_authority_payload(
                     None if target_sizing is None else target_sizing.final_submitted_qty
                 ),
                 "target_final_submitted_notional_krw": (
-                    h74_quote_notional_krw
-                    if is_h74_fixed_buy
-                    else None if target_sizing is None else target_sizing.final_submitted_notional_krw
+                    None if target_sizing is None else target_sizing.final_submitted_notional_krw
                 ),
                 "target_sizing": target_sizing_dict,
-                "entry_submit_semantics": (
-                    dict(H74_ENTRY_SUBMIT_SEMANTICS) if is_h74_fixed_buy else None
-                ),
-                "submit_semantics": (
-                    H74_ENTRY_SUBMIT_SEMANTICS_NAME if is_h74_fixed_buy else "base_qty"
-                ),
-                "sizing_mode": "quote_notional" if is_h74_fixed_buy else "base_qty",
-                "submit_semantics_authority": (
-                    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY
-                    if is_h74_fixed_buy
-                    else "canonical_target_delta_sizing"
-                ),
-                "quote_notional_krw": h74_quote_notional_krw,
-                "quote_notional_authority": (
-                    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY if is_h74_fixed_buy else None
-                ),
-                "exchange_order_type": "price" if is_h74_fixed_buy else None,
-                "exchange_submit_field": "price" if is_h74_fixed_buy else None,
-                "exchange_submit_notional_krw": h74_quote_notional_krw,
+                "submit_semantics": "base_qty",
+                "sizing_mode": "base_qty",
+                "submit_semantics_authority": "canonical_target_delta_sizing",
                 "exchange_submit_qty": (
-                    None if is_h74_fixed_buy else None if target_sizing is None else target_sizing.final_submitted_qty
+                    None if target_sizing is None else target_sizing.final_submitted_qty
                 ),
-                "submit_qty_authority": (
-                    "non_authoritative_preview"
-                    if is_h74_fixed_buy
-                    else "canonical_target_delta_sizing"
-                ),
-                "fill_qty_authority": "broker_fill" if is_h74_fixed_buy else None,
+                "submit_qty_authority": "canonical_target_delta_sizing",
                 "position_mode": configured_position_mode,
-                "entry_qty_preview_authoritative": False if is_h74_fixed_buy else None,
-                "entry_fill_qty_authority": "broker_fills" if is_h74_fixed_buy else None,
                 "invariant_status": (
                     "not_required" if target_sizing is None else target_sizing.invariant_status
                 ),
@@ -2850,135 +2241,24 @@ def _build_execution_decision_summary_from_authority_payload(
                 ),
                 "pre_submit_risk_decision_authority": "RuntimeRiskEngineAdapter.evaluate_pre_submit",
             }
-            if h74_closeout_plan is not None:
-                resolved_identity_fields = (
-                    h74_sell_identity.as_evidence_dict() if h74_sell_identity is not None else {}
-                )
-                target_plan_extra.update(
-                    {
-                        **resolved_identity_fields,
-                        "h74_closeout_contract": h74_closeout_plan.as_dict(),
-                        "h74_closeout_contract_hash": sha256_prefixed(h74_closeout_plan.as_dict()),
-                        "qty_authority": h74_closeout_plan.qty_authority,
-                        "submit_qty_authority": h74_closeout_plan.qty_authority,
-                        "cycle_id": h74_closeout_plan.cycle_id,
-                        "h74_cycle_id": h74_closeout_plan.h74_cycle_id,
-                        "h74_entry_plan_client_order_id": h74_closeout_plan.h74_entry_plan_client_order_id,
-                        "h74_position_ownership_contract_hash": h74_closeout_plan.contract_hash,
-                        "contract_hash": h74_closeout_plan.contract_hash,
-                        "remaining_cycle_qty": h74_closeout_plan.remaining_qty,
-                        "h74_remaining_cycle_qty": h74_closeout_plan.remaining_qty,
-                        "target_qty": 0.0,
-                        "target_closeout_requested": True,
-                        "closeout_qty": h74_closeout_plan.closeout_qty,
-                        "residual_qty": h74_closeout_plan.residual_qty,
-                        "residual_policy": h74_closeout_plan.residual_policy,
-                        "residual_reason": h74_closeout_plan.residual_reason,
-                    }
-                )
-            elif h74_closeout_error:
-                target_plan_extra["h74_closeout_error"] = h74_closeout_error
-            if h74_ownership_contract is not None:
-                target_plan_extra.update(ownership_payload_fields(h74_ownership_contract))
-            elif h74_ownership_error:
-                target_plan_extra["h74_cycle_ownership_error"] = h74_ownership_error
-            h74_required_sell_identity_keys = {
-                "cycle_id",
-                "h74_cycle_id",
-                "authority_hash",
-                "strategy_instance_id",
-                "contract_hash",
-                "h74_position_ownership_contract_hash",
-                "h74_position_ownership_contract",
-                "h74_entry_plan_client_order_id",
-                "entry_plan_id",
-                "remaining_cycle_qty",
-                "h74_remaining_cycle_qty",
-            }
-            for h74_key in (
-                "position_mode",
-                "hold_policy",
-                "authority_hash",
-                "authority_parameter_hash",
-                "source_artifact_hash",
-                "h74_source_authority_hash",
-                "strategy_instance_id",
-                "residual_inventory_mode",
-                "partial_fill_policy",
-                "cycle_id",
-                "h74_cycle_id",
-                "remaining_cycle_qty",
-                "h74_remaining_cycle_qty",
-                "locked_exit_qty",
-                "h74_cycle_inventory_error",
-                "h74_open_cycle_count",
-                "h74_cycle_inventory",
-                "h74_startup_gate_status",
-                "h74_startup_gate_reason_code",
-                "startup_gate_hash",
-                "startup_gate",
-                "contract_hash",
-                "h74_position_ownership_contract_hash",
-                "h74_position_ownership_contract",
-                "h74_cycle_ownership_error",
-                "h74_entry_plan_client_order_id",
-                "entry_plan_id",
+            for observability_key in (
+                "position_mode", "hold_policy", "authority_hash", "authority_parameter_hash",
+                "source_artifact_hash", "strategy_instance_id", "residual_inventory_mode",
+                "partial_fill_policy", "cycle_id", "remaining_cycle_qty", "locked_exit_qty",
+                "startup_gate_hash", "startup_gate", "contract_hash", "entry_plan_id",
                 "experiment_execution_contract",
-                "h74_fixed_position_contract_active",
-                "h74_execution_path_probe_run_id",
             ):
-                if is_h74_fixed_sell and h74_key in h74_required_sell_identity_keys:
-                    continue
-                if h74_closeout_plan is not None and h74_key in {
-                    "cycle_id",
-                    "h74_cycle_id",
-                    "contract_hash",
-                    "h74_position_ownership_contract_hash",
-                    "h74_position_ownership_contract",
-                    "h74_entry_plan_client_order_id",
-                    "entry_plan_id",
-                    "remaining_cycle_qty",
-                    "h74_remaining_cycle_qty",
-                }:
-                    continue
-                if h74_key in payload:
-                    target_plan_extra[h74_key] = payload[h74_key]
+                if observability_key in payload:
+                    target_plan_extra[observability_key] = payload[observability_key]
             if performance_gate_fields and str(target_decision.delta_side) == "BUY":
                 target_plan_extra.update(performance_gate_fields)
-            h74_submit_semantics = (
-                H74SubmitSemantics(
-                    sizing_mode="quote_notional",
-                    quote_notional_krw=h74_quote_notional_krw,
-                    submit_semantics=H74_ENTRY_SUBMIT_SEMANTICS_NAME,
-                    fill_qty_authority="broker_fill",
-                    position_mode=configured_position_mode,
-                    exchange_order_type="price",
-                    exchange_submit_field="price",
-                    exchange_submit_notional_krw=h74_quote_notional_krw,
-                    exchange_submit_qty=None,
-                    quote_notional_authority=H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
-                    submit_semantics_authority=H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
-                )
-                if is_h74_fixed_buy
-                else None
-            )
-            for semantic_key in H74_SUBMIT_SEMANTIC_FIELDS:
-                target_plan_extra.pop(semantic_key, None)
             target_plan = ExecutionSubmitPlan(
                 side=str(target_decision.delta_side),
-                source="h74_source_observation" if is_h74_fixed_buy else "target_delta",
-                authority=(
-                    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY
-                    if is_h74_fixed_buy
-                    else "canonical_target_delta_sizing"
-                ),
+                source="target_delta",
+                authority="canonical_target_delta_sizing",
                 final_action=target_final_action,
                 qty=(None if target_sizing is None else target_sizing.final_submitted_qty),
-                notional_krw=(
-                    h74_quote_notional_krw
-                    if is_h74_fixed_buy
-                    else None if target_sizing is None else target_sizing.final_submitted_notional_krw
-                ),
+                notional_krw=(None if target_sizing is None else target_sizing.final_submitted_notional_krw),
                 target_exposure_krw=target_decision.new_target_exposure_krw,
                 current_effective_exposure_krw=target_decision.current_exposure_krw,
                 delta_krw=target_decision.delta_notional_krw,
@@ -2986,7 +2266,6 @@ def _build_execution_decision_summary_from_authority_payload(
                 pre_submit_proof_status=("passed" if submit_allowed else "failed"),
                 block_reason=target_block_reason,
                 idempotency_key=target_idempotency_key,
-                h74_submit_semantics=h74_submit_semantics,
             )
             pre_trade_plan = target_plan.as_final_payload(extra=target_plan_extra)
             pre_trade_economics = _build_buy_pre_trade_economics(
@@ -3010,11 +2289,6 @@ def _build_execution_decision_summary_from_authority_payload(
                         ),
                     )
             target_submit_plan = _with_submit_plan_extra(target_plan, target_plan_extra)
-            if h74_submit_semantics is not None and target_submit_plan.h74_submit_semantics is None:
-                target_submit_plan = replace(
-                    target_submit_plan,
-                    h74_submit_semantics=h74_submit_semantics,
-                )
 
     if execution_engine == "target_delta":
         if target_submit_plan is not None:
@@ -3843,7 +3117,7 @@ class LiveSignalExecutionService:
                         side=target_plan.get("side"),
                     )
                     return None
-                if str(target_plan.get("source")) not in {"target_delta", "h74_source_observation"}:
+                if str(target_plan.get("source")) != "target_delta":
                     _block_live_submit_plan(
                         reason="target_delta_invalid_target_submit_plan_source",
                         field_name="target_submit_plan",
@@ -3854,7 +3128,6 @@ class LiveSignalExecutionService:
                 if str(target_plan.get("authority")) not in {
                     "canonical_target_delta_sizing",
                     "target_position_delta",
-                    H74_ENTRY_SUBMIT_SEMANTICS_AUTHORITY,
                 }:
                     _block_live_submit_plan(
                         reason="target_delta_invalid_target_submit_plan_authority",
@@ -3939,53 +3212,6 @@ class LiveSignalExecutionService:
                         field_name="target_submit_plan",
                     ):
                         return None
-                    if (
-                        plan_side == "SELL"
-                        and str(target_plan.get("position_mode") or "")
-                        == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-                    ):
-                        cycle_id = str(
-                            target_plan.get("h74_cycle_id")
-                            or target_plan.get("cycle_id")
-                            or ""
-                        ).strip()
-                        authority_hash = str(target_plan.get("authority_hash") or "").strip()
-                        if not cycle_id:
-                            _block_live_submit_plan(
-                                reason="h74_cycle_id_required_for_exit",
-                                field_name="target_submit_plan",
-                                source=target_plan.get("source"),
-                                side=target_plan.get("side"),
-                            )
-                            return None
-                        if not authority_hash:
-                            _block_live_submit_plan(
-                                reason="h74_authority_hash_required_for_exit",
-                                field_name="target_submit_plan",
-                                source=target_plan.get("source"),
-                                side=target_plan.get("side"),
-                            )
-                            return None
-                        from .h74_cycle_state import lock_h74_cycle_exit_qty
-
-                        lock_conn = self.db_factory() if self.db_factory is not None else ensure_db()
-                        try:
-                            lock_h74_cycle_exit_qty(
-                                lock_conn,
-                                cycle_id=cycle_id,
-                                exit_client_order_id=str(
-                                    target_plan.get("idempotency_key")
-                                    or target_plan.get("submit_plan_hash")
-                                    or "pending_exit"
-                                ),
-                                qty=plan_qty,
-                                updated_ts=int(request.ts),
-                            )
-                            lock_conn.commit()
-                        finally:
-                            close = getattr(lock_conn, "close", None)
-                            if callable(close):
-                                close()
                     return self.executor(
                         self.broker,
                         plan_side,

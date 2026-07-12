@@ -197,59 +197,9 @@ def plan_sell_qty(
     )
 
 
-def plan_h74_closeout_qty(
-    *,
-    remaining_qty: float,
-    reference_price: float,
-    rules: OrderRuleSnapshot,
-) -> QuantityKernelResult:
-    price = float(reference_price)
-    requested = max(0.0, float(remaining_qty))
-    if float(rules.qty_step) > 0.0 and str(rules.qty_step_authority or "").strip() == "exchange":
-        constrained_qty = _floor_qty(requested, rules)
-        residual = max(0.0, requested - constrained_qty)
-        residual_policy = "exchange_step_residual_tracked" if residual > 0.0 else "none"
-        residual_reason = "exchange_step_constraint" if residual > 0.0 else "none"
-    else:
-        constrained_qty = _quantize_decimals_floor(
-            requested,
-            max_qty_decimals=int(rules.max_qty_decimals),
-        )
-        residual = max(0.0, requested - constrained_qty)
-        residual_policy = "decimal_precision_residual_tracked" if residual > 0.0 else "none"
-        residual_reason = "max_qty_decimals_constraint" if residual > 0.0 else "none"
-    submitted_notional = constrained_qty * price
-    allowed = bool(constrained_qty >= float(rules.min_qty) and submitted_notional >= float(rules.min_notional_krw))
-    reason = "none" if allowed else "quantity_kernel_h74_closeout_below_exchange_minimum"
-    contract = {
-        "operation": "h74_closeout_qty",
-        "remaining_qty": requested,
-        "reference_price": price,
-        "rules": rules.as_dict(),
-        "qty_authority": "h74_cycle_remaining",
-    }
-    return QuantityKernelResult(
-        side="SELL",
-        requested_qty=float(requested),
-        constrained_qty=float(constrained_qty),
-        submitted_qty=float(constrained_qty if allowed else 0.0),
-        submitted_notional_krw=float(submitted_notional if allowed else 0.0),
-        residual_qty=float(residual if allowed else requested),
-        exchange_submit_field="volume",
-        exchange_order_type=rules.order_type_sell,
-        allowed=allowed,
-        block_reason=reason,
-        quantity_contract_hash=sha256_prefixed(contract),
-        qty_step_authority=rules.qty_step_authority,
-        residual_policy=residual_policy,
-        residual_reason=residual_reason,
-    )
-
-
 __all__ = [
     "OrderRuleSnapshot",
     "QuantityKernelResult",
     "plan_buy_notional",
-    "plan_h74_closeout_qty",
     "plan_sell_qty",
 ]

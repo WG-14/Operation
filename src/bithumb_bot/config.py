@@ -84,12 +84,6 @@ LEGACY_V1_ORDER_SCAN_ENV_KEYS = (
 LOG = logging.getLogger(__name__)
 _MARKET_TOKEN_RE = re.compile(r"^[A-Z0-9]+$")
 _CANONICAL_MARKET_RE = re.compile(r"^[A-Z0-9]+-[A-Z0-9]+$")
-H74_SOURCE_OBSERVATION_APPROVED_PROFILE_BLOCK_REASON = "h74_source_observation_authority_used"
-H74_SOURCE_OBSERVATION_CONTRACT_SCOPE = "h74_source_live_observation_only"
-H74_SOURCE_OBSERVATION_CAPABILITY_MARKER = (
-    "h74_source_observation_authority_verified:"
-    f"{H74_SOURCE_OBSERVATION_CONTRACT_SCOPE}:production_approval_false"
-)
 
 
 def parse_bool_env(key: str, default: str = "false") -> bool:
@@ -410,78 +404,8 @@ def _runtime_selection_kind(strategy_set: object) -> Literal["single_strategy", 
     return "multi_strategy" if bool(getattr(strategy_set, "multi_strategy_enabled", False)) else "single_strategy"
 
 
-@dataclass(frozen=True)
-class H74SourceObservationAuthoritySelection:
-    verified: bool
-    path: str = ""
-    diagnostics: dict[str, object] | None = None
-
-
 def _approved_strategy_profile_path_from_cfg(cfg: Settings) -> str:
     return str(getattr(cfg, "OPERATION_APPROVAL_PATH", "") or "").strip()
-
-
-def _h74_source_observation_authority_selection(
-    cfg: Settings,
-    *,
-    strategy_name: str,
-    approved_profile_path: str,
-) -> H74SourceObservationAuthoritySelection:
-    if str(getattr(cfg, "MODE", "") or "").strip().lower() != "live":
-        return H74SourceObservationAuthoritySelection(verified=False)
-    if approved_profile_path:
-        return H74SourceObservationAuthoritySelection(verified=False)
-    authority_path = (
-        str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-        or os.getenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "").strip()
-    )
-    if not authority_path:
-        return H74SourceObservationAuthoritySelection(verified=False)
-
-    from .h74_authority_alignment import (
-        load_h74_authority_payload,
-        validate_h74_authority_file_env_alignment,
-    )
-    from .h74_observation import (
-        H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
-        H74_SOURCE_OBSERVATION_RISK_POLICY_SOURCE,
-        H74_STRATEGY_NAME,
-        verify_h74_source_observation_authority_file,
-    )
-
-    if str(strategy_name or "").strip().lower() != H74_STRATEGY_NAME:
-        return H74SourceObservationAuthoritySelection(verified=False)
-
-    try:
-        payload = load_h74_authority_payload(authority_path)
-        authority_type = str(payload.get("authority_type") or payload.get("artifact_type") or "")
-        if authority_type == H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
-            alignment = validate_h74_authority_file_env_alignment(authority_path, settings_obj=cfg)
-            authority_type = str(alignment.authority_type)
-            verify_h74_source_observation_authority_file(authority_path, settings_obj=cfg)
-        else:
-            alignment = validate_h74_authority_file_env_alignment(authority_path, settings_obj=cfg)
-            authority_type = str(alignment.authority_type)
-    except Exception as exc:
-        raise LiveModeValidationError(
-            "h74_source_observation_authority_validation_failed: "
-            f"path={authority_path!r}; reason={type(exc).__name__}:{exc}"
-        ) from exc
-
-    return H74SourceObservationAuthoritySelection(
-        verified=True,
-        path=authority_path,
-        diagnostics={
-            "h74_observation_authority_verified": True,
-            "h74_source_observation_authority_verified": True,
-            "h74_authority_type": authority_type,
-            "approved_profile_verification_ok": False,
-            "approved_profile_block_reason": H74_SOURCE_OBSERVATION_APPROVED_PROFILE_BLOCK_REASON,
-            "approved_profile_contract_scope": authority_type or H74_SOURCE_OBSERVATION_CONTRACT_SCOPE,
-            "production_approval": False,
-            "risk_profile_source": H74_SOURCE_OBSERVATION_RISK_POLICY_SOURCE,
-        },
-    )
 
 
 def validate_runtime_profile_bindings_for_live_startup(
@@ -506,21 +430,6 @@ def validate_runtime_profile_bindings_for_live_startup(
         runtime_contract = runtime_contract_from_settings(cfg)
         profile_path = str(runtime_contract.get("profile_selector") or "").strip()
         profile_required = bool(cfg.LIVE_DRY_RUN or cfg.LIVE_REAL_ORDER_ARMED)
-        h74_source_authority_verified = False
-        h74_source_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-        if profile_required and not profile_path and h74_source_authority_path:
-            try:
-                h74_source_authority = _h74_source_observation_authority_selection(
-                    cfg,
-                    strategy_name=str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME),
-                    approved_profile_path=profile_path,
-                )
-                h74_source_authority_verified = bool(h74_source_authority.verified)
-                if h74_source_authority_verified:
-                    h74_source_authority_path = str(h74_source_authority.path or h74_source_authority_path)
-                    profile_required = False
-            except LiveModeValidationError as exc:
-                issues.append(str(exc))
         if expected_profile_modes is None:
             expected_modes, mode_reason = expected_profile_modes_for_runtime(runtime_contract)
         else:
@@ -536,11 +445,11 @@ def validate_runtime_profile_bindings_for_live_startup(
         bindings.append(
             SingleStrategyProfileBinding(
                 strategy_name=str(runtime_contract.get("strategy_name") or cfg.STRATEGY_NAME),
-                profile_path=profile_path or h74_source_authority_path,
+                profile_path=profile_path,
                 profile_hash=profile_result.profile_hash,
             )
         )
-        if not profile_result.ok and not h74_source_authority_verified:
+        if not profile_result.ok:
             issues.append(
                 "approved profile verification failed: "
                 f"reason={profile_result.reason} path={profile_result.profile_path or '-'}"
@@ -614,40 +523,14 @@ def validate_live_strategy_selection(cfg: Settings) -> None:
     if str(cfg.MODE or "").strip().lower() != "live":
         return
     strategy_name = str(cfg.STRATEGY_NAME or "").strip().lower()
-    observation_authority_path = os.getenv("LIVE_OBSERVATION_AUTHORITY_PATH", "").strip()
-    if observation_authority_path:
-        from .h74_observation import H74_STRATEGY_NAME, verify_h74_observation_authority_file
-        from .execution_authority import execution_authority_from_payload
-
-        if strategy_name == H74_STRATEGY_NAME:
-            try:
-                with Path(observation_authority_path).expanduser().open("r", encoding="utf-8") as handle:
-                    observation_authority_payload = json.load(handle)
-                observation_authority = execution_authority_from_payload(observation_authority_payload)
-                if observation_authority.allows("strategy_run"):
-                    raise ValueError("live_observation_authority_must_not_allow_strategy_run")
-                verify_h74_observation_authority_file(observation_authority_path, settings_obj=cfg)
-            except Exception as exc:
-                raise LiveModeValidationError(
-                    "live_observation_authority_validation_failed: "
-                    f"path={observation_authority_path!r}; reason={type(exc).__name__}:{exc}"
-                ) from exc
     approved_profile_path = _approved_strategy_profile_path_from_cfg(cfg)
-    h74_source_authority = _h74_source_observation_authority_selection(
-        cfg,
-        strategy_name=strategy_name,
-        approved_profile_path=approved_profile_path,
-    )
     from .operation_strategy.registry import operation_strategy_runtime_capability_issues as strategy_runtime_capability_issues
 
     issues = strategy_runtime_capability_issues(
         strategy_name,
         live_dry_run=bool(cfg.LIVE_DRY_RUN),
         live_real_order_armed=bool(cfg.LIVE_REAL_ORDER_ARMED),
-        approved_profile_path=(
-            approved_profile_path
-            or (H74_SOURCE_OBSERVATION_CAPABILITY_MARKER if h74_source_authority.verified else "")
-        ),
+        approved_profile_path=approved_profile_path,
         require_promotion_runtime=True,
         require_runtime_replay=True,
         require_runtime_decision_adapter=True,
@@ -735,26 +618,13 @@ def validate_runtime_strategy_set_selection(cfg: Settings) -> None:
                 else ""
             )
         )
-        try:
-            h74_source_authority = _h74_source_observation_authority_selection(
-                cfg,
-                strategy_name=spec.strategy_name,
-                approved_profile_path=approved_profile_path,
-            )
-        except LiveModeValidationError as exc:
-            issues.append(f"{spec.strategy_name}:{exc}")
-            h74_source_authority = H74SourceObservationAuthoritySelection(verified=False)
-
         issues.extend(
             f"{spec.strategy_name}:{issue}"
             for issue in strategy_runtime_capability_issues(
                 spec.strategy_name,
                 live_dry_run=bool(cfg.LIVE_DRY_RUN),
                 live_real_order_armed=bool(cfg.LIVE_REAL_ORDER_ARMED),
-                approved_profile_path=(
-                    approved_profile_path
-                    or (H74_SOURCE_OBSERVATION_CAPABILITY_MARKER if h74_source_authority.verified else "")
-                ),
+                approved_profile_path=approved_profile_path,
                 require_promotion_runtime=True,
                 require_runtime_replay=live_like,
                 require_runtime_decision_adapter=True,
@@ -943,17 +813,6 @@ class Settings:
         os.getenv("STRATEGY_EXIT_SMALL_LOSS_TOLERANCE_RATIO", "0")
     )
     OPERATION_APPROVAL_PATH: str = approved_profile_path_from_env()
-    H74_SOURCE_OBSERVATION_AUTHORITY_PATH: str = os.getenv("H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "").strip()
-    H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH: str = os.getenv(
-        "H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH",
-        "",
-    ).strip()
-    H74_READINESS_CERTIFICATE_PATH: str = os.getenv("H74_READINESS_CERTIFICATE_PATH", "").strip()
-    H74_EXECUTION_PATH_PROBE_RUN_ID: str = os.getenv("H74_EXECUTION_PATH_PROBE_RUN_ID", "").strip()
-    H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH: str = os.getenv(
-        "H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH",
-        "",
-    ).strip()
     LIVE_PERFORMANCE_GATE_ENABLED: bool = parse_bool_env("LIVE_PERFORMANCE_GATE_ENABLED", "true")
     LIVE_PERFORMANCE_GATE_MIN_SAMPLE: int = int(os.getenv("LIVE_PERFORMANCE_GATE_MIN_SAMPLE", "30"))
     LIVE_PERFORMANCE_GATE_RECENT_LIMIT: int = int(os.getenv("LIVE_PERFORMANCE_GATE_RECENT_LIMIT", "200"))
@@ -1430,7 +1289,6 @@ def validate_live_mode_preflight(cfg: Settings) -> None:
         and not bool(cfg.LIVE_DRY_RUN)
         and bool(cfg.LIVE_REAL_ORDER_ARMED)
         and not str(cfg.OPERATION_APPROVAL_PATH or "").strip()
-        and not str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
     ):
         issues.append("approved_profile_missing")
     try:
@@ -2174,16 +2032,6 @@ def live_execution_contract_summary(
         approved_profile_summary = profile_result.audit_fields()
     config_contract = config_contract_metadata(cfg)
     submit_authority_policy = submit_authority_policy_from_settings(cfg)
-    h74_authority_env_alignment: dict[str, object] = {"ok": None, "reason_code": "not_configured"}
-    h74_authority_path = str(getattr(cfg, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-    if h74_authority_path:
-        from .h74_authority_alignment import validate_h74_authority_file_env_alignment
-
-        h74_authority_env_alignment = validate_h74_authority_file_env_alignment(
-            h74_authority_path,
-            settings_obj=cfg,
-            raise_on_mismatch=False,
-        ).as_dict()
     code_provenance = runtime_code_provenance()
     provenance_gate = validate_runtime_code_provenance_for_live_real_order(
         cfg,
@@ -2213,7 +2061,6 @@ def live_execution_contract_summary(
         "runtime_code_provenance_gate": provenance_gate,
         "approved_profile": approved_profile_summary,
         "runtime_profile_binding": profile_binding_summary,
-        "h74_authority_env_alignment": h74_authority_env_alignment,
         "runtime_selection_kind": profile_binding_summary.get("runtime_selection_kind"),
         "runtime_strategy_set_source": profile_binding_summary.get("runtime_strategy_set_source"),
         "profile_binding_kind": profile_binding_summary.get("profile_binding_kind"),
@@ -2258,11 +2105,6 @@ def log_live_execution_contract(
     )
     config_contract = summary.get("config_contract") if isinstance(summary.get("config_contract"), dict) else {}
     lint_findings = summary.get("live_env_contract_lint_findings") or []
-    h74_authority_env_alignment = (
-        summary.get("h74_authority_env_alignment")
-        if isinstance(summary.get("h74_authority_env_alignment"), dict)
-        else {}
-    )
     lint_reason_codes = [
         str(item.get("reason_code"))
         for item in lint_findings
@@ -2336,12 +2178,6 @@ def log_live_execution_contract(
             env_file_hash_prefix=explicit_env_file.get("content_hash_prefix"),
             live_env_contract_lints=",".join(str(item) for item in summary.get("live_env_contract_lints") or []) or "none",
             live_env_contract_lint_reason_codes=",".join(lint_reason_codes) or "none",
-            h74_authority_env_alignment_ok=h74_authority_env_alignment.get("ok"),
-            h74_authority_env_alignment_reason_code=h74_authority_env_alignment.get("reason_code"),
-            h74_authority_env_alignment_mismatched_keys=",".join(
-                str(item) for item in h74_authority_env_alignment.get("mismatched_keys") or []
-            )
-            or "none",
             config_schema_version=config_contract.get("config_schema_version"),
             config_spec_hash=config_contract.get("config_spec_hash"),
             settings_effective_hash=config_contract.get("settings_effective_hash"),

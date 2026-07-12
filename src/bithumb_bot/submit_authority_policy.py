@@ -7,13 +7,10 @@ from typing import Mapping
 
 
 TARGET_DELTA_SUBMIT_SOURCE = "target_delta"
-H74_SOURCE_OBSERVATION_SUBMIT_SOURCE = "h74_source_observation"
-H74_SOURCE_OBSERVATION_SUBMIT_AUTHORITY = "h74_fixed_fill_quote_notional_buy"
 TARGET_DELTA_SUBMIT_AUTHORITIES = frozenset(
     {
         "canonical_target_delta_sizing",
         "target_position_delta",
-        H74_SOURCE_OBSERVATION_SUBMIT_AUTHORITY,
     }
 )
 RESIDUAL_SUBMIT_SOURCE = "residual_inventory"
@@ -123,29 +120,15 @@ def live_real_order_enabled(settings_obj: object) -> bool:
     )
 
 
-def h74_source_observation_submit_enabled(settings_obj: object) -> bool:
-    return bool(
-        live_real_order_enabled(settings_obj)
-        and str(getattr(settings_obj, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-    )
-
-
 def submit_authority_policy_from_settings(settings_obj: object) -> SubmitAuthorityPolicy:
     if live_real_order_enabled(settings_obj):
-        h74_enabled = h74_source_observation_submit_enabled(settings_obj)
-        target_sources = [TARGET_DELTA_SUBMIT_SOURCE]
-        target_authorities = set(TARGET_DELTA_SUBMIT_AUTHORITIES)
-        if h74_enabled:
-            target_sources.append(H74_SOURCE_OBSERVATION_SUBMIT_SOURCE)
-        else:
-            target_authorities.discard(H74_SOURCE_OBSERVATION_SUBMIT_AUTHORITY)
         return SubmitAuthorityPolicy(
             submit_authority_mode="live_real_order_target_delta_only",
             live_real_order_requires_target_delta=True,
             legacy_lot_native_compat_enabled=False,
-            allowed_submit_plan_sources=tuple(target_sources + [RESIDUAL_SUBMIT_SOURCE]),
+            allowed_submit_plan_sources=(TARGET_DELTA_SUBMIT_SOURCE, RESIDUAL_SUBMIT_SOURCE),
             allowed_submit_plan_authorities=tuple(
-                sorted(target_authorities | RESIDUAL_SUBMIT_AUTHORITIES)
+                sorted(TARGET_DELTA_SUBMIT_AUTHORITIES | RESIDUAL_SUBMIT_AUTHORITIES)
             ),
         )
     if str(getattr(settings_obj, "MODE", "") or "").strip().lower() == "live":
@@ -157,7 +140,6 @@ def submit_authority_policy_from_settings(settings_obj: object) -> SubmitAuthori
                 sorted(
                     {
                         TARGET_DELTA_SUBMIT_SOURCE,
-                        H74_SOURCE_OBSERVATION_SUBMIT_SOURCE,
                         RESIDUAL_SUBMIT_SOURCE,
                     }
                     | LEGACY_BUY_SUBMIT_SOURCES
@@ -179,7 +161,6 @@ def submit_authority_policy_from_settings(settings_obj: object) -> SubmitAuthori
             sorted(
                 {
                     TARGET_DELTA_SUBMIT_SOURCE,
-                    H74_SOURCE_OBSERVATION_SUBMIT_SOURCE,
                     RESIDUAL_SUBMIT_SOURCE,
                     "research_backtest",
                 }
@@ -303,7 +284,7 @@ def evaluate_submit_authority_policy(
                     return decision(False, final_error)
             if source not in policy.allowed_submit_plan_sources:
                 return decision(False, "submit_plan_source_not_allowed_for_mode")
-            if source not in {TARGET_DELTA_SUBMIT_SOURCE, H74_SOURCE_OBSERVATION_SUBMIT_SOURCE}:
+            if source != TARGET_DELTA_SUBMIT_SOURCE:
                 return decision(False, "live_real_order_target_plan_invalid_source")
             if authority not in policy.allowed_submit_plan_authorities:
                 return decision(False, "submit_plan_authority_not_allowed_for_mode")
@@ -325,29 +306,6 @@ def evaluate_submit_authority_policy(
                 return decision(False, "live_real_order_target_plan_missing_allocation_decision_hash")
             if not str(payload.get("strategy_contribution_hash") or "").strip():
                 return decision(False, "live_real_order_target_plan_missing_strategy_contribution_hash")
-            if source == H74_SOURCE_OBSERVATION_SUBMIT_SOURCE:
-                if side != "BUY":
-                    return decision(False, "h74_source_observation_requires_buy")
-                if authority != H74_SOURCE_OBSERVATION_SUBMIT_AUTHORITY:
-                    return decision(False, "h74_source_observation_invalid_authority")
-                if str(payload.get("submit_semantics") or "") != "quote_notional_market_buy":
-                    return decision(False, "h74_source_observation_submit_semantics_missing")
-                if str(payload.get("sizing_mode") or "") != "quote_notional":
-                    return decision(False, "h74_source_observation_sizing_mode_missing")
-                try:
-                    quote_notional_krw = float(payload.get("quote_notional_krw") or 0.0)
-                except (TypeError, ValueError):
-                    quote_notional_krw = 0.0
-                if quote_notional_krw <= 0.0:
-                    return decision(False, "h74_source_observation_quote_notional_missing")
-                if str(payload.get("fill_qty_authority") or "") != "broker_fill":
-                    return decision(False, "h74_source_observation_fill_qty_authority_missing")
-                if str(payload.get("position_mode") or "") != "fixed_fill_qty_until_exit":
-                    return decision(False, "h74_source_observation_position_mode_missing")
-                if str(payload.get("exchange_order_type") or "") != "price":
-                    return decision(False, "h74_source_observation_order_type_not_price")
-                if str(payload.get("exchange_submit_field") or "") != "price":
-                    return decision(False, "h74_source_observation_submit_field_not_price")
             return decision(True, "allowed_target_delta")
         if normalized_kind == "buy":
             return decision(False, "live_real_order_buy_plan_rejected_target_delta_required")

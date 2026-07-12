@@ -81,12 +81,6 @@ Spec hash: `sha256:5c0e8fee27152e2215f307e8ce1971280b385203c7a013b46e9d503f6a76b
 | `EXECUTION_TOP_OF_BOOK_REQUIRED` | string | common |  | no | no | no | P1 |  | EXECUTION_TOP_OF_BOOK_REQUIRED runtime configuration. |
 | `EXECUTION_TRADE_TICK_REQUIRED` | string | common |  | no | no | no | P1 |  | EXECUTION_TRADE_TICK_REQUIRED runtime configuration. |
 | `FEE_RATE` | number | common |  | no | no | no | P1 |  | FEE_RATE runtime configuration. |
-| `H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH` | string | common |  | no | no | no | P1 |  | H74_EXECUTION_PATH_PROBE_PRE_SUBMIT_EVIDENCE_PATH runtime configuration. |
-| `H74_EXECUTION_PATH_PROBE_RUN_ID` | string | common |  | no | no | no | P1 |  | H74_EXECUTION_PATH_PROBE_RUN_ID runtime configuration. |
-| `H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY` | string | internal |  | no | no | no | internal |  | H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY runtime configuration. |
-| `H74_READINESS_CERTIFICATE_PATH` | string | common |  | no | no | no | P1 |  | H74_READINESS_CERTIFICATE_PATH runtime configuration. |
-| `H74_SOURCE_OBSERVATION_AUTHORITY_PATH` | string | common |  | no | no | no | P1 |  | H74_SOURCE_OBSERVATION_AUTHORITY_PATH runtime configuration. |
-| `H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH` | string | common |  | no | no | no | P1 |  | H74_SOURCE_OBSERVATION_LIVE_PIPELINE_SMOKE_EVIDENCE_PATH runtime configuration. |
 | `HEALTH_MAX_CANDLE_AGE_SEC` | number | common |  | no | no | no | P1 |  | HEALTH_MAX_CANDLE_AGE_SEC runtime configuration. |
 | `HEALTH_MAX_ERROR_COUNT` | number | common |  | no | no | no | P1 |  | HEALTH_MAX_ERROR_COUNT runtime configuration. |
 | `INTERVAL` | string | common |  | no | no | no | P1 |  | INTERVAL runtime configuration. |

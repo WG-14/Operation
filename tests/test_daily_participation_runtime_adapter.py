@@ -73,7 +73,7 @@ def test_get_runtime_decision_adapter_daily_participation_sma_returns_adapter() 
     assert isinstance(adapter, DailyParticipationSmaRuntimeDecisionAdapter)
 
 
-def test_runtime_adapter_does_not_replace_base_sma_decision_for_final_h74_signal() -> None:
+def test_runtime_adapter_does_not_replace_base_sma_decision_for_final_daily_signal() -> None:
     source = inspect.getsource(daily_participation_sma._daily_runtime_result_from_base)
 
     assert "replace(\n        base_decision" not in source

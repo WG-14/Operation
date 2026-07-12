@@ -28,17 +28,9 @@ uv run bithumb-bot reconcile
 uv run bithumb-bot recovery-report
 ```
 
-For H74 long-run live operation, also generate and validate the readiness certificate before arming:
-
-```bash
-uv run bithumb-bot h74-readiness-certificate --no-submit --source-artifact "$H74_SOURCE_ARTIFACT" --json > "$H74_READINESS_CERTIFICATE"
-uv run bithumb-bot h74-long-run-preflight --certificate "$H74_READINESS_CERTIFICATE" --json
-```
-
 Pass criteria:
 
 - `broker-diagnose` returns `overall=PASS`
-- H74 long-run readiness is not satisfied by `broker-diagnose` alone; `h74-long-run-preflight` must return `status=pass`
 - The certificate must include KST10 positive rehearsal coverage and `negative_rehearsal_kst_18_blocks_entry=true`
 - The certificate must include a non-empty `entry_authority_gate_hash`
 - BUY `price=None` / BUY market support is judged from `broker-diagnose`'s `BUY price=None chance resolution` output.

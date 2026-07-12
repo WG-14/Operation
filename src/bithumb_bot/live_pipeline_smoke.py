@@ -166,7 +166,6 @@ def build_live_pipeline_smoke_plan(
         market=str(market or settings.PAIR),
     )
     payload["readiness_scope"] = "operator_pipeline_only"
-    payload["normal_h74_readiness"] = False
     return payload
 
 
@@ -569,7 +568,6 @@ def _summary_for_step(
         "market_reference_ts": market_reference.ts,
         "market_reference_bid_price": market_reference.bid_price,
         "market_reference_ask_price": market_reference.ask_price,
-        "normal_h74_strategy_performance_authority": False,
         "normal_strategy_gate_modified": False,
         "strategy_performance_gate": {
             "enabled": True,
@@ -1107,7 +1105,6 @@ def run_live_pipeline_smoke(
         "status": "passed",
         "execution_mode": "live_pipeline_smoke",
         "readiness_scope": "operator_pipeline_only",
-        "normal_h74_readiness": False,
         "run_id": smoke_run_id,
         "cycles_requested": int(cycles),
         "orders_expected": int(max_orders),
@@ -1142,7 +1139,6 @@ def run_live_pipeline_smoke(
         "execution_mode_metadata": {
             "execution_mode": "live_pipeline_smoke",
             "readiness_scope": "operator_pipeline_only",
-            "normal_h74_readiness": False,
             "candle_checkpoint_authority": "smoke_step_checkpoint",
             "market_reference_source": (
                 next(iter(market_reference_sources))
@@ -1150,7 +1146,6 @@ def run_live_pipeline_smoke(
                 else "mixed"
             ),
             "market_reference_sources": sorted(market_reference_sources),
-            "normal_h74_strategy_performance_authority": False,
         },
     }
 
@@ -1179,7 +1174,6 @@ def _failure_payload(
         "status": "failed",
         "execution_mode": "live_pipeline_smoke",
         "readiness_scope": "operator_pipeline_only",
-        "normal_h74_readiness": False,
         "run_id": run_id,
         "reason": str(reason),
         "failed_step": int(step),

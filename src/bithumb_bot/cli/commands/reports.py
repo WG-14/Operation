@@ -185,26 +185,6 @@ def _risk_layer_replay(args: argparse.Namespace, _context) -> None:
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
 
-def _h74_observation_report(args: argparse.Namespace, _context) -> int:
-    from bithumb_bot.h74_observation_report import cmd_h74_observation_report
-
-    return int(
-        cmd_h74_observation_report(
-            db_path=str(args.db) if args.db else None,
-            days=int(args.days),
-            as_json=bool(args.json),
-            authority=args.authority,
-            authority_hash=args.authority_hash,
-            from_date=args.from_date,
-            to_date=args.to_date,
-            strategy_instance_id=args.strategy_instance_id,
-            pair=args.pair,
-            interval=args.interval,
-            participation_policy_hash=args.participation_policy_hash,
-        )
-    )
-
-
 def command_specs() -> list[CommandSpec]:
     return [
         make_spec("report", domain="reports", handler=_report, build=lambda p: p.add_argument("--days", type=int, default=30)),
@@ -212,7 +192,6 @@ def command_specs() -> list[CommandSpec]:
         make_spec("risk-report", domain="reports", handler=_risk, help="show daily-loss baseline and recent risk evaluations", build=_build_limit_json(20), json_output_supported=True),
         make_spec("fee-diagnostics", domain="reports", handler=_fee_diagnostics, help="validate real fee application against recent fills/roundtrips", build=_build_fee_diagnostics, json_output_supported=True),
         make_spec("strategy-report", domain="reports", handler=_strategy_report, help="strategy performance comparison report", description="Aggregate trade_lifecycles by strategy/exit-rule/date range for experiments.", build=_build_strategy_report, produces_artifact=True, json_output_supported=True),
-        make_spec("h74-observation-report", domain="reports", handler=_h74_observation_report, help="h74 7-day live observation report", description="Report h74 live-observation operational behavior without using source backtest PnL as live PnL.", build=_build_h74_observation_report, produces_artifact=True, json_output_supported=True),
         make_spec("experiment-report", domain="reports", handler=_experiment_report, help="expectancy validation report for small live experiments", description="Report realized PnL/sample distribution/time-regime bias for experiment interpretation.", build=_build_experiment_report, produces_artifact=True, json_output_supported=True),
         make_spec("cash-drift-report", domain="reports", handler=_cash_drift, help="audit broker cash versus local ledger and recent external cash adjustments", description="Read-only cash drift diagnostic for broker/local comparison and adjustment review.", build=_build_cash_drift, json_output_supported=True),
         make_spec("decision-telemetry", domain="reports", handler=_decision_telemetry, help="summary of HOLD/blocked decision telemetry", build=lambda p: p.add_argument("--limit", type=int, default=200)),
@@ -246,20 +225,6 @@ def _build_strategy_report(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--group-by", default="strategy_name,exit_rule_name", help="comma-separated axes: strategy_name,exit_rule_name,pair")
     parser.add_argument("--observation-window-bars", type=int, default=5)
     parser.add_argument("--min-observation-sample", type=int, default=10)
-    parser.add_argument("--json", action="store_true")
-
-
-def _build_h74_observation_report(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--db")
-    parser.add_argument("--authority", help="h74 live observation authority artifact path")
-    parser.add_argument("--authority-hash", help="authority hash to scope report rows")
-    parser.add_argument("--from", dest="from_date", help="KST start date, inclusive (YYYY-MM-DD)")
-    parser.add_argument("--to", dest="to_date", help="KST end date, exclusive (YYYY-MM-DD)")
-    parser.add_argument("--strategy-instance-id")
-    parser.add_argument("--participation-policy-hash")
-    parser.add_argument("--pair", default="KRW-BTC")
-    parser.add_argument("--interval", default="1m")
     parser.add_argument("--json", action="store_true")
 
 

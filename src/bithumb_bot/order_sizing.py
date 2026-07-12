@@ -16,7 +16,7 @@ from .fee_authority import (
 from .broker.order_rules import get_effective_order_rules
 from .lifecycle import LotDefinitionSnapshot
 from .lot_model import build_market_lot_rules, lot_count_to_qty
-from .quantity_kernel import OrderRuleSnapshot, plan_buy_notional, plan_h74_closeout_qty, plan_sell_qty
+from .quantity_kernel import OrderRuleSnapshot, plan_buy_notional, plan_sell_qty
 
 _DECIMAL_ZERO = Decimal("0")
 
@@ -641,7 +641,6 @@ def build_target_delta_execution_sizing(
     min_notional_krw: float | None,
     max_qty_decimals: int | None = None,
     authority_source: str = "target_delta",
-    h74_closeout: bool = False,
     qty_step_authority: str = "exchange",
 ) -> TargetDeltaExecutionSizingPlan:
     normalized_side = str(side or "NONE").upper()
@@ -697,7 +696,6 @@ def build_target_delta_execution_sizing(
     if resolved_min_notional <= 0.0:
         return _blocked("missing_order_rule_min_notional_krw")
 
-    is_h74_closeout = bool(h74_closeout and normalized_side == "SELL")
     effective_qty_step = _exchange_qty_step(
         qty_step=float(resolved_qty_step),
         min_qty=float(resolved_min_qty),
@@ -705,7 +703,7 @@ def build_target_delta_execution_sizing(
     )
     kernel_rules = OrderRuleSnapshot(
         min_qty=float(resolved_min_qty),
-        qty_step=float(resolved_qty_step if is_h74_closeout else effective_qty_step),
+        qty_step=float(effective_qty_step),
         max_qty_decimals=int(resolved_decimals),
         min_notional_krw=float(resolved_min_notional),
         qty_step_authority=str(qty_step_authority or ("exchange" if resolved_qty_step > 0 else "local_fallback_min_qty")),
@@ -717,12 +715,6 @@ def build_target_delta_execution_sizing(
             rules=kernel_rules,
         )
         if normalized_side == "BUY"
-        else plan_h74_closeout_qty(
-            remaining_qty=float(raw_desired_qty),
-            reference_price=float(price),
-            rules=kernel_rules,
-        )
-        if is_h74_closeout
         else plan_sell_qty(
             requested_qty=float(raw_desired_qty),
             reference_price=float(price),

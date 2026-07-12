@@ -82,19 +82,6 @@ Submit authority is mode-aware. The policy considers `MODE`, `LIVE_DRY_RUN`,
 - Paper and research compatibility are separate policy modes and do not imply
   live real-order eligibility.
 
-## Operator Smoke vs H74 Readiness
-
-`live-pipeline-smoke` validates bounded operator broker plumbing and settlement
-behavior only. Its artifact scope is `operator_pipeline_only`, and
-`normal_h74_readiness=false` must not be interpreted as h74 canary or live
-trading readiness.
-
-Normal h74 readiness is a separate `h74_normal_path` artifact produced by
-`h74-live-rehearsal`. That rehearsal must use the normal
-`daily_participation_sma` path, target-delta submit authority, pre-submit risk,
-and submit-authority gates with the broker submit transport suppressed.
-Operator smoke authority hashes are not normal h74 pre-submit proof.
-
 `SubmitAuthorityPolicy` is the single mode-aware admission matrix. Both
 `LiveSignalExecutionService` and `broker/live.py` consult it before creating or
 passing any submit intent. This means a direct lower-boundary call to

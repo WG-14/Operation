@@ -18,7 +18,6 @@ SMOKE_DECISION_CONTEXT = {
     "strategy_performance_gate_enforced": False,
     "promotion_evidence": False,
     "approved_profile_evidence": False,
-    "h74_bypass": False,
     "normal_strategy_gate_modified": False,
 }
 
@@ -74,7 +73,6 @@ class LivePipelineSmokeDecisionProvider:
             "execution_mode": "live_pipeline_smoke",
             "candle_checkpoint_authority": "smoke_step_checkpoint",
             "market_reference_source": "latest_closed_candle_or_top_of_book",
-            "normal_h74_strategy_performance_authority": False,
         }
 
     def mark_step_complete(self) -> None:

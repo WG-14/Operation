@@ -186,9 +186,152 @@ class TargetPositionDecision:
     target_closeout_requested: bool = False
     target_strategy_signal_source: str = ""
     position_mode: str = "continuous_notional_target"
-    h74_cycle_id: str = ""
-    h74_remaining_cycle_qty: float | None = None
-    h74_no_submit_reason: str = ""
+
+
+@dataclass(frozen=True)
+class TargetPositionState:
+    pair: str
+    target_exposure_krw: float
+    target_qty: float
+    last_signal: str
+    last_decision_id: int | None
+    last_reference_price: float
+    updated_ts: int
+    target_origin: str = ""
+    adoption_reason: str = ""
+    adopted_broker_qty: float | None = None
+    adopted_broker_exposure_krw: float | None = None
+    created_from_signal: str = ""
+    actual_target_authority: str = ACTUAL_PAIR_TARGET_AUTHORITY
+    actual_target_authority_scope: str = ACTUAL_PAIR_TARGET_AUTHORITY_SCOPE
+    actual_target_source: str = ""
+    runtime_strategy_set_manifest_hash: str = ""
+    runtime_strategy_decision_bundle_hash: str = ""
+    portfolio_allocation_decision_hash: str = ""
+    portfolio_target_hash: str = ""
+    execution_plan_batch_hash: str = ""
+    execution_submit_plan_hash: str = ""
+    actual_target_provenance_hash: str = ""
+    actual_target_provenance_json: str = "{}"
+
+
+def build_actual_pair_target_provenance(
+    *,
+    pair: str,
+    runtime_strategy_set_manifest_hash: str = "",
+    runtime_strategy_decision_bundle_hash: str = "",
+    portfolio_allocation_decision_hash: str = "",
+    portfolio_target_hash: str = "",
+    execution_plan_batch_hash: str = "",
+    execution_submit_plan_hash: str = "",
+    source: str = ACTUAL_PAIR_TARGET_SOURCE,
+) -> dict[str, object]:
+    payload = {
+        "schema_version": 1,
+        "authority": ACTUAL_PAIR_TARGET_AUTHORITY,
+        "authority_scope": ACTUAL_PAIR_TARGET_AUTHORITY_SCOPE,
+        "pair": str(pair),
+        "source": str(source or ACTUAL_PAIR_TARGET_SOURCE),
+        "provenance_complete": all(
+            bool(str(value or "").strip())
+            for value in (
+                runtime_strategy_set_manifest_hash,
+                runtime_strategy_decision_bundle_hash,
+                portfolio_allocation_decision_hash,
+                portfolio_target_hash,
+                execution_plan_batch_hash,
+                execution_submit_plan_hash,
+            )
+        ),
+        "runtime_strategy_set_manifest_hash": str(runtime_strategy_set_manifest_hash or ""),
+        "runtime_strategy_decision_bundle_hash": str(runtime_strategy_decision_bundle_hash or ""),
+        "portfolio_allocation_decision_hash": str(portfolio_allocation_decision_hash or ""),
+        "portfolio_target_hash": str(portfolio_target_hash or ""),
+        "execution_plan_batch_hash": str(execution_plan_batch_hash or ""),
+        "execution_submit_plan_hash": str(execution_submit_plan_hash or ""),
+        "strategy_virtual_lifecycle_authority": "non_authoritative_observation_only",
+        "live_submit_authority": True,
+        "live_submit_authority_source": "allocator_derived_pair_target_only",
+    }
+    payload["actual_target_provenance_hash"] = sha256_prefixed(payload)
+    return payload
+
+
+@dataclass(frozen=True)
+class StartupTargetPositionPolicyDecision:
+    policy_action: str
+    target_exposure_krw: float | None
+    target_qty: float | None
+    target_origin: str
+    adoption_reason: str
+    adopted_broker_qty: float | None
+    adopted_broker_exposure_krw: float | None
+    created_from_signal: str
+    would_submit_on_startup: bool
+    block_reason: str
+    position_truth_state: str
+    dust_classification: str
+    existing_state_present: bool
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "target_policy_action": self.policy_action,
+            "target_origin": self.target_origin,
+            "target_adoption_reason": self.adoption_reason,
+            "target_adopted_broker_qty": self.adopted_broker_qty,
+            "target_adopted_exposure_krw": self.adopted_broker_exposure_krw,
+            "target_startup_policy_state": self.position_truth_state,
+            "target_existing_state_present": bool(self.existing_state_present),
+            "target_missing_state_resolution": self.policy_action,
+            "target_closeout_requested": self.target_origin == TARGET_ORIGIN_OPERATOR_CLOSEOUT,
+            "target_strategy_signal_source": self.created_from_signal,
+            "target_would_submit_on_startup": bool(self.would_submit_on_startup),
+            "actual_target_authority": ACTUAL_PAIR_TARGET_AUTHORITY,
+            "actual_target_authority_scope": ACTUAL_PAIR_TARGET_AUTHORITY_SCOPE,
+            "target_startup_policy_block_reason": self.block_reason,
+        }
+
+
+@dataclass(frozen=True)
+class TargetPositionDecision:
+    engine_mode: str
+    raw_signal: str
+    previous_target_exposure_krw: float | None
+    new_target_exposure_krw: float | None
+    hold_policy: str
+    state_persistence: str
+    reference_price: float | None
+    current_qty: float | None
+    current_exposure_krw: float | None
+    target_qty: float | None
+    delta_qty: float | None
+    delta_notional_krw: float | None
+    delta_side: str
+    would_submit: bool
+    submit_qty: float | None
+    submit_notional_krw: float | None
+    block_reason: str
+    position_truth_state: str
+    dust_classification: str
+    order_rule_min_qty: float | None
+    order_rule_min_notional_krw: float | None
+    order_rule_qty_step: float | None = None
+    order_rule_authority: str = ""
+    order_rule_authority_source: str = ""
+    order_rule_authority_source_mode: str = ""
+    order_rule_min_qty_source: str = ""
+    order_rule_min_notional_krw_source: str = ""
+    target_policy_action: str = ""
+    target_origin: str = ""
+    target_adoption_reason: str = ""
+    target_adopted_broker_qty: float | None = None
+    target_adopted_exposure_krw: float | None = None
+    target_startup_policy_state: str = ""
+    target_existing_state_present: bool = False
+    target_missing_state_resolution: str = ""
+    target_closeout_requested: bool = False
+    target_strategy_signal_source: str = ""
+    position_mode: str = "continuous_notional_target"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -230,9 +373,6 @@ class TargetPositionDecision:
             "target_closeout_requested": bool(self.target_closeout_requested),
             "target_strategy_signal_source": self.target_strategy_signal_source,
             "position_mode": self.position_mode,
-            "h74_cycle_id": self.h74_cycle_id,
-            "h74_remaining_cycle_qty": self.h74_remaining_cycle_qty,
-            "h74_no_submit_reason": self.h74_no_submit_reason,
         }
 
 
@@ -519,11 +659,6 @@ def build_target_position_decision(
         "target_closeout_requested": bool(payload.get("target_closeout_requested")),
         "target_strategy_signal_source": str(payload.get("target_strategy_signal_source") or signal),
         "position_mode": str(settings.position_mode or payload.get("position_mode") or "continuous_notional_target"),
-        "h74_cycle_id": str(payload.get("h74_cycle_id") or payload.get("cycle_id") or ""),
-        "h74_remaining_cycle_qty": _as_float(
-            payload.get("remaining_cycle_qty", payload.get("h74_remaining_cycle_qty"))
-        ),
-        "h74_no_submit_reason": "",
     }
 
     def _decision(**overrides: object) -> TargetPositionDecision:
@@ -550,64 +685,6 @@ def build_target_position_decision(
         target_exposure = max(0.0, float(previous_target_exposure_krw))
     else:
         target_exposure = None
-
-    fixed_h74 = str(base["position_mode"]) == POSITION_MODE_FIXED_FILL_QTY_UNTIL_EXIT
-    if fixed_h74 and signal == "HOLD":
-        return _decision(
-            new_target_exposure_krw=previous_target_exposure_krw,
-            target_qty=None,
-            delta_qty=0.0,
-            delta_notional_krw=0.0,
-            delta_side="NONE",
-            submit_qty=0.0,
-            submit_notional_krw=0.0,
-            block_reason="h74_fixed_position_hold",
-            position_truth_state="h74_cycle_holding",
-            dust_classification="not_applicable",
-            h74_no_submit_reason="h74_fixed_position_hold",
-        )
-
-    if fixed_h74 and signal == "SELL":
-        cycle_id = str(base["h74_cycle_id"] or "")
-        remaining_qty = base["h74_remaining_cycle_qty"]
-        inventory_error = str(payload.get("h74_cycle_inventory_error") or "").strip()
-        if inventory_error:
-            return _decision(
-                new_target_exposure_krw=0.0,
-                block_reason=inventory_error,
-                position_truth_state="blocked",
-                h74_no_submit_reason=inventory_error,
-            )
-        if not cycle_id:
-            return _decision(
-                new_target_exposure_krw=0.0,
-                block_reason="h74_cycle_id_required_for_exit",
-                position_truth_state="blocked",
-            )
-        if remaining_qty is None:
-            return _decision(
-                new_target_exposure_krw=0.0,
-                block_reason="h74_remaining_cycle_qty_required_for_exit",
-                position_truth_state="blocked",
-            )
-        if price is None or price <= 0.0:
-            return _decision(new_target_exposure_krw=0.0, block_reason="missing_reference_price")
-        cycle_qty = max(0.0, float(remaining_qty))
-        return _decision(
-            new_target_exposure_krw=0.0,
-            current_qty=cycle_qty,
-            current_exposure_krw=cycle_qty * float(price),
-            target_qty=0.0,
-            delta_qty=-cycle_qty,
-            delta_notional_krw=-(cycle_qty * float(price)),
-            delta_side="SELL" if cycle_qty > 1e-12 else "NONE",
-            would_submit=bool(cycle_qty > 1e-12),
-            submit_qty=cycle_qty,
-            submit_notional_krw=cycle_qty * float(price),
-            block_reason="none" if cycle_qty > 1e-12 else "h74_remaining_cycle_qty_zero",
-            position_truth_state="h74_cycle_exit_due",
-            dust_classification="cycle_owned_qty",
-        )
 
     if target_exposure is None:
         return _decision(
