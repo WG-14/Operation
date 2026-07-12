@@ -1031,69 +1031,6 @@ class _RecoverSuccessBroker:
         )
 
 
-class _RecoverH74Broker(_RecoverSuccessBroker):
-    def get_order(
-        self, *, client_order_id: str, exchange_order_id: str | None = None
-    ) -> BrokerOrder:
-        return BrokerOrder(
-            client_order_id,
-            exchange_order_id,
-            "BUY",
-            "FILLED",
-            None,
-            0.0008,
-            0.0008,
-            1,
-            1,
-        )
-
-    def get_fills(
-        self,
-        *,
-        client_order_id: str | None = None,
-        exchange_order_id: str | None = None,
-    ) -> list[BrokerFill]:
-        return [
-            BrokerFill(
-                client_order_id=str(client_order_id or ""),
-                fill_id="recover_fill_1",
-                fill_ts=1000,
-                price=100000000.0,
-                qty=0.0008,
-                fee=32.0,
-                exchange_order_id=exchange_order_id,
-            )
-        ]
-
-    def get_open_orders(
-            self,
-            *,
-            exchange_order_ids: list[str] | tuple[str, ...] | None = None,
-            client_order_ids: list[str] | tuple[str, ...] | None = None,
-        ):
-        return []
-
-    def get_recent_orders(
-            self,
-            *,
-            limit: int = 100,
-            exchange_order_ids: list[str] | tuple[str, ...] | None = None,
-            client_order_ids: list[str] | tuple[str, ...] | None = None,
-        ):
-        return []
-
-    def get_recent_fills(self, *, limit: int = 100):
-        return []
-
-    def get_balance(self) -> BrokerBalance:
-        return BrokerBalance(
-            cash_available=0.0,
-            cash_locked=0.0,
-            asset_available=0.01,
-            asset_locked=0.0,
-        )
-
-
 class _RecoverAmbiguousBroker(_RecoverSuccessBroker):
     def get_order(
         self, *, client_order_id: str, exchange_order_id: str | None = None
