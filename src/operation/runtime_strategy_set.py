@@ -1703,12 +1703,9 @@ class RuntimeStrategyDecisionResultBundle:
             raise ValueError("runtime_strategy_result_duplicate_instance")
         for result in self.results:
             result_instance_id = _result_strategy_instance_id(result)
-            result_name = str(getattr(result.decision, "strategy_name", "")).strip().lower()
             spec = self.strategy_set.spec_for_instance(result_instance_id)
             if spec is None:
-                spec = self.strategy_set.spec_for_strategy(result_name)
-            if spec is None:
-                raise ValueError(f"runtime_strategy_result_set_mismatch:extra={result_name}")
+                raise ValueError(f"runtime_strategy_spec_missing:{result_instance_id}")
             base_context = getattr(result, "base_context", {})
             through_ts = (
                 base_context.get("through_ts_ms")
@@ -1758,11 +1755,7 @@ class RuntimeStrategyDecisionResultBundle:
         return float(self.results[0].market_price)
 
     def _result_instance_id(self, result: RuntimeStrategyDecisionResult) -> str:
-        explicit = _result_strategy_instance_id(result)
-        if explicit != str(getattr(result.decision, "strategy_name", "")).strip().lower():
-            return explicit
-        spec = self.strategy_set.spec_for_strategy(explicit)
-        return derive_strategy_instance_id(spec) if spec is not None else explicit
+        return _result_strategy_instance_id(result)
 
     def as_dict(self) -> dict[str, object]:
         return {

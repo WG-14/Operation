@@ -17,6 +17,7 @@ OPERATION_TESTS=(
   tests/test_operation_cli_surface.py
   tests/test_offline_paper_runtime.py
   tests/test_sma_runtime_feature_snapshot.py
+  tests/test_multi_strategy_execution_planning.py
   tests/test_config_live_db_path_guard.py
   tests/test_paths.py
   tests/test_run_lock.py

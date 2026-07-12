@@ -10,6 +10,7 @@ REQUIRED = {
     "test_exchange_removal_contract.py",
     "test_offline_paper_runtime.py",
     "test_sma_runtime_feature_snapshot.py",
+    "test_multi_strategy_execution_planning.py",
     "test_operation_cli_surface.py",
     "test_run_lock.py",
     "test_fill_dedupe.py",

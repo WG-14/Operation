@@ -40,9 +40,11 @@ from .runtime_strategy_set import (
     RuntimeDecisionRequestBuilder,
     RuntimeStrategyDecisionResultBundle,
     RuntimeStrategySet,
+    SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON,
     derive_strategy_instance_id,
     runtime_scope_contract,
     runtime_strategy_set_manifest_hash,
+    validate_runtime_strategy_set_market_scope,
 )
 from .strategy_risk_profile import strategy_risk_profile_from_profile_payload
 from .strategy_policy_contract import StrategyDecisionV2
@@ -453,6 +455,39 @@ def _allocation_single_pair_invariant_context(decision, *, runtime_pair: str) ->
         "runtime_pair": str(runtime_pair),
         "single_pair_allocation_invariant_checked": True,
     }
+
+
+def _runtime_strategy_set_scope_error(
+    strategy_set: RuntimeStrategySet,
+    *,
+    settings_obj: object,
+) -> str | None:
+    """Keep direct planner callers inside the production single-scope contract."""
+    issues = validate_runtime_strategy_set_market_scope(strategy_set, settings_obj)
+    if not issues:
+        return None
+    if any(MULTI_PAIR_RUNTIME_UNSUPPORTED_REASON in issue for issue in issues):
+        return MULTI_PAIR_RUNTIME_UNSUPPORTED_REASON
+    if any(SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON in issue for issue in issues):
+        return SINGLE_INTERVAL_RUNTIME_UNSUPPORTED_REASON
+    return ";".join(issues)
+
+
+def _execution_plan_batch_single_pair_invariant_error(
+    batch: ExecutionPlanBatch,
+    *,
+    runtime_pair: str,
+    allocation_decision_hash: str,
+) -> str | None:
+    """The runtime can only persist and submit one plan for its configured pair."""
+    if len(batch.pair_plans) != 1:
+        return "single_pair_execution_plan_batch_count_mismatch"
+    pair_plan = batch.pair_plans[0]
+    if str(pair_plan.pair) != str(runtime_pair):
+        return "single_pair_execution_plan_batch_pair_mismatch"
+    if str(batch.allocation_decision_hash) != str(allocation_decision_hash):
+        return "execution_plan_batch_allocation_hash_mismatch"
+    return None
 
 
 def _gate_payload(raw_gate: object | None) -> dict[str, object]:
@@ -978,6 +1013,17 @@ class ExecutionPlanner:
             updated_ts=int(updated_ts),
             runtime_result_bundle=result_bundle,
         )
+        if planning.planning_error is not None:
+            return ExecutionPlanBundle(
+                summary=None,
+                submit_plan=None,
+                persistence_context=dict(planning.context),
+                readiness_payload=planning.readiness_payload,
+                target_policy_metadata=planning.target_policy_metadata,
+                planning_error=planning.planning_error,
+                status=_plan_status(planning),
+                execution_plan_batch=None,
+            )
         submit_plan = _primary_submit_plan(planning.execution_decision_summary)
         execution_decision_summary = _summary_with_primary_submit_plan(
             planning.execution_decision_summary,
@@ -992,6 +1038,13 @@ class ExecutionPlanner:
                 submit_plan=submit_plan,
                 updated_ts=int(updated_ts),
             )
+            batch_invariant_error = _execution_plan_batch_single_pair_invariant_error(
+                batch,
+                runtime_pair=str(context.get("runtime_pair") or ""),
+                allocation_decision_hash=str(context.get("allocation_decision_hash") or ""),
+            )
+            if batch_invariant_error is not None:
+                raise ValueError(batch_invariant_error)
         except Exception as exc:
             planning = self._fail_closed_context(
                 decision_context=context,
@@ -1120,11 +1173,13 @@ class ExecutionPlanner:
         context = self._planning_context_from_envelope_input(planning_input)
         try:
             strategy_set = None if runtime_result_bundle is None else runtime_result_bundle.strategy_set
-            if (
-                runtime_result_bundle is not None
-                and runtime_result_bundle.strategy_set.multi_strategy_enabled
-            ):
-                raise RuntimeError("multi_strategy_execution_planning_recovery_required")
+            if strategy_set is not None:
+                scope_error = _runtime_strategy_set_scope_error(
+                    strategy_set,
+                    settings_obj=self.settings_obj,
+                )
+                if scope_error is not None:
+                    raise ValueError(scope_error)
             runtime_pair = _runtime_pair_for_planning(strategy_set, settings_obj=self.settings_obj)
             context.update(_runtime_strategy_set_context_fields(strategy_set))
             context.update(_runtime_result_bundle_context_fields(runtime_result_bundle))
@@ -1250,6 +1305,12 @@ class ExecutionPlanner:
             else:
                 preference_list = []
                 runtime_result_contexts = []
+                virtual_target_state_update_intents = []
+                virtual_transition_hashes = []
+                live_like_runtime = (
+                    str(getattr(self.settings_obj, "MODE", "") or "").strip().lower() == "live"
+                    or bool(getattr(self.settings_obj, "LIVE_DRY_RUN", False))
+                )
                 for result in runtime_result_bundle.results:
                     result_context = getattr(result, "base_context", {})
                     result_instance_id = (
@@ -1257,14 +1318,10 @@ class ExecutionPlanner:
                         if isinstance(result_context, Mapping)
                         else ""
                     )
-                    spec = (
-                        runtime_result_bundle.strategy_set.spec_for_instance(result_instance_id)
-                        if result_instance_id
-                        else runtime_result_bundle.strategy_set.spec_for_strategy(result.decision.strategy_name)
-                    )
+                    spec = runtime_result_bundle.strategy_set.spec_for_instance(result_instance_id)
                     if spec is None:
                         raise ValueError(
-                            f"runtime_strategy_spec_missing:{result.decision.strategy_name}"
+                            f"runtime_strategy_spec_missing:{result_instance_id or result.decision.strategy_name}"
                         )
                     strategy_instance_id = derive_strategy_instance_id(spec)
                     result_metadata = {
@@ -1288,6 +1345,84 @@ class ExecutionPlanner:
                                 if key in result_context
                             }
                         )
+                    scope_key_hash = str(result_metadata.get("scope_key_hash") or "").strip()
+                    runtime_contract_hash = str(
+                        result_metadata.get("runtime_contract_hash") or ""
+                    ).strip()
+                    if not scope_key_hash or not runtime_contract_hash:
+                        missing = (
+                            "scope_key_hash"
+                            if not scope_key_hash
+                            else "runtime_contract_hash"
+                        )
+                        if live_like_runtime:
+                            raise ValueError(f"strategy_virtual_lifecycle_missing:{missing}")
+                        lifecycle_evidence = build_strategy_virtual_lifecycle_skipped_artifact(
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=runtime_pair,
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            skip_reason=f"strategy_virtual_lifecycle_missing:{missing}",
+                        )
+                    else:
+                        try:
+                            previous_virtual_state = load_strategy_virtual_target_state(
+                                conn,
+                                strategy_instance_id=strategy_instance_id,
+                                pair=runtime_pair,
+                                interval=str(spec.interval),
+                                scope_key_hash=scope_key_hash,
+                            )
+                        except (AttributeError, TypeError):
+                            previous_virtual_state = None
+                        virtual_state = evolve_strategy_virtual_target_state(
+                            previous=previous_virtual_state,
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=runtime_pair,
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            signal=result.decision.final_signal,
+                            target_exposure_krw=spec.desired_exposure_krw,
+                            reference_price=None if reference_price is None else float(reference_price),
+                            updated_ts=int(updated_ts),
+                            evidence={
+                                "runtime_decision_request_hash": result_metadata.get(
+                                    "runtime_decision_request_hash"
+                                ),
+                                "strategy_parameters_hash": result_metadata.get(
+                                    "strategy_parameters_hash"
+                                ),
+                            },
+                        )
+                        lifecycle_evidence = build_strategy_virtual_lifecycle_transition_artifact(
+                            strategy_instance_id=strategy_instance_id,
+                            strategy_name=spec.strategy_name,
+                            pair=runtime_pair,
+                            interval=str(spec.interval),
+                            scope_key_hash=scope_key_hash,
+                            runtime_contract_hash=runtime_contract_hash,
+                            before_hash="" if previous_virtual_state is None else previous_virtual_state.content_hash(),
+                            after_hash=virtual_state.content_hash(),
+                            evidence_hash=virtual_state.evidence_hash,
+                        )
+                        virtual_target_state_update_intents.append(virtual_state.as_dict())
+                    result_metadata.update(
+                        {
+                            "virtual_target_lifecycle_status": lifecycle_evidence[
+                                "virtual_target_lifecycle_status"
+                            ],
+                            "virtual_target_lifecycle_transition_hash": lifecycle_evidence[
+                                "transition_hash"
+                            ],
+                            "virtual_target_live_submit_authority": False,
+                            "virtual_target_lifecycle_skip_reason": lifecycle_evidence["skip_reason"],
+                        }
+                    )
+                    virtual_transition_hashes.append(str(lifecycle_evidence["transition_hash"]))
                     runtime_result_contexts.append(result_metadata)
                     preference_list.append(
                         strategy_decision_to_preference(
@@ -1300,12 +1435,22 @@ class ExecutionPlanner:
                             max_target_exposure_krw=spec.max_target_exposure_krw,
                             risk_policy=spec.risk_policy,
                             risk_snapshot=spec.risk_snapshot,
+                            virtual_lifecycle_evidence=lifecycle_evidence,
                             metadata=result_metadata,
                         )
                     )
                 preferences = tuple(preference_list)
                 context["runtime_strategy_result_contexts"] = runtime_result_contexts
+                context["virtual_target_state_update_intents"] = virtual_target_state_update_intents
+                context["strategy_virtual_lifecycle_transition_hashes"] = virtual_transition_hashes
 
+            context.update(
+                {
+                    "strategy_preferences": [preference.as_dict() for preference in preferences],
+                    "strategy_preference_count": len(preferences),
+                    "strategy_preference_hashes": [preference.content_hash() for preference in preferences],
+                }
+            )
             allocation_input = PortfolioAllocationInput(
                 preference_set=SignalAggregator().aggregate(preferences),
                 allocator_config=allocation_config,
@@ -1329,6 +1474,57 @@ class ExecutionPlanner:
                 raise ValueError(allocation_invariant_error)
             portfolio_target = allocation_decision.target_for_pair(runtime_pair)
             context.update(_allocation_context_fields(allocation_decision, runtime_pair=runtime_pair))
+            if runtime_result_bundle is not None:
+                # The representative decision is observability-only.  Entry
+                # eligibility must reflect the allocator-selected target, not
+                # whichever strategy happened to provide that representative.
+                allocator_signal = (
+                    str(portfolio_target.conflict_resolution.get("selected_signal") or "").upper()
+                    if portfolio_target is not None and bool(portfolio_target.authoritative)
+                    else "HOLD"
+                )
+                if allocator_signal not in {"BUY", "SELL", "HOLD"}:
+                    allocator_signal = "HOLD"
+                allocator_reason = (
+                    str(portfolio_target.reason or "")
+                    if portfolio_target is not None and bool(portfolio_target.authoritative)
+                    else str(allocation_decision.primary_block_reason or "portfolio_allocation_not_authoritative")
+                )
+                planning_input = replace(
+                    planning_input,
+                    strategy_decision=replace(
+                        planning_input.strategy_decision,
+                        final_signal=allocator_signal,
+                        final_reason=allocator_reason,
+                    ),
+                )
+                context.update(
+                    {
+                        "allocator_execution_signal": allocator_signal,
+                        "allocator_execution_signal_authority": "PortfolioAllocator.portfolio_target",
+                        "signal": allocator_signal,
+                        "final_signal": allocator_signal,
+                        "final_reason": allocator_reason,
+                    }
+                )
+                if (
+                    runtime_result_bundle.strategy_set.multi_strategy_enabled
+                    and not pre_allocation_target_resolution_applied
+                ):
+                    context["planner_subphase"] = "target_state_resolution"
+                    target_resolution = self.target_state_resolver(
+                        conn,
+                        readiness_payload=readiness_payload,
+                        reference_price=reference_price,
+                        raw_signal=allocator_signal,
+                        updated_ts=int(updated_ts),
+                        settings_obj=self.settings_obj,
+                        runtime_pair=runtime_pair,
+                    )
+                    target_policy_metadata = dict(
+                        target_resolution.get("target_policy_metadata", {})
+                    )
+                    context.update(target_policy_metadata)
             context["planner_subphase"] = "execution_plan_batch_build"
             authority = ExecutionAuthorityEnvelope(
                 planning_input=planning_input,
@@ -1676,7 +1872,11 @@ def _build_execution_plan_batch_for_runtime_pair(
         pre_submit_status = pre_submit_status or "pending_finalization"
     elif not pre_submit_required:
         if submit_plan is None:
-            pre_submit_not_required_reason = "no_submit_plan"
+            pre_submit_not_required_reason = (
+                "not_live_real_submit_path"
+                if bool(context.get("portfolio_target_present"))
+                else "no_submit_plan"
+            )
         elif not bool(submit_plan.submit_expected):
             pre_submit_not_required_reason = str(submit_plan.block_reason or "submit_not_expected")
         else:
