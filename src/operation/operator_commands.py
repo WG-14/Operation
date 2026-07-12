@@ -166,7 +166,29 @@ def cmd_validate_db(*, as_json: bool = False) -> int:
         _json(payload) if as_json else print(f"[VALIDATE-DB] failed: {payload['error']}")
         return 1
     payload = {"ok": True, "db": diagnostic, "mode": settings.MODE}
-    _json(payload) if as_json else print(f"[VALIDATE-DB] ok db_path={settings.DB_PATH}")
+    if as_json:
+        _json(payload)
+        return 0
+
+    print(f"[VALIDATE-DB] ok db_path={settings.DB_PATH}")
+    for key in (
+        "status",
+        "expected_schema_version",
+        "observed_schema_version",
+        "expected_accounting_projection_model",
+        "observed_accounting_projection_model",
+        "diagnostic_schema_status",
+        "diagnostic_recommended_command",
+    ):
+        if key not in diagnostic:
+            continue
+        label = "db_schema_status" if key == "status" else key
+        print(f"{label}={diagnostic[key]}")
+    for table in diagnostic.get("diagnostic_missing_tables", []):
+        print(f"diagnostic_schema_warning=missing table: {table}")
+    for table, columns in dict(diagnostic.get("diagnostic_missing_columns", {})).items():
+        for column in columns:
+            print(f"diagnostic_schema_warning=missing column: {table}.{column}")
     return 0
 
 

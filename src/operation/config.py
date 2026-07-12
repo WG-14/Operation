@@ -563,6 +563,12 @@ def _normalize_config_market_input(raw_market: str, *, env_key: str, strict_cano
             raise ValueError(
                 f"invalid {env_key} format: {raw_market!r}; expected legacy 'BTC_KRW' style token"
             )
+        # PAIR historically used BASE_QUOTE (for example BTC_KRW), whereas
+        # MARKET is always canonical QUOTE-BASE.  Preserve the paper-only
+        # compatibility input at this boundary rather than letting it become
+        # a different market identity downstream.
+        if env_key == "PAIR":
+            return normalize_market_id(f"{right}-{left}")
         return normalize_market_id(token)
 
     if not _MARKET_TOKEN_RE.fullmatch(token):
@@ -1013,6 +1019,26 @@ def _dispatch_order_rule_resolution_operator_event(resolution: object) -> None:
 def validate_live_mode_preflight(cfg: Settings) -> None:
     if cfg.MODE != "live":
         return
+    # Validate the local storage boundary before reporting that no broker is
+    # installed.  A live configuration with repository-local or paper-scoped
+    # state is unsafe independently of broker availability and must surface
+    # the actionable path violation first.
+    try:
+        db_path = getattr(cfg, "DB_PATH", None)
+        run_lock_path = os.getenv("RUN_LOCK_PATH") or getattr(cfg, "RUN_LOCK_PATH", None)
+        # Production Settings always carry both paths.  Keep their full
+        # fail-fast validation, while allowing minimal capability probes to
+        # reach the explicit unavailable-broker outcome instead of crashing
+        # on an unrelated missing attribute.
+        if db_path is not None or run_lock_path is not None:
+            manager = PathManager.from_env(PROJECT_ROOT)
+            validate_runtime_root_separation(manager.config)
+        if db_path is not None:
+            _validate_live_db_path_policy(str(db_path))
+        if run_lock_path is not None:
+            resolve_run_lock_path(str(run_lock_path), mode="live")
+    except PathPolicyError as exc:
+        raise LiveModeValidationError(str(exc)) from exc
     raise LiveModeValidationError("live execution is unavailable because no broker is configured (reason_code=LIVE_BROKER_NOT_CONFIGURED)")
 
 

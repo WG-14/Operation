@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --dev
       - run: python3 tools/check_exchange_residue.py
-      - run: uv run pytest -q tests/test_exchange_removal_contract.py tests/test_operation_test_inventory.py
+      - run: uv run pytest -q tests/test_exchange_removal_contract.py tests/test_operation_research_boundary.py tests/test_operation_approval.py tests/test_operation_test_inventory.py
       - run: ./scripts/run_operation_tests.sh
       - run: uv run pytest -q
       - run: uv build

@@ -5,11 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .operator_smoke_authority import OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE
-
-
 APPROVED_PROFILE_AUTHORITY_TYPE = "approved_profile_authority"
-OPERATOR_SMOKE_AUTHORITY_TYPE = "operator_smoke_authority"
 EMERGENCY_CLOSEOUT_AUTHORITY_TYPE = "emergency_closeout_authority"
 
 
@@ -40,19 +36,6 @@ def _identity_hash(payload: Mapping[str, Any]) -> str:
 
 def execution_authority_from_payload(payload: Mapping[str, Any]) -> ExecutionAuthority:
     artifact_type = str(payload.get("artifact_type") or payload.get("authority_type") or "").strip()
-    if artifact_type == OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE:
-        return ExecutionAuthority(
-            authority_type=OPERATOR_SMOKE_AUTHORITY_TYPE,
-            allowed_operations=("operator_smoke_buy", "operator_smoke_sell"),
-            market_scope=(str(payload.get("market") or "").strip().upper() or "*",),
-            notional_cap=float(payload.get("max_notional_krw") or 0.0),
-            expires_at=str(payload.get("expires_at") or "") or None,
-            parameter_authority=False,
-            exit_policy_authority=False,
-            risk_authority=False,
-            evidence_classification="operator_smoke_only",
-            identity_hash=_identity_hash(payload),
-        )
     if artifact_type in {"approved_profile", APPROVED_PROFILE_AUTHORITY_TYPE} or payload.get("profile_content_hash"):
         market = str(payload.get("market") or payload.get("pair") or "*").strip().upper()
         return ExecutionAuthority(

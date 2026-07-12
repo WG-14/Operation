@@ -1418,6 +1418,9 @@ class ExecutionPlanner:
                             "virtual_target_lifecycle_transition_hash": lifecycle_evidence[
                                 "transition_hash"
                             ],
+                            "virtual_target_state_before_hash": lifecycle_evidence["before_hash"],
+                            "virtual_target_state_after_hash": lifecycle_evidence["after_hash"],
+                            "virtual_target_state_evidence_hash": lifecycle_evidence["evidence_hash"],
                             "virtual_target_live_submit_authority": False,
                             "virtual_target_lifecycle_skip_reason": lifecycle_evidence["skip_reason"],
                         }
@@ -1474,6 +1477,25 @@ class ExecutionPlanner:
                 raise ValueError(allocation_invariant_error)
             portfolio_target = allocation_decision.target_for_pair(runtime_pair)
             context.update(_allocation_context_fields(allocation_decision, runtime_pair=runtime_pair))
+            if _live_real_target_delta_performance_gate_applies(self.settings_obj):
+                strategy_performance_gate = _aggregate_selected_performance_gate(
+                    self.performance_gate_evaluator,
+                    conn,
+                    allocation_decision,
+                    runtime_pair=runtime_pair,
+                    manifest_hash=(
+                        None
+                        if strategy_set is None
+                        else runtime_strategy_set_manifest_hash(strategy_set)
+                    ),
+                    settings_obj=self.settings_obj,
+                )
+                context.update(_performance_gate_context_fields(strategy_performance_gate))
+                if bool(strategy_performance_gate.get("blocked")):
+                    return self._fail_closed_context(
+                        decision_context=context,
+                        reason_code="selected_strategy_performance_gate_blocked",
+                    )
             if runtime_result_bundle is not None:
                 # The representative decision is observability-only.  Entry
                 # eligibility must reflect the allocator-selected target, not

@@ -1151,19 +1151,20 @@ def live_execute_signal(
     exit_rule_name: str | None = None,
     execution_submit_plan: dict[str, object] | None = None,
 ) -> dict | None:
-    from .broker.live import live_execute_signal as _live_execute_signal
-
-    return _live_execute_signal(
+    del (
         broker,
         signal,
         ts,
         market_price,
-        strategy_name=strategy_name,
-        decision_id=decision_id,
-        decision_reason=decision_reason,
-        exit_rule_name=exit_rule_name,
-        execution_submit_plan=execution_submit_plan,
+        strategy_name,
+        decision_id,
+        decision_reason,
+        exit_rule_name,
+        execution_submit_plan,
     )
+    from .broker.availability import LiveBrokerNotConfiguredError
+
+    raise LiveBrokerNotConfiguredError()
 
 
 def _residual_live_sell_mode(settings_obj: object = settings) -> str:
@@ -1437,9 +1438,10 @@ def _residual_intent_ts(payload: dict[str, object]) -> int:
 
 
 def record_harmless_dust_exit_suppression(**kwargs) -> bool:
-    from .broker.live import record_harmless_dust_exit_suppression as _record_harmless_dust_exit_suppression
+    del kwargs
+    from .broker.availability import LiveBrokerNotConfiguredError
 
-    return _record_harmless_dust_exit_suppression(**kwargs)
+    raise LiveBrokerNotConfiguredError()
 
 
 def _dict_value(value: object) -> dict[str, object]:

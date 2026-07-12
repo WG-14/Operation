@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from operation.operator_commands import _print_residual_operator_fields
 from operation.reporting import _format_residual_report_fields
 from operation.runtime.public_api import RuntimeHealthQuery
 from operation.residual_disposition import build_residual_disposition
@@ -119,17 +118,6 @@ def test_health_reports_tracked_residual_manual_action_false(monkeypatch):
     assert health["residual_disposition"] == "TRACKED_NON_EXECUTABLE"
     assert health["manual_exchange_action_required"] is False
     assert health["quantity_rule_authority"] == "persisted_exchange_snapshot"
-
-
-def test_recovery_report_text_includes_residual_disposition(capsys):
-    payload = _payload()
-
-    _print_residual_operator_fields("    ", payload)
-
-    out = capsys.readouterr().out
-    assert "residual_disposition=TRACKED_NON_EXECUTABLE" in out
-    assert "manual_exchange_action_required=0" in out
-    assert "quantity_rule_authority=persisted_exchange_snapshot" in out
 
 
 def test_ops_report_includes_manual_exchange_action_required(capsys):

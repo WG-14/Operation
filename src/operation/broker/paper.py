@@ -9,7 +9,9 @@ from typing import Any
 
 from ..config import settings
 from ..execution_reality_contract import build_execution_reality_contract
-from ..markets import canonical_market_with_raw
+from ..markets import canonical_market_with_raw, parse_user_market_input
+from ..orderbook_top_store import compute_spread_bps
+from ..public_api_orderbook import BestQuote
 from ..risk_contract import SubmitPlan
 from ..runtime_risk_engine import RuntimeRiskEngineAdapter
 from ..db_core import ensure_db, get_portfolio, init_portfolio
@@ -68,6 +70,48 @@ def _resolve_orderbook_market() -> str:
     return market
 
 
+def fetch_orderbook_top(market: str) -> BestQuote | None:
+    """Return the newest locally persisted top-of-book observation.
+
+    Paper execution is offline-first: this compatibility boundary reads only
+    the mode-scoped SQLite store and never performs network I/O.  A caller
+    without persisted quote evidence falls back to the supplied candle close.
+    """
+    canonical_market, _raw_market = canonical_market_with_raw(market)
+    conn = ensure_db()
+    try:
+        row = conn.execute(
+            """
+            SELECT pair, bid_price, ask_price, source, observed_at_epoch_sec
+            FROM orderbook_top_snapshots
+            WHERE pair=?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (canonical_market,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return BestQuote(
+        market=str(row["pair"]),
+        bid_price=float(row["bid_price"]),
+        ask_price=float(row["ask_price"]),
+        source=str(row["source"] or "local_observation"),
+        observed_at_epoch_sec=(
+            float(row["observed_at_epoch_sec"])
+            if row["observed_at_epoch_sec"] is not None
+            else None
+        ),
+    )
+
+
+def _get_fill_price(_signal: str) -> float | None:
+    """Legacy paper-test seam; normal paper pricing remains quote-driven."""
+    return None
+
+
 def _local_candle_quote(signal: str, *, price: float) -> _PaperQuoteContext | None:
     if not math.isfinite(float(price)) or float(price) <= 0.0:
         return None
@@ -80,6 +124,56 @@ def _local_candle_quote(signal: str, *, price: float) -> _PaperQuoteContext | No
         best_ask=float(price),
         spread_bps=0.0,
         quote_source="sqlite_candle_close",
+    )
+
+
+def _observed_orderbook_quote(
+    signal: str,
+    *,
+    market: str,
+) -> tuple[_PaperQuoteContext | None, bool]:
+    quote = fetch_orderbook_top(market)
+    if quote is None:
+        return None, False
+    try:
+        quote_market = parse_user_market_input(quote.market)
+        if quote_market != market:
+            raise ValueError(f"quote market mismatch: expected={market!r} got={quote_market!r}")
+        bid = float(quote.bid_price)
+        ask = float(quote.ask_price)
+        spread_bps = compute_spread_bps(bid_price=bid, ask_price=ask)
+        max_spread_bps = float(getattr(settings, "MAX_ORDERBOOK_SPREAD_BPS", 0.0))
+        if max_spread_bps > 0.0 and spread_bps > max_spread_bps:
+            raise ValueError(
+                f"orderbook spread exceeds configured limit: spread_bps={spread_bps:.8f} "
+                f"max_spread_bps={max_spread_bps:.8f}"
+            )
+        reference_price = ask if signal == "BUY" else bid
+        slippage = float(settings.SLIPPAGE_BPS) / 10_000.0
+        fill_price = reference_price * (1.0 + slippage if signal == "BUY" else 1.0 - slippage)
+        if not math.isfinite(fill_price) or fill_price <= 0.0:
+            raise ValueError(f"invalid paper fill price: {fill_price!r}")
+    except (TypeError, ValueError) as exc:
+        RUN_LOG.warning(
+            format_log_kv(
+                "[ORDER_SKIP] paper quote rejected",
+                market=market,
+                signal=signal,
+                reason=str(exc),
+            )
+        )
+        return None, True
+    return (
+        _PaperQuoteContext(
+            fill_price=float(fill_price),
+            reference_price=float(reference_price),
+            best_bid=bid,
+            best_ask=ask,
+            spread_bps=float(spread_bps),
+            quote_source=str(quote.source or "local_observation"),
+            quote_age_ms=None,
+        ),
+        True,
     )
 
 
@@ -445,7 +539,18 @@ def paper_execute(
             )
             conn.commit()
             return None
-        quote_context = _local_candle_quote(plan_side, price=float(price))
+        quote_context, observed_quote_available = _observed_orderbook_quote(
+            plan_side,
+            market=market,
+        )
+        if quote_context is None and observed_quote_available:
+            return None
+        if quote_context is None:
+            legacy_fill_price = _get_fill_price(plan_side)
+            quote_context = _local_candle_quote(
+                plan_side,
+                price=float(legacy_fill_price if legacy_fill_price is not None else price),
+            )
         fill_price = quote_context.fill_price if quote_context is not None else None
         if fill_price is None:
             return None

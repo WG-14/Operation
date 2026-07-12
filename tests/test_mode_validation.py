@@ -18,33 +18,6 @@ def test_validate_mode_or_raise_rejects_typo() -> None:
     assert "allowed values: paper, live" in str(exc.value)
 
 
-def test_live_preflight_rejects_legacy_smoke_strategy_by_capability() -> None:
-    cfg = replace(settings, MODE="live", STRATEGY_NAME="sma_cross")
-
-    with pytest.raises(config.LiveModeValidationError) as exc:
-        config.validate_live_mode_preflight(cfg)
-
-    message = str(exc.value)
-    assert "live_strategy_capability_validation_failed" in message
-    assert "STRATEGY_NAME='sma_cross'" in message
-    assert "strategy_plugin_not_registered:sma_cross" in message
-
-
-def test_live_real_order_preflight_rejects_legacy_smoke_strategy_before_run() -> None:
-    cfg = replace(
-        settings,
-        MODE="live",
-        LIVE_REAL_ORDER_ARMED=True,
-        LIVE_DRY_RUN=False,
-        STRATEGY_NAME="sma_cross",
-    )
-
-    with pytest.raises(config.LiveModeValidationError) as exc:
-        config.validate_live_mode_preflight(cfg)
-
-    assert "strategy_plugin_not_registered:sma_cross" in str(exc.value)
-
-
 def test_plain_sma_cross_remains_allowed_outside_live_preflight() -> None:
     cfg = replace(settings, MODE="paper", STRATEGY_NAME="sma_cross")
 

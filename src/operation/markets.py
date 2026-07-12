@@ -53,7 +53,15 @@ def parse_documented_market_code(market: str) -> str:
 
 
 def parse_user_market_input(market: str, *, default_quote: str = "KRW") -> str:
-    value = str(market or "").strip().upper().replace("_", "-")
+    raw = str(market or "").strip().upper()
+    # Legacy pair identifiers are BASE_QUOTE (BTC_KRW), unlike canonical
+    # market identifiers (KRW-BTC).  Convert them at the single shared
+    # normalization boundary so notifier, lifecycle, and local quote storage
+    # cannot silently disagree about the market.
+    if raw.count("_") == 1:
+        base, quote = raw.split("_", 1)
+        raw = f"{quote}-{base}"
+    value = raw.replace("_", "-")
     if "-" not in value and value:
         value = f"{default_quote.upper()}-{value}"
     return parse_documented_market_code(value)

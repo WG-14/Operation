@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import operation
-from operation.broker.availability import UnavailableBrokerFactory
+from operation.broker.availability import LiveBrokerNotConfiguredError, UnavailableBrokerFactory
 from operation.config import LiveModeValidationError, validate_live_mode_preflight
+from operation.execution_service import live_execute_signal
 from operation.runtime.app_container import create_default_runtime_app
 from operation.runtime.startup_controller import StartupController
 
@@ -50,6 +53,11 @@ def test_package_identity_and_retired_exchange_residue_are_absent() -> None:
         for path in paths
         if (candidate := root / path).is_file()
     )
+    for retired_path in (
+        "src/operation/runtime/live_pipeline_smoke_decision.py",
+        "src/operation/broker/live.py",
+    ):
+        assert not (root / retired_path).exists()
 
 
 def test_default_paper_market_sync_is_offline_noop() -> None:
@@ -69,3 +77,8 @@ def test_live_preflight_fails_closed_without_running_broker_validation() -> None
         assert "LIVE_BROKER_NOT_CONFIGURED" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("live preflight unexpectedly passed")
+
+
+def test_live_execution_entrypoint_fails_closed_without_adapter() -> None:
+    with pytest.raises(LiveBrokerNotConfiguredError):
+        live_execute_signal(object(), "BUY", 1, 1.0)

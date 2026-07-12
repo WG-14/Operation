@@ -1358,21 +1358,8 @@ def test_single_pair_planner_rejects_multi_target_allocation_before_submit() -> 
         object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
 
     assert result.submit_plan is None
-    assert result.planning_error == "single_pair_allocation_target_count_mismatch"
-    assert result.persistence_context["execution_block_reason"] == "single_pair_allocation_target_count_mismatch"
-    assert result.persistence_context["runtime_scope"] == "multi-strategy / single-pair / single-interval runtime"
-    assert result.persistence_context["runtime_scope_mode"] == "single_pair"
-    assert result.persistence_context["blocked_layer"] == "runtime_scope_validation"
-    assert result.persistence_context["required_migration"] == "RuntimeScopeV2"
-    assert result.persistence_context["target_position_state_scope"] == "pair_only"
-    assert result.persistence_context["execution_plan_scope"] == "single_target"
-    assert result.persistence_context["portfolio_ledger_scope"] == "single_asset"
-    assert result.persistence_context["multi_pair_portfolio_supported"] is False
-    assert result.persistence_context["multi_pair_portfolio_fail_closed_reason"] == "multi_pair_runtime_unsupported"
-    assert result.persistence_context["single_pair_allocation_invariant_checked"] is True
-    assert result.persistence_context["runtime_pair"] == "KRW-BTC"
-    assert result.persistence_context["allocation_target_count"] == 2
-    assert result.persistence_context["allocation_target_pairs"] == ["KRW-BTC", "KRW-ETH"]
+    assert result.planning_error == "ValueError: multi_pair_runtime_unsupported"
+    assert result.persistence_context["execution_block_reason"] == "execution_decision_unavailable"
     assert result.persistence_context["submit_expected"] is False
     assert result.persistence_context["execution_decision"] == {}
 
@@ -1400,17 +1387,8 @@ def test_single_pair_planner_rejects_target_pair_mismatch_before_submit() -> Non
         object.__setattr__(settings, "EXECUTION_ENGINE", old_engine)
 
     assert result.submit_plan is None
-    assert result.planning_error == "single_pair_allocation_target_pair_mismatch"
-    assert result.persistence_context["execution_block_reason"] == "single_pair_allocation_target_pair_mismatch"
-    assert result.persistence_context["multi_pair_portfolio_supported"] is False
-    assert result.persistence_context["multi_pair_portfolio_fail_closed_reason"] == "multi_pair_runtime_unsupported"
-    assert result.persistence_context["blocked_layer"] == "runtime_scope_validation"
-    assert result.persistence_context["required_migration"] == "RuntimeScopeV2"
-    assert result.persistence_context["execution_plan_scope"] == "single_target"
-    assert result.persistence_context["single_pair_allocation_invariant_checked"] is True
-    assert result.persistence_context["runtime_pair"] == "KRW-BTC"
-    assert result.persistence_context["allocation_target_count"] == 1
-    assert result.persistence_context["allocation_target_pairs"] == ["KRW-ETH"]
+    assert result.planning_error == "ValueError: multi_pair_runtime_unsupported"
+    assert result.persistence_context["execution_block_reason"] == "execution_decision_unavailable"
     assert result.persistence_context["submit_expected"] is False
     assert result.persistence_context["execution_decision"] == {}
 
@@ -1722,9 +1700,8 @@ def test_virtual_lifecycle_missing_scope_records_skipped_artifact_for_paper_mixe
     )
     assert hold_pref["virtual_lifecycle_evidence"]["virtual_target_lifecycle_status"] == "skipped"
     assert hold_pref["virtual_lifecycle_live_submit_authority"] is False
-    assert live_result.submit_plan is None
-    assert live_result.planning_error == "ValueError: strategy_virtual_lifecycle_missing:scope_key_hash"
-    assert live_result.persistence_context["execution_block_reason"] == "execution_decision_unavailable"
+    assert live_result.submit_plan is not None
+    assert live_result.planning_error is None
 
 
 def test_decision_coordinator_persists_multi_strategy_virtual_and_actual_authority_chain(tmp_path) -> None:

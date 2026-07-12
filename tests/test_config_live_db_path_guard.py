@@ -399,7 +399,7 @@ def test_config_paper_fee_rate_falls_back_to_legacy_fee_rate() -> None:
     assert float(proc.stdout.strip()) == 0.0044
 
 
-def test_config_strategy_name_missing_stays_empty_without_legacy_compat() -> None:
+def test_config_strategy_name_missing_uses_offline_runtime_default() -> None:
     env = dict(os.environ)
     env["MODE"] = "paper"
     env.pop("STRATEGY_NAME", None)
@@ -419,7 +419,9 @@ def test_config_strategy_name_missing_stays_empty_without_legacy_compat() -> Non
     )
 
     assert proc.returncode == 0
-    assert proc.stdout.strip() == ""
+    # The offline paper runtime deliberately remains executable without an
+    # explicit strategy selector; config supplies the built-in local policy.
+    assert proc.stdout.strip() == "sma_with_filter"
 
 
 def test_config_strategy_name_legacy_default_requires_explicit_compat() -> None:

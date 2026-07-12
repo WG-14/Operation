@@ -34,13 +34,15 @@ def enforce_guard_policy(spec: CommandSpec, context: AppContext) -> None:
             "operator_live_pipeline_smoke",
             "operator_live_pipeline_smoke_authority",
         }:
-            from operation.operator_smoke_preflight import validate_operator_smoke_cli_guard
-
-            validate_operator_smoke_cli_guard(settings)
+            raise LiveModeValidationError(
+                "live operator smoke execution is unavailable because no broker is configured "
+                "(reason_code=LIVE_BROKER_NOT_CONFIGURED)"
+            )
         elif policy in {"operator_risk_reduction", "operator_recovery", "read_only_broker_diagnostic"}:
-            from operation.operator_smoke_preflight import validate_live_operator_basic_guard
-
-            validate_live_operator_basic_guard(settings)
+            raise LiveModeValidationError(
+                "live broker operator commands are unavailable because no broker is configured "
+                "(reason_code=LIVE_BROKER_NOT_CONFIGURED)"
+            )
         else:
             raise RuntimeError(f"unknown CLI guard policy for {spec.name}: {policy}")
     except LiveModeValidationError as exc:

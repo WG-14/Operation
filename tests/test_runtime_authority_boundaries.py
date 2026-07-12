@@ -39,7 +39,6 @@ def test_production_runtime_modules_do_not_import_legacy_parameter_fallback_dire
 def test_production_live_modules_do_not_import_research_compatibility_planning() -> None:
     production_files = (
         "src/operation/execution_service.py",
-        "src/operation/broker/live.py",
         "src/operation/run_loop_execution_planner.py",
     )
     violations = [

@@ -1152,6 +1152,12 @@ def _normalize_pair_for_match(pair: object) -> str | None:
     if not text:
         return None
     try:
+        # Legacy PAIR values use BASE_QUOTE.  Market context remains
+        # canonical QUOTE-BASE; normalise both to the same strict identity
+        # before a fill may be attributed to a decision.
+        if "_" in text:
+            left, right = text.upper().split("_", 1)
+            return parse_user_market_input(f"{right}-{left}")
         return parse_user_market_input(text)
     except Exception:
         return text.upper()
