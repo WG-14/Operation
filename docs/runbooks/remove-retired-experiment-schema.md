@@ -1,151 +1,114 @@
-# Retired experiment schema migration
+# Removed strategy retirement
 
-This is an operator-only, offline migration. It is not invoked by startup or
-normal reconciliation. The supplied backup path is a recovery-critical SQLite
-snapshot and must be an absolute path in the relevant `BACKUP_ROOT/<mode>/db/`
-bucket, outside the repository.
+`retire_removed_strategy.py` is a temporary, offline operator migration. It
+removes the retired H74 / `daily_participation_sma` schema and virtual runtime
+state in one reviewed plan, one SQLite backup, and one transaction. It is not a
+startup migration, reconcile action, or normal bot command.
 
-legacy retired-schema migration only; not an active runtime feature
+The plan and backup are recovery-critical runtime artifacts. Store plans under
+`DATA_ROOT/<mode>/reports/` and backups under `BACKUP_ROOT/<mode>/db/`; neither
+may be inside the repository. Paper and live plans, locks, databases, and
+backups remain completely separate.
 
-## Explicit schema contract
+## Retired-state contract
 
-The migration removes only explicitly classified retired `orders` columns. The
-known retired H74 columns are:
+The tool removes only the following `orders` columns:
 
 ```text
 h74_entry_plan_client_order_id
 h74_position_ownership_contract_hash
 h74_position_ownership_contract
+daily_participation_policy_hash
+daily_count_snapshot_hash
+participation_decision_hash
+daily_participation_kst_day
+daily_participation_fallback_mode
 ```
 
-Any `orders` column that is absent from the canonical schema but not on this
-retired list fails closed as
-`unexpected_noncanonical_orders_columns:<sorted-columns>`. The migration also
-fails closed for a non-canonical user-created `orders` index or trigger as
-`unexpected_orders_schema_objects:<sorted-names>`. It never silently drops
-unknown columns or schema objects. Investigate the source schema and write a
-separate approved change specification before attempting the migration again.
+It removes only `h74_cycle_state` and `daily_participation_claims`, after their
+historical schemas are validated. Unknown noncanonical `orders` columns,
+indexes, triggers, and unknown `h74_` tables stop the migration. A prefix is
+never deletion authority.
 
-The table allowlist is exactly `h74_cycle_state` and
-`daily_participation_claims`. An `h74_` prefix is never deletion authority.
-An unknown prefixed table stops apply before a backup, temporary `orders`
-table, or database mutation with `unexpected_h74_prefixed_tables:<names>`.
-Known names are also checked against their historical column contracts; a
-mismatch stops with `retired_table_schema_mismatch:<table>:...`.
+For the requested pair, it removes only virtual target rows satisfying:
 
-When `orders` must be rebuilt, the migration restores every canonical explicit
-schema object (indexes, partial/unique indexes, and triggers), then compares
-both the explicit-object and SQLite auto-index inventories before commit. The
-mode-specific run lock is held from the locked DB reconnect through source
-checks, backup, rebuild, drop, post-check, and commit. A lock conflict is
-`migration_run_lock_unavailable`.
+```sql
+strategy_name = 'daily_participation_sma'
+OR strategy_instance_id LIKE 'daily_participation_sma:%'
+OR strategy_instance_id LIKE 'h74%'
+```
 
-## Required operator sequence
+Other pairs and strategies are preserved. The protected ledger tables are
+`orders`, `fills`, `trades`, `trade_lifecycles`, `order_events`,
+`broker_fill_observations`, and `execution_quality_events`. Their typed,
+canonical row inventories are checked before backup and before commit.
 
-1. Create a copy of the operational DB; work on the copy first.
-2. Run the retired runtime-state cleanup dry-run.
-3. Review the reported shared virtual and pair target state.
-4. If warranted, apply runtime-state cleanup and retain its backup hash.
-5. Run this schema migration dry-run.
-6. Apply this schema migration.
-7. Verify integrity and a backup restore.
-8. Deploy the new code and perform live dry-run.
-9. Reconcile, then restart.
-10. Only then re-arm real orders.
+## Operator procedure
 
-The runtime-state tool does not infer strategy ownership for
-`target_position_state`. It may clear that pair state only with
-`--clear-pair-target-state`, a flat portfolio, zero executable open lots, zero
-risky orders, broker/local convergence attestation, a verified backup, and the
-explicit confirmation. It removes only matching retired virtual rows for the
-specified pair. Orders, fills, trades, lifecycle rows, order events, broker fill
-observations, and execution-quality audit rows are protected and checked before
-and after mutation.
+1. Stop the service and load the production environment. Do not run against a
+   live operational DB before first validating a copy.
+2. Confirm no process holds the DB, no unresolved/risky order exists, and the
+   broker and local state are converged.
+3. Choose a unique backup path and create a plan. If a pair target state exists,
+   choose `retain` or `clear`; omission is intentionally refused as
+   `operator_decision_required`.
+4. Review the JSON plan, its `status`, `blockers`, actions, and `plan_hash`.
+   A `clear` plan additionally requires a flat portfolio and zero executable
+   open lots for the pair.
+5. Preserve the reviewed plan JSON and hash, then apply that exact plan.
+6. Preserve the result and backup SHA-256. Verify the backup, run DB integrity
+   checks, then perform live dry-run, a HOLD cycle, reconciliation, restart,
+   and only then re-arm real orders.
 
 ```bash
-uv run python tools/migrations/remove_retired_strategy_runtime_state.py \
+uv run python tools/migrations/retire_removed_strategy.py plan \
   --mode live --pair KRW-BTC \
   --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
-  --backup /var/backups/bithumb-bot/live/db/live.before-retired-runtime-state.20260712T103000Z.sqlite
+  --backup /var/backups/bithumb-bot/live/db/live.before-retirement.20260712T120000Z.sqlite \
+  --target-state-action clear \
+  --output /var/lib/bithumb-bot/data/live/reports/retirement-plan.json
 
-uv run python tools/migrations/remove_retired_strategy_runtime_state.py \
-  --mode live --pair KRW-BTC \
-  --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
-  --backup /var/backups/bithumb-bot/live/db/live.before-retired-runtime-state.20260712T103000Z.sqlite \
-  --broker-local-converged --clear-pair-target-state --apply \
-  --confirm REMOVE_RETIRED_STRATEGY_RUNTIME_STATE
-```
-
-Historical orders, fills, trades, and audit evidence are preserved. Unknown
-H74-prefixed tables are investigation targets, never automatically removed.
-
-## Environment preparation
-
-Before a live migration, explicitly load the production environment containing
-at least:
-
-```text
-MODE
-ENV_ROOT
-RUN_ROOT
-DATA_ROOT
-LOG_ROOT
-BACKUP_ROOT
-ARCHIVE_ROOT
-DB_PATH (when used)
-```
-
-Live managed roots must be absolute, repository-external, mode-neutral, and
-must not overlap or have parent/child relationships with one another.
-
-1. Confirm the deployed revision and stop the bot service. Do not run this
-   migration while the service is running or while real orders are armed.
-2. Verify a staging copy first. Do not combine code deployment and the DB
-   migration in the same change moment.
-3. Confirm no process holds the database, no unresolved/open order exists, and
-   broker and local positions are converged. Do not attest convergence until an
-   operator has actually checked it.
-4. Choose a new, unique backup filename in `BACKUP_ROOT/<mode>/db/`. Existing
-   backup paths are refused and are never overwritten.
-5. Run the default dry-run:
-
-```bash
-uv run python tools/migrations/remove_retired_experiment_schema.py \
-  --mode live \
-  --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
-  --backup /var/backups/bithumb-bot/live/db/live.before-retired-schema.20260712T103000Z.sqlite
-```
-
-6. Review the reported tables and columns, then apply with the explicit
-   operator convergence attestation:
-
-```bash
-uv run python tools/migrations/remove_retired_experiment_schema.py \
-  --mode live \
-  --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
-  --backup /var/backups/bithumb-bot/live/db/live.before-retired-schema.20260712T103000Z.sqlite \
+uv run python tools/migrations/retire_removed_strategy.py apply \
+  --plan /var/lib/bithumb-bot/data/live/reports/retirement-plan.json \
+  --plan-hash sha256:<reviewed-hash> \
   --broker-local-converged \
-  --apply \
-  --confirm REMOVE_RETIRED_EXPERIMENT_SCHEMA
+  --confirm RETIRE_REMOVED_STRATEGY
+
+uv run python tools/migrations/retire_removed_strategy.py verify-backup \
+  --plan /var/lib/bithumb-bot/data/live/reports/retirement-plan.json \
+  --backup /var/backups/bithumb-bot/live/db/live.before-retirement.20260712T120000Z.sqlite
 ```
 
-The command validates that both paths are absolute, repository-external, and
-mode-separated. The DB must be the PathManager canonical DB location for the
-selected mode, or its configured `DB_PATH` override within that mode's managed
-`trades/` bucket; the backup must be in that mode's managed `db/` backup bucket.
-It validates source SQLite integrity and foreign keys before backup, validates
-the backup after creation (including retained `orders` data), and only then
-begins its one transaction. The transaction verifies all retained canonical
-`orders` columns, row counts, identifiers, status/side distributions, and
-SQLite integrity before commit.
+`plan` is read-only: it does not create a backup or modify the DB. `apply`
+uses the same planning engine while holding the mode-specific run lock. It
+refuses stale source fingerprints, schema/ledger/runtime-state changes, target
+state changes, and a newly occupied backup path with
+`retirement_plan_stale`. No row content is reported in stale-plan output.
 
-On success the report has `status=applied`, `backup_created=true`,
-`database_modified=true`, and `backup_sha256`. Preserve that hash in the
-operator record. Do not delete the backup until the retention policy and a
-restore verification allow it.
+`retain` never modifies the pair target row. A successful retirement with a
+retained target row returns `applied_with_retained_target_state`; it is never
+described as `already_clean`. `clear` requires the reviewed plan hash, explicit
+confirmation, broker/local convergence attestation, a verified backup, an exact
+pair match, a flat portfolio, zero open executable lots, and no risky orders.
 
-Re-running against a DB with no retired schema reports `status=already_clean`.
-That is a true no-op: it does not create, open, overwrite, or otherwise modify
-the supplied backup path, and it does not modify the DB. A migration that is
-still needed but receives an existing backup filename is refused with
-`backup_path_already_exists`; choose a new unique name.
+All command stdout is canonical JSON. Safety refusals return exit code 2;
+successful plan, apply, and backup verification return exit code 0. The plan
+report is a diagnostic artifact in `data/<mode>/reports/`; the backup is a
+recovery-critical timestamped SQLite snapshot in `backup/<mode>/db/` and is
+never overwritten.
+
+## Sunset contract
+
+This migration must be deleted in a separate final cleanup once all of the
+following are true:
+
+1. Paper and live database retirement are complete.
+2. Each environment's backup hash is recorded and its restore is verified.
+3. No retired columns, tables, or virtual state remain.
+4. Runtime code no longer needs legacy DB compatibility.
+5. The required retention period and rollback window have ended.
+
+That cleanup deletes the CLI, shared engine, this test suite, and this runbook:
+`tools/migrations/retire_removed_strategy.py`,
+`tools/migrations/_offline_retirement.py`,
+`tests/test_removed_strategy_retirement.py`, and this document.
