@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -121,6 +122,9 @@ def test_apply_is_single_backup_transaction_and_preserves_other_state(monkeypatc
     result = retirement.apply_plan(plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash, confirmation=retirement.CONFIRMATION, broker_local_converged=True)
     assert result["status"] == "applied"
     assert backup.is_file()
+    assert result["backup_verified"] is True
+    assert result["foreign_keys_reenabled"] is True
+    assert result["post_commit_verified"] is True
     assert retirement.verify_backup(plan=plan, backup_path=backup, expected_sha256=result["backup_sha256"])["backup_sha256"] == result["backup_sha256"]
     conn = sqlite3.connect(db)
     try:
@@ -196,7 +200,6 @@ def test_apply_rolls_back_orders_rebuild_and_reenables_foreign_keys(monkeypatch:
     db, backup = _paths(monkeypatch, tmp_path)
     _legacy_db(db, with_child_history=True)
     plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
-    original_rebuild = retirement._rebuild_orders
     original_connect = sqlite3.connect
     pragma_statements: list[str] = []
 
@@ -220,17 +223,25 @@ def test_apply_rolls_back_orders_rebuild_and_reenables_foreign_keys(monkeypatch:
         connection = original_connect(database, *args, **kwargs)
         return AuditedConnection(connection) if database == db else connection
 
-    def fail_after_rebuild(conn: sqlite3.Connection, expected_columns: tuple[str, ...]) -> None:
-        original_rebuild(conn, expected_columns)
-        raise retirement.SafetyCheckError("injected_rebuild_failure")
+    def fail_after_rebuild(stage: str) -> None:
+        if stage == "after_orders_rebuilt":
+            raise retirement.SafetyCheckError("injected_rebuild_failure")
 
     monkeypatch.setattr(retirement.sqlite3, "connect", audited_connect)
-    monkeypatch.setattr(retirement, "_rebuild_orders", fail_after_rebuild)
-    with pytest.raises(retirement.SafetyCheckError, match="injected_rebuild_failure"):
+    monkeypatch.setattr(retirement, "_apply_checkpoint", fail_after_rebuild)
+    with pytest.raises(retirement.RetirementApplyError, match="injected_rebuild_failure") as failure:
         retirement.apply_plan(
             plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash,
             confirmation=retirement.CONFIRMATION, broker_local_converged=True,
         )
+    payload = failure.value.as_payload()
+    assert payload["status"] == "apply_failed_rolled_back"
+    assert payload["backup_created"] is True
+    assert payload["backup_verified"] is True
+    assert payload["rollback_succeeded"] is True
+    assert payload["database_modified"] is False
+    assert payload["transaction_committed"] is False
+    assert payload["foreign_keys_reenabled"] is True
     assert "PRAGMA FOREIGN_KEYS=OFF" in pragma_statements
     assert pragma_statements[-2:] == ["PRAGMA FOREIGN_KEYS=ON", "PRAGMA FOREIGN_KEYS"]
     conn = original_connect(db)
@@ -244,6 +255,129 @@ def test_apply_rolls_back_orders_rebuild_and_reenables_foreign_keys(monkeypatch:
     finally:
         conn.close()
     assert retirement.verify_backup(plan=plan, backup_path=backup, expected_sha256=retirement.sha256_file(backup))["status"] == "backup_verified"
+
+
+def test_apply_reports_created_backup_when_checkpoint_fails_before_transaction(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db, backup = _paths(monkeypatch, tmp_path)
+    _legacy_db(db)
+    plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
+
+    def fail(stage: str) -> None:
+        if stage == "after_backup_created":
+            raise retirement.SafetyCheckError("injected_backup_failure")
+
+    monkeypatch.setattr(retirement, "_apply_checkpoint", fail)
+    with pytest.raises(retirement.RetirementApplyError) as failure:
+        retirement.apply_plan(
+            plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash,
+            confirmation=retirement.CONFIRMATION, broker_local_converged=True,
+        )
+    payload = failure.value.as_payload()
+    assert payload["status"] == "apply_failed_before_transaction"
+    assert payload["backup_created"] is True
+    assert payload["backup_verified"] is False
+    assert backup.is_file()
+    assert payload["database_modified"] is False
+    assert payload["transaction_committed"] is False
+    assert failure.value.exit_code == 3
+
+
+def test_apply_promotes_failed_rollback_verification_to_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db, backup = _paths(monkeypatch, tmp_path)
+    _legacy_db(db)
+    plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
+
+    def fail(stage: str) -> None:
+        if stage == "after_orders_rebuilt":
+            raise retirement.SafetyCheckError("injected_transaction_failure")
+
+    def fail_rollback_verification(*_args: object) -> None:
+        raise retirement.SafetyCheckError("injected_rollback_verification_failure")
+
+    monkeypatch.setattr(retirement, "_apply_checkpoint", fail)
+    monkeypatch.setattr(retirement, "_verify_rollback_state", fail_rollback_verification)
+    with pytest.raises(retirement.RetirementApplyError) as failure:
+        retirement.apply_plan(
+            plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash,
+            confirmation=retirement.CONFIRMATION, broker_local_converged=True,
+        )
+    payload = failure.value.as_payload()
+    assert payload["status"] == "apply_outcome_unknown"
+    assert payload["database_modified"] is None
+    assert payload["rollback_succeeded"] is False
+    assert payload["recovery_required"] is True
+    assert failure.value.exit_code == 4
+
+
+def test_apply_treats_commit_exception_as_unknown_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db, backup = _paths(monkeypatch, tmp_path)
+    _legacy_db(db)
+    plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
+    original_connect = sqlite3.connect
+
+    class CommitFailConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        @property
+        def in_transaction(self) -> bool:
+            return self._connection.in_transaction
+
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("injected_commit_failure")
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+    def fail_commit_connect(database: object, *args: object, **kwargs: object) -> sqlite3.Connection | CommitFailConnection:
+        connection = original_connect(database, *args, **kwargs)
+        return CommitFailConnection(connection) if Path(database) == db else connection
+
+    monkeypatch.setattr(retirement.sqlite3, "connect", fail_commit_connect)
+    with pytest.raises(retirement.RetirementApplyError) as failure:
+        retirement.apply_plan(
+            plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash,
+            confirmation=retirement.CONFIRMATION, broker_local_converged=True,
+        )
+    payload = failure.value.as_payload()
+    assert payload["status"] == "apply_commit_outcome_unknown"
+    assert payload["database_modified"] is None
+    assert payload["commit_outcome"] == "unknown"
+    assert payload["backup_created"] is True
+    assert payload["recovery_required"] is True
+    assert failure.value.exit_code == 4
+
+
+def test_apply_reports_committed_database_when_post_commit_verification_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db, backup = _paths(monkeypatch, tmp_path)
+    _legacy_db(db)
+    plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
+
+    def fail(stage: str) -> None:
+        if stage == "after_commit":
+            raise retirement.SafetyCheckError("injected_post_commit_failure")
+
+    monkeypatch.setattr(retirement, "_apply_checkpoint", fail)
+    with pytest.raises(retirement.RetirementApplyError) as failure:
+        retirement.apply_plan(
+            plan_path=_write_plan(tmp_path, plan), expected_plan_hash=plan.plan_hash,
+            confirmation=retirement.CONFIRMATION, broker_local_converged=True,
+        )
+    payload = failure.value.as_payload()
+    assert payload["status"] == "applied_verification_failed"
+    assert payload["database_modified"] is True
+    assert payload["transaction_committed"] is True
+    assert payload["commit_outcome"] == "committed"
+    assert payload["backup_created"] is True
+    assert payload["backup_verified"] is True
+    assert payload["recovery_required"] is True
+    assert failure.value.exit_code == 4
+    conn = sqlite3.connect(db)
+    try:
+        assert set(retirement.RETIRED_ORDER_COLUMNS).isdisjoint(retirement._columns(conn, "orders"))
+        assert not {"h74_cycle_state", "daily_participation_claims"} & retirement._table_names(conn)
+    finally:
+        conn.close()
 
 
 def test_apply_refuses_stale_plan_and_nonflat_target_clear(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -314,6 +448,83 @@ def test_cli_outputs_canonical_json_on_refusal(tmp_path: Path) -> None:
     assert completed.returncode == 2
     assert completed.stderr == ""
     assert json.loads(completed.stdout)["status"] == "refused"
+
+
+@pytest.mark.parametrize(
+    ("injection", "status", "exit_code"),
+    [
+        ("after_backup_created", "apply_failed_before_transaction", 3),
+        ("after_orders_rebuilt", "apply_failed_rolled_back", 3),
+        ("rollback_verification", "apply_outcome_unknown", 4),
+        ("commit_failure", "apply_commit_outcome_unknown", 4),
+        ("after_commit", "applied_verification_failed", 4),
+    ],
+)
+def test_cli_apply_failure_outputs_canonical_recovery_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, injection: str, status: str, exit_code: int,
+) -> None:
+    db, backup = _paths(monkeypatch, tmp_path)
+    _legacy_db(db)
+    plan = retirement.build_plan(mode="paper", pair="KRW-BTC", db_path=db, backup_path=backup, target_state_action="retain")
+    plan_path = _write_plan(tmp_path, plan)
+    injection_dir = tmp_path / "injection"
+    injection_dir.mkdir()
+    source_dir = Path("tools/migrations").resolve()
+    (injection_dir / "sitecustomize.py").write_text(
+        f"""import sys
+from pathlib import Path
+sys.path.insert(0, {str(source_dir)!r})
+import _offline_retirement as retirement
+
+_original_connect = retirement.sqlite3.connect
+
+if {injection!r} == 'rollback_verification':
+    def _failed_rollback_verification(*_args):
+        raise retirement.SafetyCheckError('injected_rollback_verification_failure')
+    retirement._verify_rollback_state = _failed_rollback_verification
+
+if {injection!r} == 'commit_failure':
+    class _CommitFailConnection:
+        def __init__(self, connection):
+            self._connection = connection
+        @property
+        def in_transaction(self):
+            return self._connection.in_transaction
+        def commit(self):
+            raise retirement.sqlite3.OperationalError('injected_commit_failure')
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+    def _fail_commit_connect(database, *args, **kwargs):
+        connection = _original_connect(database, *args, **kwargs)
+        return _CommitFailConnection(connection) if Path(database) == Path({str(db)!r}) else connection
+    retirement.sqlite3.connect = _fail_commit_connect
+
+def _checkpoint(stage):
+    if stage == {injection!r} or ({injection!r} == 'rollback_verification' and stage == 'after_orders_rebuilt'):
+        raise retirement.SafetyCheckError('injected_' + stage + '_failure')
+retirement._apply_checkpoint = _checkpoint
+""",
+        encoding="utf-8",
+    )
+    environment = {**os.environ, "PYTHONPATH": str(injection_dir)}
+    completed = subprocess.run(
+        [
+            sys.executable, "tools/migrations/retire_removed_strategy.py", "apply",
+            "--plan", str(plan_path), "--plan-hash", plan.plan_hash,
+            "--broker-local-converged", "--confirm", retirement.CONFIRMATION,
+        ],
+        text=True, capture_output=True, check=False, env=environment,
+    )
+    assert completed.returncode == exit_code
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+    assert completed.stdout == retirement.canonical_json(payload) + "\n"
+    for field in (
+        "status", "reason_code", "phase", "database_modified", "backup_created",
+        "transaction_committed", "commit_outcome", "recovery_required", "recommended_action",
+    ):
+        assert field in payload
+    assert payload["status"] == status
 
 
 def test_verify_backup_requires_recorded_expected_sha256(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

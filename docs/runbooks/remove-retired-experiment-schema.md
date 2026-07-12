@@ -109,11 +109,34 @@ The required sequence is: plan, plan review, apply, preserve the apply JSON's
 re-arming. `verify-backup` intentionally refuses to report success without the
 recorded apply-result hash.
 
-All command stdout is canonical JSON. Safety refusals return exit code 2;
-successful plan, apply, and backup verification return exit code 0. The plan
-report is a diagnostic artifact in `data/<mode>/reports/`; the backup is a
-recovery-critical timestamped SQLite snapshot in `backup/<mode>/db/` and is
-never overwritten.
+All command stdout is canonical JSON. Successful plan, apply, and backup
+verification return exit code 0. Exit code 2 is a refusal before backup or
+mutation; exit code 3 means apply failed and the transaction is definitely not
+committed; exit code 4 means a committed or uncertain outcome requires operator
+investigation. The plan report is a diagnostic artifact in
+`data/<mode>/reports/`; the backup is a recovery-critical timestamped SQLite
+snapshot in `backup/<mode>/db/` and is never overwritten.
+
+## Apply failure recovery matrix
+
+`apply` reports its last successful `phase`, backup state, transaction state,
+and a `recommended_action`. Treat exit code 3 or 4 as an operational incident,
+not as a normal “not run” result.
+
+| Status | DB change | Backup | Operator action |
+| --- | ---: | ---: | --- |
+| `refused` | none | none | Correct the refusal reason, then create a new plan. |
+| `apply_failed_before_transaction` | none | present | Inspect the backup; create a new plan with a new backup path. |
+| `apply_failed_rolled_back` | rollback complete | present | Keep the service stopped; inspect the failure before creating a new plan and unique backup path. |
+| `apply_outcome_unknown` | unknown | present | Do not rerun; compare the DB and verified backup, then use the approved recovery procedure if needed. |
+| `apply_commit_outcome_unknown` | unknown | present | Do not rerun; keep the service stopped and inspect the live DB and verified backup. |
+| `applied_verification_failed` | committed | present | Do not start the service; inspect the committed DB or restore from the verified pre-change backup. |
+
+Do not reuse a backup path whenever `backup_created=true`, including when
+`backup_verified=false`. Do not automatically rerun any failed result with
+`database_modified=null` or `database_modified=true`. In particular,
+`applied_verification_failed` is not a `refused` result: the database commit
+already completed and must be investigated or recovered deliberately.
 
 ## Sunset contract
 

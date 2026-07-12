@@ -57,6 +57,101 @@ class SafetyCheckError(RuntimeError):
     """Expected fail-closed operational refusal."""
 
 
+@dataclass
+class ApplyProgress:
+    """Durable-in-memory account of the offline apply boundary reached."""
+
+    phase: str = "preflight"
+    backup_path: str | None = None
+    backup_created: bool = False
+    backup_verified: bool = False
+    backup_sha256: str | None = None
+    transaction_started: bool = False
+    rollback_attempted: bool = False
+    rollback_succeeded: bool | None = None
+    commit_started: bool = False
+    transaction_committed: bool = False
+    commit_outcome: str = "not_started"
+    foreign_keys_disabled: bool = False
+    foreign_keys_reenabled: bool | None = None
+    post_commit_verified: bool = False
+
+
+class RetirementApplyError(SafetyCheckError):
+    """An apply failure whose recovery state must be reported to an operator."""
+
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        progress: ApplyProgress,
+        changed_fields: tuple[str, ...] = (),
+        original_error: Exception | None = None,
+    ) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.progress = progress
+        self.changed_fields = changed_fields
+        self.original_error = original_error
+
+    @property
+    def status(self) -> str:
+        if self.progress.transaction_committed:
+            return "applied_verification_failed"
+        if self.progress.commit_started:
+            return "apply_commit_outcome_unknown"
+        if self.progress.transaction_started:
+            if self.progress.rollback_succeeded is True:
+                return "apply_failed_rolled_back"
+            return "apply_outcome_unknown"
+        return "apply_failed_before_transaction"
+
+    @property
+    def exit_code(self) -> int:
+        return 3 if self.status in {"apply_failed_before_transaction", "apply_failed_rolled_back"} else 4
+
+    def as_payload(self) -> dict[str, object]:
+        status = self.status
+        if status == "apply_failed_before_transaction":
+            database_modified: bool | None = False
+            action = "stop; inspect the backup; do not reuse the same backup path"
+        elif status == "apply_failed_rolled_back":
+            database_modified = False
+            action = "keep the backup; inspect the failure; create a new plan and unique backup path before retry"
+        elif status == "apply_outcome_unknown":
+            database_modified = None
+            action = "keep the service stopped; compare the DB with the verified backup; restore only through the approved recovery procedure"
+        elif status == "apply_commit_outcome_unknown":
+            database_modified = None
+            action = "do not rerun; keep the service stopped; inspect the live DB and verified backup"
+        else:
+            database_modified = True
+            action = "keep the service stopped; do not rerun; inspect or restore from the verified pre-change backup"
+        payload: dict[str, object] = {
+            "status": status,
+            "reason_code": self.reason_code,
+            "phase": self.progress.phase,
+            "backup_created": self.progress.backup_created,
+            "backup_verified": self.progress.backup_verified,
+            "backup_sha256": self.progress.backup_sha256,
+            "database_modified": database_modified,
+            "transaction_started": self.progress.transaction_started,
+            "transaction_committed": self.progress.transaction_committed,
+            "commit_outcome": self.progress.commit_outcome,
+            "rollback_attempted": self.progress.rollback_attempted,
+            "rollback_succeeded": self.progress.rollback_succeeded,
+            "foreign_keys_reenabled": self.progress.foreign_keys_reenabled,
+            "post_commit_verified": self.progress.post_commit_verified,
+            "recovery_required": True,
+            "recommended_action": action,
+        }
+        if self.progress.backup_path is not None:
+            payload["backup_path"] = self.progress.backup_path
+        if self.changed_fields:
+            payload["changed_fields"] = list(self.changed_fields)
+        return payload
+
+
 @dataclass(frozen=True)
 class RetirementPlan:
     schema_version: int
@@ -620,7 +715,99 @@ def _stale_fields(reviewed: RetirementPlan, current: RetirementPlan) -> list[str
     return [field for field in fields if getattr(reviewed, field) != getattr(current, field)]
 
 
-def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, broker_local_converged: bool) -> dict[str, object]:
+def _apply_checkpoint(stage: str) -> None:
+    """Internal test seam; production calls intentionally have no side effects."""
+
+
+def _restore_foreign_key_setting(source: sqlite3.Connection, progress: ApplyProgress) -> None:
+    if not progress.foreign_keys_disabled:
+        return
+    try:
+        source.execute("PRAGMA foreign_keys=ON")
+        if source.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+            raise SafetyCheckError("foreign_keys_reenable_failed")
+    except Exception:
+        progress.foreign_keys_reenabled = False
+        raise
+    progress.foreign_keys_reenabled = True
+    progress.phase = "foreign_keys_reenabled"
+
+
+def _verify_rollback_state(source: sqlite3.Connection, plan: RetirementPlan) -> None:
+    if "orders__removed_strategy_retirement_tmp" in _table_names(source):
+        raise SafetyCheckError("rollback_temporary_orders_table_present")
+    if not set(plan.retired_order_columns).issubset(_columns(source, "orders")):
+        raise SafetyCheckError("rollback_retired_orders_columns_missing")
+    if not set(plan.retired_tables).issubset(_table_names(source)):
+        raise SafetyCheckError("rollback_retired_tables_missing")
+    if _virtual_rows(source, plan.pair) != plan.retired_virtual_state_keys:
+        raise SafetyCheckError("rollback_retired_virtual_state_mismatch")
+    if _target_hash(source, plan.pair) != plan.pair_target_state_hash:
+        raise SafetyCheckError("rollback_pair_target_state_mismatch")
+    orders = _orders_contract(source)
+    if _protected_inventory(source, list(orders["retained_columns"])) != plan.protected_inventory:
+        raise SafetyCheckError("rollback_protected_ledger_contract_mismatch")
+    _require_integrity(source, "rollback")
+
+
+def _attempt_rollback(source: sqlite3.Connection, plan: RetirementPlan, progress: ApplyProgress) -> None:
+    progress.phase = "transaction_rolling_back"
+    progress.rollback_attempted = True
+    try:
+        source.rollback()
+        if source.in_transaction:
+            raise SafetyCheckError("rollback_transaction_still_active")
+    except Exception:
+        progress.rollback_succeeded = False
+        return
+    try:
+        _restore_foreign_key_setting(source, progress)
+        _verify_rollback_state(source, plan)
+    except Exception:
+        progress.rollback_succeeded = False
+        return
+    progress.rollback_succeeded = True
+    progress.commit_outcome = "rolled_back"
+    progress.phase = "transaction_rolled_back"
+
+
+def _reason_code(exc: Exception) -> str:
+    code, _, _ = str(exc).partition(":")
+    return code or type(exc).__name__
+
+
+def _record_backup_state(progress: ApplyProgress) -> None:
+    if progress.backup_created or not progress.backup_path:
+        return
+    path = Path(progress.backup_path)
+    if not path.exists():
+        return
+    progress.backup_created = True
+    progress.phase = "backup_created"
+    if path.is_file() and path.stat().st_size > 0:
+        try:
+            progress.backup_sha256 = sha256_file(path)
+        except OSError:
+            pass
+
+
+def _classify_apply_failure(exc: Exception, *, progress: ApplyProgress) -> RetirementApplyError | None:
+    _record_backup_state(progress)
+    if not progress.backup_created and not progress.transaction_started and not progress.commit_started:
+        return None
+    changed_fields: tuple[str, ...] = ()
+    if _reason_code(exc) == "retirement_plan_stale":
+        _, _, details = str(exc).partition(":")
+        changed_fields = tuple(sorted(item for item in details.split(",") if item))
+    return RetirementApplyError(
+        _reason_code(exc), progress=progress, changed_fields=changed_fields, original_error=exc,
+    )
+
+
+def _apply_plan_inner(
+    *, plan_path: Path, expected_plan_hash: str, confirmation: str, broker_local_converged: bool,
+    progress: ApplyProgress,
+) -> dict[str, object]:
     plan = load_plan(plan_path)
     if expected_plan_hash != plan.plan_hash:
         raise SafetyCheckError("retirement_plan_hash_mismatch")
@@ -631,6 +818,7 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
     if not broker_local_converged:
         raise SafetyCheckError("broker_local_position_convergence_operator_attestation_required")
     db_path, backup_path, manager = validate_paths(mode=plan.mode, db_path=Path(plan.db_path), backup_path=Path(plan.backup_path))
+    progress.backup_path = str(backup_path)
     try:
         with acquire_run_lock(manager.run_lock_path_for_mode(plan.mode)):
             current = build_plan(
@@ -649,24 +837,35 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
                 source.execute("PRAGMA foreign_keys=ON")
                 _require_integrity(source, "source_database")
                 manager.ensure_parent_dir(backup_path)
+                progress.phase = "backup_creating"
                 with sqlite3.connect(backup_path) as backup:
                     source.backup(backup)
+                progress.backup_created = True
+                progress.phase = "backup_created"
+                _apply_checkpoint("after_backup_created")
                 backup_sha = sha256_file(backup_path)
+                progress.backup_sha256 = backup_sha
                 verify_backup(plan=plan, backup_path=backup_path, expected_sha256=backup_sha)
+                progress.backup_verified = True
+                progress.phase = "backup_verified"
+                _apply_checkpoint("after_backup_verified")
                 if source.in_transaction:
                     raise SafetyCheckError("unexpected_active_transaction_before_rebuild")
-                foreign_keys_disabled = False
                 try:
                     source.execute("PRAGMA foreign_keys=OFF")
+                    progress.foreign_keys_disabled = True
                     if source.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
                         raise SafetyCheckError("foreign_keys_disable_failed")
-                    foreign_keys_disabled = True
                     source.execute("BEGIN IMMEDIATE")
+                    progress.transaction_started = True
+                    progress.phase = "transaction_started"
+                    _apply_checkpoint("after_transaction_started")
                     _verify_virtual_rows(source, plan)
                     source.execute("DELETE FROM strategy_virtual_target_state WHERE pair=? AND (strategy_name='daily_participation_sma' OR strategy_instance_id LIKE 'daily_participation_sma:%' OR strategy_instance_id LIKE 'h74%')", (plan.pair,))
                     if plan.target_state_action == "clear" and plan.pair_target_state_present:
                         source.execute("DELETE FROM target_position_state WHERE pair=?", (plan.pair,))
                     _rebuild_orders(source, plan.retired_order_columns)
+                    _apply_checkpoint("after_orders_rebuilt")
                     for table in plan.retired_tables:
                         source.execute(f"DROP TABLE {_quote(table)}")
                     canonical_columns = _canonical_orders_columns()
@@ -676,15 +875,37 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
                         raise SafetyCheckError("post_rebuild_foreign_key_check_failed")
                     if source.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                         raise SafetyCheckError("post_rebuild_integrity_check_failed")
+                    _apply_checkpoint("before_commit")
+                    progress.commit_started = True
+                    progress.phase = "commit_started"
+                    progress.commit_outcome = "unknown"
                     source.commit()
-                finally:
-                    if source.in_transaction:
-                        source.rollback()
-                    if foreign_keys_disabled:
-                        source.execute("PRAGMA foreign_keys=ON")
-                        if source.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
-                            raise SafetyCheckError("foreign_keys_reenable_failed")
+                    progress.transaction_committed = True
+                    progress.commit_outcome = "committed"
+                    progress.phase = "committed"
+                    _apply_checkpoint("after_commit")
+                except Exception:
+                    if progress.transaction_started and not progress.commit_started:
+                        _attempt_rollback(source, plan, progress)
+                    elif progress.commit_started:
+                        # A commit exception can mean either outcome.  Restore and
+                        # record this connection-local guard when SQLite permits it,
+                        # but never treat that attempt as proof of commit outcome.
+                        try:
+                            _restore_foreign_key_setting(source, progress)
+                        except Exception:
+                            pass
+                    elif progress.foreign_keys_disabled:
+                        try:
+                            _restore_foreign_key_setting(source, progress)
+                        except Exception:
+                            pass
+                    raise
+                _restore_foreign_key_setting(source, progress)
+                _apply_checkpoint("before_post_commit_verification")
                 _require_integrity(source, "post_migration")
+                progress.post_commit_verified = True
+                progress.phase = "post_commit_verified"
             finally:
                 source.close()
     except RunLockError as exc:
@@ -696,7 +917,38 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
         or plan.retired_virtual_state_keys
         or (plan.target_state_action == "clear" and plan.pair_target_state_present)
     )
-    return {"status": status, "plan_hash": plan.plan_hash, "backup_sha256": backup_sha, "database_modified": database_modified, "backup_created": True, "pair_target_state_action": plan.target_state_action, "pair_target_state_retained_by_operator_decision": plan.pair_target_state_present and plan.target_state_action == "retain"}
+    return {
+        "status": status, "plan_hash": plan.plan_hash, "phase": progress.phase,
+        "backup_path": str(backup_path), "backup_sha256": backup_sha,
+        "backup_created": progress.backup_created, "backup_verified": progress.backup_verified,
+        "database_modified": database_modified, "transaction_started": progress.transaction_started,
+        "transaction_committed": progress.transaction_committed,
+        "commit_outcome": progress.commit_outcome, "rollback_attempted": progress.rollback_attempted,
+        "rollback_succeeded": progress.rollback_succeeded,
+        "foreign_keys_reenabled": progress.foreign_keys_reenabled,
+        "post_commit_verified": progress.post_commit_verified, "recovery_required": False,
+        "recommended_action": "none",
+        "pair_target_state_action": plan.target_state_action,
+        "pair_target_state_retained_by_operator_decision": plan.pair_target_state_present and plan.target_state_action == "retain",
+    }
+
+
+def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, broker_local_converged: bool) -> dict[str, object]:
+    progress = ApplyProgress()
+    try:
+        return _apply_plan_inner(
+            plan_path=plan_path, expected_plan_hash=expected_plan_hash, confirmation=confirmation,
+            broker_local_converged=broker_local_converged, progress=progress,
+        )
+    except RetirementApplyError:
+        raise
+    except RunLockError as exc:
+        raise SafetyCheckError("migration_run_lock_unavailable") from exc
+    except Exception as exc:
+        classified = _classify_apply_failure(exc, progress=progress)
+        if classified is not None:
+            raise classified from exc
+        raise
 
 
 def verify_backup(*, plan: RetirementPlan, backup_path: Path, expected_sha256: str) -> dict[str, object]:
