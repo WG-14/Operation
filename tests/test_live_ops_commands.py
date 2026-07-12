@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.cli.commands import live_ops
+from operation.cli.commands import live_ops
 
 
 def test_smoke_buy_command_registered_in_live_ops() -> None:

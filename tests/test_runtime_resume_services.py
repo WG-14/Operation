@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bithumb_bot.operator_flatten_service import OperatorFlattenService
-from bithumb_bot.operator_notification_service import OperatorNotificationService
-from bithumb_bot.operator_repair_service import OperatorRepairService
-from bithumb_bot.runtime_recovery_gate import RuntimeRecoveryGateService, resume_blocker
-from bithumb_bot.runtime_resume_services import (
+from operation.operator_flatten_service import OperatorFlattenService
+from operation.operator_notification_service import OperatorNotificationService
+from operation.operator_repair_service import OperatorRepairService
+from operation.runtime_recovery_gate import RuntimeRecoveryGateService, resume_blocker
+from operation.runtime_resume_services import (
     RestartReadinessService,
     RuntimeResumeService,
 )

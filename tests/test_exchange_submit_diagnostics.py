@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from bithumb_bot.exchange_submit_diagnostics import (
+from operation.exchange_submit_diagnostics import (
     BROKER_LOOKUP_UNAVAILABLE,
     EXCHANGE_REJECTED,
     SUBMITTED_NO_FILL,

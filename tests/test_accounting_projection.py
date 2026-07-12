@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 import json
 
-from bithumb_bot import runtime_state
-from bithumb_bot.cli.main import main as app_main
-from bithumb_bot.operator_commands import _ledger_replay, _load_recovery_report
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import (
+from operation import runtime_state
+from operation.cli.main import main as app_main
+from operation.operator_commands import _ledger_replay, _load_recovery_report
+from operation.config import settings
+from operation.db_core import (
     ACCOUNTING_PROJECTION_MODEL,
     AUTHORITATIVE_ACCOUNTING_EVENT_FAMILIES,
     DIAGNOSTIC_ACCOUNTING_EVENT_FAMILIES,
@@ -18,20 +18,20 @@ from bithumb_bot.db_core import (
     record_external_cash_adjustment,
     summarize_fill_accounting_incident_projection,
 )
-from bithumb_bot.execution import (
+from operation.execution import (
     apply_fill_and_trade,
     apply_fill_principal_with_pending_fee,
     record_order_if_missing,
 )
-from bithumb_bot.lifecycle import summarize_position_lots
-from bithumb_bot.position_authority_state import build_lot_projection_convergence
-from bithumb_bot.fee_pending_repair import (
+from operation.lifecycle import summarize_position_lots
+from operation.position_authority_state import build_lot_projection_convergence
+from operation.fee_pending_repair import (
     apply_fee_pending_accounting_repair,
     build_fee_pending_accounting_repair_preview,
 )
-from bithumb_bot.repair_plan import build_recovery_policy_from_report, build_repair_plan_preview_from_report
-from bithumb_bot.reporting import fetch_cash_drift_report
-from bithumb_bot.runtime_readiness import compute_runtime_readiness_snapshot
+from operation.repair_plan import build_recovery_policy_from_report, build_repair_plan_preview_from_report
+from operation.reporting import fetch_cash_drift_report
+from operation.runtime_readiness import compute_runtime_readiness_snapshot
 
 
 def _record_terminal_closeout_evidence(
@@ -209,7 +209,7 @@ def test_audit_ledger_and_cash_drift_report_share_authoritative_projection_metad
 ):
     _seed_filled_roundtrip_with_later_cash_adjustment(projection_db)
     monkeypatch.setattr(
-        "bithumb_bot.reporting._broker_cash_snapshot",
+        "operation.reporting._broker_cash_snapshot",
         lambda: {"cash_krw": 1_009_967.0, "source": "test"},
     )
 
@@ -696,7 +696,7 @@ def test_fee_pending_observation_without_fill_remains_active_incident(projection
             client_order_id="canonical_fee_pending",
             fill_id="canonical-fill-1",
             fee=26.86,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         summary = _incident_summary(conn)
     finally:
@@ -753,7 +753,7 @@ def test_already_accounted_fill_reclassifies_stale_fee_pending_observation(proje
             client_order_id="already_accounted",
             fill_id="already-accounted-fill",
             fee=26.86,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         recovery_report = _load_recovery_report()
         app_main(["audit-ledger"])
@@ -1088,7 +1088,7 @@ def test_fee_pending_repair_complete_incident_is_historical_not_active(projectio
             client_order_id="repaired_pending",
             fill_id="repaired-fill",
             fee=26.86,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         conn.commit()
         replay = compute_accounting_replay(conn)

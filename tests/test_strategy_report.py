@@ -5,16 +5,16 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.reporting import (
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.reporting import (
     cmd_strategy_report,
     fetch_attribution_quality_summary,
     fetch_filter_effectiveness_summary,
     fetch_lifecycle_close_summary,
     fetch_strategy_performance_stats,
 )
-from bithumb_bot.cli.main import main as app_main
+from operation.cli.main import main as app_main
 
 def _insert_sell_decision(conn, *, decision_ts: int, strategy_name: str, rule: str) -> None:
     conn.execute(
@@ -454,7 +454,7 @@ def test_strategy_report_schema_error_for_legacy_db_without_realized_columns(tmp
 
     ensure_db(db_path).close()
     monkeypatch.setattr(
-        "bithumb_bot.reporting.fetch_strategy_performance_stats",
+        "operation.reporting.fetch_strategy_performance_stats",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("forced schema mismatch")),
     )
     cmd_strategy_report(

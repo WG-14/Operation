@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-if [[ "${BITHUMB_CODEX_BLOCK_BROAD_TEST_RUNNERS:-0}" == "1" ]]; then
-  echo "[CODEX-BROAD-RUNNER-GUARD] Codex ${BITHUMB_CODEX_MODE:-session} must not run ${BASH_SOURCE[0]}." >&2
+if [[ "${OPERATION_CODEX_BLOCK_BROAD_TEST_RUNNERS:-0}" == "1" ]]; then
+  echo "[CODEX-BROAD-RUNNER-GUARD] Codex ${OPERATION_CODEX_MODE:-session} must not run ${BASH_SOURCE[0]}." >&2
   echo "[CODEX-BROAD-RUNNER-GUARD] Run only focused validation directly related to the patch or failure packet." >&2
   exit 126
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
-WORK_DIR="${CODEX_PYTEST_WORK_DIR:-${TMPDIR:-/tmp}/bithumb-bot-codex-pytest}"
+WORK_DIR="${CODEX_PYTEST_WORK_DIR:-${TMPDIR:-/tmp}/operation-codex-pytest}"
 LOG_DIR="${CODEX_PYTEST_LOG_DIR:-${WORK_DIR}/logs}"
 ITERATION="${CODEX_PYTEST_ITERATION:-manual}"
 

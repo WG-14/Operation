@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime.decision_persistence import (
+from operation.db_core import ensure_db
+from operation.runtime.decision_persistence import (
     DecisionPersistenceError,
     DecisionPersistenceUnitOfWork,
 )

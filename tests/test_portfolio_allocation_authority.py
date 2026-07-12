@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.db_core import (
+from operation.db_core import (
     ensure_db,
     ensure_schema,
     rebuild_allocation_decision_from_bundle,
@@ -28,29 +28,29 @@ from bithumb_bot.db_core import (
     replay_runtime_strategy_set_manifest,
     replay_manifest_request_hashes,
 )
-from bithumb_bot.config import settings
-from bithumb_bot.execution_service import (
+from operation.config import settings
+from operation.execution_service import (
     ExecutionDecisionSummary,
     ExecutionReadinessPlanningInput,
     ExecutionTargetPlanningInput,
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
-from bithumb_bot.decision_envelope import DecisionEnvelope
-from bithumb_bot.portfolio_allocation import (
+from operation.decision_envelope import DecisionEnvelope
+from operation.portfolio_allocation import (
     PortfolioAllocationInput,
     PortfolioAllocator,
     PortfolioAllocatorConfig,
     SignalAggregator,
 )
-from bithumb_bot.portfolio_target import PortfolioTarget
-from bithumb_bot.risk_contract import RiskPolicy
-from bithumb_bot.strategy_preference import (
+from operation.portfolio_target import PortfolioTarget
+from operation.risk_contract import RiskPolicy
+from operation.strategy_preference import (
     StrategyPreference,
     StrategyPreferenceSet,
     strategy_decision_to_preference,
 )
-from bithumb_bot.runtime_strategy_set import (
+from operation.runtime_strategy_set import (
     derive_strategy_instance_id,
     ProfileAuthorityContext,
     RuntimeDecisionRequestBuilder,
@@ -62,8 +62,8 @@ from bithumb_bot.runtime_strategy_set import (
     RuntimeStrategySpec,
     normalized_runtime_strategy_set_manifest,
 )
-from bithumb_bot.submit_authority_policy import submit_authority_policy_from_settings
-from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.submit_authority_policy import submit_authority_policy_from_settings
+from operation.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 
 
 @pytest.fixture(autouse=True)
@@ -264,7 +264,7 @@ def _bind_unit_operation_approvals(
     monkeypatch: pytest.MonkeyPatch,
     *specs: RuntimeStrategySpec,
 ) -> tuple[RuntimeStrategySpec, ...]:
-    from bithumb_bot import runtime_strategy_set
+    from operation import runtime_strategy_set
 
     risk_policy = {
         "schema_version": 1,
@@ -286,7 +286,7 @@ def _bind_unit_operation_approvals(
     bound_specs: list[RuntimeStrategySpec] = []
     for idx, spec in enumerate(specs):
         instance = str(spec.strategy_instance_id or f"{spec.strategy_name}_{idx}")
-        profile_path = f"/tmp/bithumb-bot-unit-operation-approvals/{instance}.json"
+        profile_path = f"/tmp/operation-unit-operation-approvals/{instance}.json"
         profile_hash = f"sha256:unit-operation-approval-{instance}"
         bound = replace(
             spec,
@@ -1069,7 +1069,7 @@ def test_target_delta_typed_planning_uses_allocator_portfolio_target(monkeypatch
 
 
 def test_run_loop_single_strategy_path_passes_through_allocator() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     seen: dict[str, object] = {}
 
@@ -1115,7 +1115,7 @@ def test_run_loop_single_strategy_path_passes_through_allocator() -> None:
 
 
 def test_run_loop_multi_strategy_path_sends_multiple_preferences_to_allocator() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     seen: dict[str, object] = {}
 
@@ -1178,7 +1178,7 @@ def test_run_loop_multi_strategy_path_sends_multiple_preferences_to_allocator() 
 
 
 def test_run_loop_multi_strategy_allocator_signal_overrides_representative_hold() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -1227,7 +1227,7 @@ def test_run_loop_multi_strategy_allocator_signal_overrides_representative_hold(
 
 
 def test_run_loop_multi_strategy_target_policy_uses_allocator_signal_not_representative() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     seen_signals: list[str] = []
     old_engine = settings.EXECUTION_ENGINE
@@ -1281,7 +1281,7 @@ def test_run_loop_multi_strategy_target_policy_uses_allocator_signal_not_represe
 
 
 def test_run_loop_multi_strategy_conflict_fails_closed_without_submit() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -1332,7 +1332,7 @@ def test_run_loop_multi_strategy_conflict_fails_closed_without_submit() -> None:
 
 
 def test_single_pair_planner_rejects_multi_target_allocation_before_submit() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -1378,7 +1378,7 @@ def test_single_pair_planner_rejects_multi_target_allocation_before_submit() -> 
 
 
 def test_single_pair_planner_rejects_target_pair_mismatch_before_submit() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -1416,8 +1416,8 @@ def test_single_pair_planner_rejects_target_pair_mismatch_before_submit() -> Non
 
 
 def test_planner_runtime_pair_uses_injected_scope_when_global_pair_changes(tmp_path) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
-    from bithumb_bot.db_core import load_target_position_state, upsert_target_position_state
+    from operation.run_loop_execution_planner import ExecutionPlanner
+    from operation.db_core import load_target_position_state, upsert_target_position_state
 
     @dataclass(frozen=True)
     class _Settings:
@@ -1477,8 +1477,8 @@ def test_planner_runtime_pair_uses_injected_scope_when_global_pair_changes(tmp_p
 
 
 def test_runtime_planner_returns_virtual_lifecycle_intents_without_submit_authority(tmp_path) -> None:
-    from bithumb_bot.db_core import load_strategy_virtual_target_state
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.db_core import load_strategy_virtual_target_state
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     conn = ensure_db(str(tmp_path / "virtual-lifecycle-runtime.sqlite"))
@@ -1566,7 +1566,7 @@ def test_runtime_planner_returns_virtual_lifecycle_intents_without_submit_author
 
 
 def test_virtual_lifecycle_evidence_persists_in_contribution_and_allocation_json(tmp_path) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     conn = ensure_db(str(tmp_path / "virtual-lifecycle-allocation.sqlite"))
@@ -1645,7 +1645,7 @@ def test_virtual_lifecycle_evidence_persists_in_contribution_and_allocation_json
 
 
 def test_virtual_lifecycle_missing_scope_records_skipped_artifact_for_paper_mixed_results() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     conn = ensure_db(":memory:")
@@ -1728,9 +1728,9 @@ def test_virtual_lifecycle_missing_scope_records_skipped_artifact_for_paper_mixe
 
 
 def test_decision_coordinator_persists_multi_strategy_virtual_and_actual_authority_chain(tmp_path) -> None:
-    from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
-    from bithumb_bot.target_position import ACTUAL_PAIR_TARGET_SOURCE
+    from operation.runtime.decision_coordinator import DecisionCoordinator
+    from operation.run_loop_execution_planner import ExecutionPlanner
+    from operation.target_position import ACTUAL_PAIR_TARGET_SOURCE
 
     db_path = str(tmp_path / "decision-coordinator-virtual-authority.sqlite")
     buy_spec = RuntimeStrategySpec(
@@ -1874,7 +1874,7 @@ def test_decision_coordinator_persists_multi_strategy_virtual_and_actual_authori
 
 
 def test_strict_target_delta_rejects_missing_strategy_target_exposure() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     @dataclass(frozen=True)
     class _Settings:
@@ -1930,7 +1930,7 @@ def test_strict_target_delta_rejects_missing_strategy_target_exposure() -> None:
 
 
 def test_target_delta_submit_identity_uses_portfolio_target_pair_when_global_settings_change() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     @dataclass(frozen=True)
     class _Settings:
@@ -2002,8 +2002,8 @@ def test_target_delta_submit_identity_uses_portfolio_target_pair_when_global_set
 
 
 def test_persist_target_position_state_uses_runtime_pair_not_global_pair(tmp_path) -> None:
-    from bithumb_bot.db_core import load_target_position_state
-    from bithumb_bot.runtime.decision_coordinator import persist_target_position_state_for_run_loop
+    from operation.db_core import load_target_position_state
+    from operation.runtime.decision_coordinator import persist_target_position_state_for_run_loop
 
     @dataclass(frozen=True)
     class _Settings:
@@ -2044,7 +2044,7 @@ def test_persist_target_position_state_uses_runtime_pair_not_global_pair(tmp_pat
 
 
 def test_target_position_state_schema_is_pair_level_actual_target_state(tmp_path) -> None:
-    from bithumb_bot.db_core import load_target_position_state, upsert_target_position_state
+    from operation.db_core import load_target_position_state, upsert_target_position_state
 
     conn = ensure_db(str(tmp_path / "target-state-pair-scope.sqlite"))
     try:
@@ -2103,7 +2103,7 @@ def test_live_performance_gate_uses_allocator_selected_contributions_not_global_
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     calls: list[tuple[str, str]] = []
 
@@ -2185,7 +2185,7 @@ def test_selected_buy_performance_gate_failure_blocks_before_submit_plan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     def _gate(_conn, *, strategy_name: str | None = None, pair: str | None = None):
         return {
@@ -2290,7 +2290,7 @@ def test_selected_performance_gate_uses_real_strategy_instance_filter(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_values = {
         "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
@@ -2389,7 +2389,7 @@ def test_selected_failing_instance_blocks_even_when_same_name_pair_history_passe
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_values = {
         "EXECUTION_ENGINE": settings.EXECUTION_ENGINE,
@@ -2463,7 +2463,7 @@ def test_performance_gate_threshold_changes_execution_plan_hash_when_blocking(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     def _plan_with_min_sample(min_sample: int):
         def _gate(_conn, *, strategy_name: str | None = None, pair: str | None = None):
@@ -2528,7 +2528,7 @@ def test_performance_gate_threshold_changes_execution_plan_hash_when_blocking(
 
 @pytest.mark.parametrize("first_signal", ["BUY", "SELL", "HOLD"])
 def test_multi_strategy_conflict_projection_never_uses_representative_signal(first_signal: str) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -2583,7 +2583,7 @@ def test_multi_strategy_conflict_projection_never_uses_representative_signal(fir
 
 
 def test_multi_strategy_execution_plan_hash_stable_when_input_result_order_changes() -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -2628,7 +2628,7 @@ def test_multi_strategy_execution_plan_hash_stable_when_input_result_order_chang
 
 
 def test_multi_strategy_artifacts_persist_and_replay_without_strategy_context_json(tmp_path) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -3005,7 +3005,7 @@ def test_runtime_manifest_hash_mismatch_between_run_start_and_bundle_fails_close
 
 
 def test_allocation_and_execution_plan_link_to_same_manifest_hash(tmp_path) -> None:
-    from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+    from operation.run_loop_execution_planner import ExecutionPlanner
 
     old_engine = settings.EXECUTION_ENGINE
     try:
@@ -3170,7 +3170,7 @@ def test_target_delta_typed_planning_fails_closed_without_portfolio_target() -> 
 
 
 def test_decision_cycle_result_as_dict_exposes_top_level_multi_strategy_artifacts() -> None:
-    from bithumb_bot.runtime.decision_coordinator import DecisionCycleResult
+    from operation.runtime.decision_coordinator import DecisionCycleResult
 
     result = DecisionCycleResult(
         candle_ts=123,
@@ -3309,9 +3309,9 @@ def test_strategy_modules_do_not_import_execution_submit_authority() -> None:
         "paper_execute",
     }
     strategy_roots = (
-        Path("src/bithumb_bot/strategy"),
-        Path("src/bithumb_bot/strategy_plugins"),
-        Path("src/bithumb_bot/runtime_adapters"),
+        Path("src/operation/strategy"),
+        Path("src/operation/strategy_plugins"),
+        Path("src/operation/runtime_adapters"),
     )
     violations: list[str] = []
     for strategy_root in strategy_roots:
@@ -3320,7 +3320,7 @@ def test_strategy_modules_do_not_import_execution_submit_authority() -> None:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and node.module in {
-                    "bithumb_bot.execution_service",
+                    "operation.execution_service",
                     "..execution_service",
                     ".execution_service",
                 }:
@@ -3330,8 +3330,8 @@ def test_strategy_modules_do_not_import_execution_submit_authority() -> None:
                         violations.append(f"{path}:{','.join(blocked)}")
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
-                        if alias.name == "bithumb_bot.execution_service":
-                            violations.append(f"{path}:bithumb_bot.execution_service")
+                        if alias.name == "operation.execution_service":
+                            violations.append(f"{path}:operation.execution_service")
     assert violations == []
 
 

@@ -13,7 +13,7 @@ Use it to separate:
 ## Command
 
 ```bash
-uv run bithumb-bot cash-drift-report --recent-limit 5
+uv run operation cash-drift-report --recent-limit 5
 ```
 
 ## Snapshot output

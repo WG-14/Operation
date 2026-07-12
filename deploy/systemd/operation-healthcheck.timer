@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Operation bot healthcheck every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=operation-healthcheck.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

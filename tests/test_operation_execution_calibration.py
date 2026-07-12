@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.artifact_hashing import sha256_prefixed
-from bithumb_bot.execution_calibration import build_calibration_artifact, write_calibration_artifact
-from bithumb_bot.paths import PathConfig, PathManager, PathPolicyError
+from operation.artifact_hashing import sha256_prefixed
+from operation.execution_calibration import build_calibration_artifact, write_calibration_artifact
+from operation.paths import PathConfig, PathManager, PathPolicyError
 
 
 def _manager(*, project_root: Path, data_root: Path) -> PathManager:

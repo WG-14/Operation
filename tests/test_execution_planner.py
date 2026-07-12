@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.broker.base import BrokerRejectError
-from bithumb_bot.broker import order_rules
-from bithumb_bot.execution_models import OrderIntent
-from bithumb_bot.execution_planner import build_submit_plan
-from bithumb_bot.public_api_orderbook import BestQuote
+from operation.broker.base import BrokerRejectError
+from operation.broker import order_rules
+from operation.execution_models import OrderIntent
+from operation.execution_planner import build_submit_plan
+from operation.public_api_orderbook import BestQuote
 
 
 pytestmark = pytest.mark.fast_regression

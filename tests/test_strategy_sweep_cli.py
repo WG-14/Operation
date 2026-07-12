@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from bithumb_bot.operator_commands import main
-from bithumb_bot.operation_approval import OperationApprovalError
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.observability import configure_runtime_logging
+from operation.operator_commands import main
+from operation.operation_approval import OperationApprovalError
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.observability import configure_runtime_logging
 
 
 FORBIDDEN_RESULT_KEY_PARTS = ("pnl", "drawdown", "fee_drag", "profit", "loss")
@@ -16,10 +16,10 @@ FORBIDDEN_RESULT_KEY_PARTS = ("pnl", "drawdown", "fee_drag", "profit", "loss")
 
 @pytest.fixture
 def configured_db(tmp_path, monkeypatch):
-    from bithumb_bot.config import settings as current_settings
-    import bithumb_bot.db_core as db_core_module
-    import bithumb_bot.operator_commands as operator_commands_module
-    import bithumb_bot.strategy_config as strategy_config_module
+    from operation.config import settings as current_settings
+    import operation.db_core as db_core_module
+    import operation.operator_commands as operator_commands_module
+    import operation.strategy_config as strategy_config_module
 
     globals()["settings"] = current_settings
     db_core_module.settings = current_settings
@@ -320,7 +320,7 @@ def test_strategy_sweep_cli_live_requires_execution_boundary(
 
     object.__setattr__(settings, "MODE", "live")
     monkeypatch.setenv("MODE", "live")
-    monkeypatch.setattr("bithumb_bot.operator_commands.cmd_strategy_sweep", fail_if_called)
+    monkeypatch.setattr("operation.operator_commands.cmd_strategy_sweep", fail_if_called)
 
     with pytest.raises(SystemExit):
         main(_sweep_args(as_json=True))
@@ -375,7 +375,7 @@ def test_strategy_sweep_cli_live_large_operations_fail_before_replay(
         raise AssertionError("sweep replay should not execute")
 
     monkeypatch.setattr(
-        "bithumb_bot.operator_commands.run_sma_strategy_sweep_from_candles",
+        "operation.operator_commands.run_sma_strategy_sweep_from_candles",
         fail_if_called,
     )
     args = _sweep_args(as_json=True) + ["--max-candles", "5000", "--max-operations", "9"]

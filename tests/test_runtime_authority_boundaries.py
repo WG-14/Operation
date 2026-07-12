@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.runtime_data_provider import RuntimeFeatureSnapshot
-from bithumb_bot.runtime_strategy_decision import _project_runtime_feature_snapshot
-from bithumb_bot.runtime_strategy_set import (
+from operation.runtime_data_provider import RuntimeFeatureSnapshot
+from operation.runtime_strategy_decision import _project_runtime_feature_snapshot
+from operation.runtime_strategy_set import (
     ParameterAuthorityResolver,
     RuntimeMarketScope,
     RuntimeStrategyInstance,
@@ -18,13 +18,13 @@ from bithumb_bot.runtime_strategy_set import (
 
 
 def test_production_runtime_modules_do_not_import_legacy_parameter_fallback_directly() -> None:
-    allowed = {"src/bithumb_bot/runtime_strategy_set.py"}
+    allowed = {"src/operation/runtime_strategy_set.py"}
     production_files = (
-        "src/bithumb_bot/runtime_strategy_decision.py",
-        "src/bithumb_bot/runtime_decision_service.py",
-        "src/bithumb_bot/runtime_strategy_set.py",
-        "src/bithumb_bot/runtime_adapter_bootstrap.py",
-        "src/bithumb_bot/runtime_data_provider.py",
+        "src/operation/runtime_strategy_decision.py",
+        "src/operation/runtime_decision_service.py",
+        "src/operation/runtime_strategy_set.py",
+        "src/operation/runtime_adapter_bootstrap.py",
+        "src/operation/runtime_data_provider.py",
     )
     violations = [
         path
@@ -38,9 +38,9 @@ def test_production_runtime_modules_do_not_import_legacy_parameter_fallback_dire
 
 def test_production_live_modules_do_not_import_research_compatibility_planning() -> None:
     production_files = (
-        "src/bithumb_bot/execution_service.py",
-        "src/bithumb_bot/broker/live.py",
-        "src/bithumb_bot/run_loop_execution_planner.py",
+        "src/operation/execution_service.py",
+        "src/operation/broker/live.py",
+        "src/operation/run_loop_execution_planner.py",
     )
     violations = [
         path
@@ -57,7 +57,7 @@ def test_production_live_modules_do_not_import_research_compatibility_planning()
 
 
 def test_legacy_parameter_fallback_module_is_explicitly_paper_compatibility() -> None:
-    source = Path("src/bithumb_bot/legacy_compat/runtime_parameters.py").read_text(encoding="utf-8")
+    source = Path("src/operation/legacy_compat/runtime_parameters.py").read_text(encoding="utf-8")
 
     assert "PAPER_LEGACY_PARAMETER_SOURCE" in source
     assert "paper_legacy_compat" in source
@@ -202,7 +202,7 @@ def test_live_like_manifest_rejects_legacy_parameter_authority_instances(monkeyp
         def build_for_spec(self, spec, *, through_ts_ms):  # type: ignore[no-untyped-def]
             raise AssertionError("manifest should reject before request build")
 
-    monkeypatch.setattr("bithumb_bot.runtime_strategy_set.RuntimeDecisionRequestBuilder", lambda **_kwargs: _Builder())
+    monkeypatch.setattr("operation.runtime_strategy_set.RuntimeDecisionRequestBuilder", lambda **_kwargs: _Builder())
 
     with pytest.raises(RuntimeError, match="runtime_strategy_manifest_legacy_compatibility_rejected"):
         normalized_runtime_strategy_set_manifest(
@@ -237,7 +237,7 @@ def test_db_bound_projector_signature_is_rejected_before_projection() -> None:
 
 
 def test_builtin_sma_adapter_no_longer_exposes_db_bound_projector() -> None:
-    from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
+    from operation.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
 
     snapshot = RuntimeFeatureSnapshot({"feature_payload": {}, "feature_snapshot_hash": "sha256:x"})
     projected = _project_runtime_feature_snapshot(

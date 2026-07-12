@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.broker.order_rules import DerivedOrderConstraints
-from bithumb_bot.lot_model import (
+from operation.broker.order_rules import DerivedOrderConstraints
+from operation.lot_model import (
     build_market_lot_rules,
     is_executable_exit_qty,
     lot_count_to_qty,

@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from bithumb_bot.cli.main import main
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.decision_contract import BLOCK_LAYER_PRIORITY
-from bithumb_bot.decision_attribution import (
+from operation.cli.main import main
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.decision_contract import BLOCK_LAYER_PRIORITY
+from operation.decision_attribution import (
     DecisionAttributionAccumulator,
     build_decision_attribution_summary_from_db,
     decision_attribution_summary_json,
@@ -15,7 +15,7 @@ from bithumb_bot.decision_attribution import (
     normalize_decision_attribution_from_row,
     summarize_decision_attributions,
 )
-from bithumb_bot.observability import configure_runtime_logging
+from operation.observability import configure_runtime_logging
 
 
 def _memory_conn() -> sqlite3.Connection:

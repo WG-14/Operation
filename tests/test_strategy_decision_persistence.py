@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db, record_strategy_decision
+from operation.db_core import ensure_db, record_strategy_decision
 
 
 def _collect_residue_paths(value, path: str = "") -> list[str]:

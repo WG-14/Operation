@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from bithumb_bot.cli.main import main
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, record_strategy_decision
-from bithumb_bot.decision_context import resolve_canonical_position_exposure_snapshot
-from bithumb_bot.reporting import build_decision_v2_summary, fetch_decision_telemetry_summary, fetch_recent_decision_flow
-from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+from operation.cli.main import main
+from operation.config import settings
+from operation.db_core import ensure_db, record_strategy_decision
+from operation.decision_context import resolve_canonical_position_exposure_snapshot
+from operation.reporting import build_decision_v2_summary, fetch_decision_telemetry_summary, fetch_recent_decision_flow
+from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
 
 
 def _collect_residue_paths(value, path: str = "") -> list[str]:
@@ -1635,7 +1635,7 @@ def test_record_strategy_decision_keeps_cost_edge_block_reason(tmp_path, monkeyp
 
 
 def test_live_dry_run_decision_summary_aggregates_contract_causes(tmp_path, monkeypatch, capsys):
-    from bithumb_bot.operator_commands import _build_live_dry_run_decision_summary, _print_live_dry_run_decision_summary
+    from operation.operator_commands import _build_live_dry_run_decision_summary, _print_live_dry_run_decision_summary
 
     db_path = str(tmp_path / "dry-run-summary.sqlite")
     monkeypatch.setenv("DB_PATH", db_path)

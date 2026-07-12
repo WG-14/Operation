@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.broker import order_rules
-from bithumb_bot.broker.base import BrokerRejectError
-from bithumb_bot.broker.order_payloads import (
+from operation.broker import order_rules
+from operation.broker.base import BrokerRejectError
+from operation.broker.order_payloads import (
     build_order_payload,
     build_order_payload_from_plan,
     validate_client_order_id,
     validate_order_submit_payload,
 )
-from bithumb_bot.execution_models import OrderIntent
-from bithumb_bot.execution_planner import build_submit_plan
+from operation.execution_models import OrderIntent
+from operation.execution_planner import build_submit_plan
 
 
 pytestmark = pytest.mark.fast_regression

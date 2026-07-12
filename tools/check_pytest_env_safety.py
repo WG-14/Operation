@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from bithumb_bot.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS  # noqa: E402
+from operation.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS  # noqa: E402
 
 
 RUNNERS = (
@@ -25,10 +25,8 @@ REQUIRED_UNSAFE_ENV_KEYS = {
     "SLACK_WEBHOOK_URL",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
-    "BITHUMB_API_KEY",
-    "BITHUMB_API_SECRET",
 }
-BROKER_PRIVATE_ENV_KEYS = {"BITHUMB_API_KEY", "BITHUMB_API_SECRET"}
+BROKER_PRIVATE_ENV_KEYS: set[str] = set()
 EXTERNAL_NOTIFICATION_ENV_KEYS = REQUIRED_UNSAFE_ENV_KEYS - BROKER_PRIVATE_ENV_KEYS
 
 
@@ -66,7 +64,7 @@ def _extract_function_body(text: str, function_name: str) -> str | None:
 
 def _script_command_index(text: str) -> int | None:
     markers = [
-        "bithumb_pytest_run_preflight",
+        "operation_pytest_run_preflight",
         "uv run python",
         "uv run pytest",
         '"${pytest_cmd[@]}"',
@@ -83,22 +81,22 @@ def _failures() -> list[str]:
     conftest_text = CONFTEST.read_text(encoding="utf-8")
 
     unsafe_keys = set(PYTEST_INHERITANCE_UNSAFE_ENV_KEYS)
-    helper_body = _extract_function_body(helper_text, "bithumb_pytest_sanitize_unsafe_env")
+    helper_body = _extract_function_body(helper_text, "operation_pytest_sanitize_unsafe_env")
     if helper_body is None:
-        failures.append("pytest workspace helper lacks bithumb_pytest_sanitize_unsafe_env")
+        failures.append("pytest workspace helper lacks operation_pytest_sanitize_unsafe_env")
         helper_body = ""
 
-    if "BITHUMB_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS" not in helper_body:
+    if "OPERATION_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS" not in helper_body:
         failures.append("pytest env sanitizer lacks explicit external-notification opt-in guard")
     if "export NOTIFIER_ENABLED=false" not in helper_body:
         failures.append("pytest env sanitizer does not disable notifier delivery by default")
-    if "BITHUMB_PYTEST_BROKER_PRIVATE_ENV_KEYS" not in helper_text:
+    if "OPERATION_PYTEST_BROKER_PRIVATE_ENV_KEYS" not in helper_text:
         failures.append("pytest env sanitizer does not declare broker-private env separately")
-    if "BITHUMB_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS" not in helper_text:
+    if "OPERATION_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS" not in helper_text:
         failures.append("pytest env sanitizer does not declare external notification env separately")
 
-    broker_keys = _array_keys(helper_text, "BITHUMB_PYTEST_BROKER_PRIVATE_ENV_KEYS")
-    notification_keys = _array_keys(helper_text, "BITHUMB_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS")
+    broker_keys = _array_keys(helper_text, "OPERATION_PYTEST_BROKER_PRIVATE_ENV_KEYS")
+    notification_keys = _array_keys(helper_text, "OPERATION_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS")
     missing_helper_keys = sorted(unsafe_keys - (broker_keys | notification_keys))
     if missing_helper_keys:
         failures.append("pytest env sanitizer does not declare pytest-inheritance-unsafe env: " + ", ".join(missing_helper_keys))
@@ -116,9 +114,9 @@ def _failures() -> list[str]:
         failures.append("pytest env sanitizer does not unset declared unsafe env keys")
 
     try:
-        broker_loop_index = helper_body.index("BITHUMB_PYTEST_BROKER_PRIVATE_ENV_KEYS")
+        broker_loop_index = helper_body.index("OPERATION_PYTEST_BROKER_PRIVATE_ENV_KEYS")
         broker_unset_index = helper_body.index('unset "$key"', broker_loop_index)
-        opt_in_index = helper_body.index("BITHUMB_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS")
+        opt_in_index = helper_body.index("OPERATION_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS")
     except ValueError as exc:
         failures.append(f"pytest env sanitizer missing expected broker/opt-in marker: {exc}")
     else:
@@ -137,12 +135,12 @@ def _failures() -> list[str]:
         runner_label = runner.relative_to(PROJECT_ROOT).as_posix()
         if "scripts/lib/pytest_workspace.sh" not in runner_text:
             failures.append(f"{runner_label} does not source pytest workspace helper")
-        if "bithumb_pytest_sanitize_unsafe_env" not in runner_text:
+        if "operation_pytest_sanitize_unsafe_env" not in runner_text:
             failures.append(f"{runner_label} does not call pytest unsafe env sanitizer")
             continue
         try:
             pythonpath_index = runner_text.index('export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"')
-            safety_index = runner_text.index("bithumb_pytest_sanitize_unsafe_env")
+            safety_index = runner_text.index("operation_pytest_sanitize_unsafe_env")
         except ValueError as exc:
             failures.append(f"{runner_label} missing expected sanitizer ordering marker: {exc}")
             continue
@@ -157,9 +155,9 @@ def _failures() -> list[str]:
     if "PYTEST_INHERITANCE_UNSAFE_ENV_KEYS" not in conftest_text:
         failures.append("pytest conftest does not use the config-spec unsafe inheritance key set")
     try:
-        unsafe_import_index = conftest_text.index("from bithumb_bot.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS")
-        import_config_index = conftest_text.index("import bithumb_bot.config as _config_module")
-        import_settings_index = conftest_text.index("from bithumb_bot.config import settings")
+        unsafe_import_index = conftest_text.index("from operation.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS")
+        import_config_index = conftest_text.index("import operation.config as _config_module")
+        import_settings_index = conftest_text.index("from operation.config import settings")
         top_level_clear_index = conftest_text.index("os.environ.pop(_unsafe_env_key, None)")
         top_level_disable_index = conftest_text.index('os.environ["NOTIFIER_ENABLED"] = "false"')
     except ValueError as exc:
@@ -186,7 +184,7 @@ def _failures() -> list[str]:
     if missing_specs:
         failures.append("config spec does not classify required pytest-unsafe env: " + ", ".join(missing_specs))
 
-    notifier_text = (PROJECT_ROOT / "src" / "bithumb_bot" / "notifier.py").read_text(encoding="utf-8")
+    notifier_text = (PROJECT_ROOT / "src" / "operation" / "notifier.py").read_text(encoding="utf-8")
     if "class PytestNotificationSafetyViolation" not in notifier_text:
         failures.append("notifier lacks explicit pytest safety violation sentinel")
     if "except PytestNotificationSafetyViolation:" not in notifier_text:

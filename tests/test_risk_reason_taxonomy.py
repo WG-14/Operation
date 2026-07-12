@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from bithumb_bot.reason_codes import (
+from operation.reason_codes import (
     DRAWDOWN_UNDEFINED_NO_CAPITAL_BASE,
     MAX_DRAWDOWN_PCT,
     RISK_METRIC_SCOPE_MISMATCH,
     RISK_METRIC_UNIT_MISMATCH,
 )
-from bithumb_bot.risk_contract import RiskLimit, RiskMetric, compare_risk_metric_to_limit
+from operation.risk_contract import RiskLimit, RiskMetric, compare_risk_metric_to_limit
 
 
 def test_undefined_drawdown_uses_no_capital_reason() -> None:

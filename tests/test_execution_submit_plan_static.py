@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from bithumb_bot.execution_service import ExecutionSubmitPlan
+from operation.execution_service import ExecutionSubmitPlan
 
 
 def test_execution_submit_plan_dict_facade_not_used_in_runtime() -> None:
@@ -12,7 +12,7 @@ def test_execution_submit_plan_dict_facade_not_used_in_runtime() -> None:
     assert not hasattr(ExecutionSubmitPlan, "__contains__")
 
     offenders: list[str] = []
-    root = Path("src/bithumb_bot")
+    root = Path("src/operation")
     for path in sorted(root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
         for node in ast.walk(tree):

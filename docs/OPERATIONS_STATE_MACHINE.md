@@ -139,10 +139,10 @@ Audit must fail on at least these invariants:
 
 Common commands:
 
-- `uv run bithumb-bot recovery-report`
-- `uv run bithumb-bot restart-checklist`
-- `uv run bithumb-bot reconcile`
-- `uv run bithumb-bot fee-pending-accounting-repair --client-order-id <id> --fill-id <fill_id> --fee <fee> --fee-provenance <source> --apply --yes`
-- `uv run bithumb-bot rebuild-position-authority --apply --yes`
+- `uv run operation recovery-report`
+- `uv run operation restart-checklist`
+- `uv run operation reconcile`
+- `uv run operation fee-pending-accounting-repair --client-order-id <id> --fill-id <fill_id> --fee <fee> --fee-provenance <source> --apply --yes`
+- `uv run operation rebuild-position-authority --apply --yes`
 
 Use repair commands only when auto-recovery cannot finalize the evidence safely on its own.

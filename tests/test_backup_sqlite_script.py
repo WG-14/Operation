@@ -12,7 +12,7 @@ import pytest
 def _with_explicit_env_file(tmp_path: Path, env: dict[str, str], *, mode: str) -> dict[str, str]:
     env_file = tmp_path / f".env.{mode}"
     env_file.write_text(f"MODE={mode}\n", encoding="utf-8", newline="\n")
-    return {**env, "BITHUMB_ENV_FILE": str(env_file)}
+    return {**env, "OPERATION_ENV_FILE": str(env_file)}
 
 
 @pytest.mark.skipif(shutil.which("sqlite3") is None, reason="sqlite3 CLI is required")

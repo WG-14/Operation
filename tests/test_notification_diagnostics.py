@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from bithumb_bot import notification_diagnostics
-from bithumb_bot.notifier import AlertSeverity, NotificationResult
+from operation import notification_diagnostics
+from operation.notifier import AlertSeverity, NotificationResult
 
 
 def test_notification_diagnose_json_masks_secrets(monkeypatch, capsys) -> None:

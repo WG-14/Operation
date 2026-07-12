@@ -219,7 +219,7 @@ All path resolution must go through the shared path layer:
 
 - `PathManager`
 - `PathConfig`
-- `src/bithumb_bot/paths.py`
+- `src/operation/paths.py`
 
 Path locations are configuration. Path structure rules are code.
 
@@ -228,7 +228,7 @@ Managed root location rules:
 - `ENV_ROOT`, `RUN_ROOT`, `DATA_ROOT`, `LOG_ROOT`, and `BACKUP_ROOT` are separate managed roots.
 - `ARCHIVE_ROOT` is a separate managed root when archive storage is enabled.
 - Bucket classification stays the same regardless of where the managed roots are mounted.
-- In `MODE=paper`, unset `ENV_ROOT`, `RUN_ROOT`, `DATA_ROOT`, `LOG_ROOT`, and `BACKUP_ROOT` fall back under `XDG_STATE_HOME/bithumb-bot` or `~/.local/state/bithumb-bot`.
+- In `MODE=paper`, unset `ENV_ROOT`, `RUN_ROOT`, `DATA_ROOT`, `LOG_ROOT`, and `BACKUP_ROOT` fall back under `XDG_STATE_HOME/operation` or `~/.local/state/operation`.
 - In both modes, unset `ARCHIVE_ROOT` falls back to the default runtime root's `archive/` subtree.
 - Live managed roots must be absolute paths.
 - Live managed roots must be repository-external.

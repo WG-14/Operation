@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.dust import (
+from operation.dust import (
     DUST_TRACKING_LOT_STATE,
     OPEN_EXPOSURE_LOT_STATE,
     build_dust_display_context,
@@ -20,7 +20,7 @@ from bithumb_bot.dust import (
     lot_state_strategy_qty_source,
     should_treat_as_flat_for_entry_gate,
 )
-from bithumb_bot.lifecycle import PositionLotSnapshot
+from operation.lifecycle import PositionLotSnapshot
 
 
 pytestmark = pytest.mark.fast_regression

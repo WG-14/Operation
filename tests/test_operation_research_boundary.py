@@ -3,15 +3,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from bithumb_bot.cli.registry import command_registry
+from operation.cli.registry import command_registry
 
 
 FORBIDDEN_MODULES = (
-    "bithumb_bot.profile_cli",
-    "bithumb_bot.approved_profile",
-    "bithumb_bot.paired_experiment",
-    "bithumb_bot.paired_experiment_diff",
-    "bithumb_bot.research",
+    "operation.profile_cli",
+    "operation.approved_profile",
+    "operation.paired_experiment",
+    "operation.paired_experiment_diff",
+    "operation.research",
 )
 
 
@@ -35,7 +35,7 @@ def _forbidden_imports(source: Path) -> list[str]:
 
 def test_operation_and_tests_do_not_import_deleted_research_modules_or_cli() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = root / "src" / "bithumb_bot"
+    source = root / "src" / "operation"
 
     assert not (source / "research").exists()
     tests = root / "tests"
@@ -45,10 +45,10 @@ def test_operation_and_tests_do_not_import_deleted_research_modules_or_cli() -> 
 
 
 def test_operation_package_and_plugin_discovery_import_without_research() -> None:
-    import bithumb_bot
-    from bithumb_bot.operation_strategy.registry import list_operation_strategy_plugins
+    import operation
+    from operation.operation_strategy.registry import list_operation_strategy_plugins
 
     plugins = list_operation_strategy_plugins()
 
-    assert bithumb_bot.__name__ == "bithumb_bot"
+    assert operation.__name__ == "operation"
     assert {plugin.name for plugin in plugins} >= {"safe_hold", "sma_with_filter"}

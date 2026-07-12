@@ -9,7 +9,7 @@ Strategy authoring has three public levels:
 Live safety is not weakened by the research-only API. A strategy without a promotion extension fails closed for promotion export, runtime replay, live dry-run, and live real-order.
 Level 3 authoring does not mean unrestricted live dry-run or real-order eligibility. Live dry-run and real-order authority are separate operational capability fields and remain blocked unless the strategy contract explicitly allows them and the runtime supplies the required approved profile, evidence, and scope.
 
-Do not register promotion-grade runtime strategies in `bithumb_bot.strategy.registry`. That module is compatibility-only for smoke strategy policies and legacy DB-bound construction.
+Do not register promotion-grade runtime strategies in `operation.strategy.registry`. That module is compatibility-only for smoke strategy policies and legacy DB-bound construction.
 
 ## Which Level
 
@@ -37,7 +37,7 @@ Custom exit policy PR checklist:
 - Changing a custom exit threshold changes policy/config hashes and at least one profile/runtime identity hash.
 - Focused tests cover no-exit, common-only, and strategy-owned exit examples where applicable.
 
-Public contract helpers are available from `bithumb_bot.strategy_contract_testing`:
+Public contract helpers are available from `operation.strategy_contract_testing`:
 
 - `assert_research_only_contract(plugin)` for Level 1
 - `assert_replay_compatible_contract(plugin, dataset, params, tmp_path)` for Level 2
@@ -51,7 +51,7 @@ exercise the same diff-aware path explicitly:
 ```bash
 uv run python scripts/check_strategy_pr_workload_guard.py \
   --require-diff-aware \
-  --changed-file src/bithumb_bot/strategy_plugins/example.py \
+  --changed-file src/operation/strategy_plugins/example.py \
   --evidence-file /path/to/pr-evidence.md
 ```
 
@@ -70,9 +70,9 @@ not full diff-aware validation.
 Built-in in-repo plugins and external plugins use different registration
 contracts.
 
-Built-in plugins live under `src/bithumb_bot/strategy_plugins/` and must be
+Built-in plugins live under `src/operation/strategy_plugins/` and must be
 registered in the explicit built-in manifest at
-`src/bithumb_bot/strategy_plugins/builtin_manifest.py`. The manifest stores
+`src/operation/strategy_plugins/builtin_manifest.py`. The manifest stores
 deterministic `module:object` references and
 `iter_builtin_strategy_plugins()` loads from that manifest with lazy imports.
 This is intentionally not package-wide auto-scanning; helper modules,
@@ -88,7 +88,7 @@ individually. The manifest entry is still required, even for `STRATEGY_PLUGINS`,
 so in-repo discovery remains explicit and reviewable.
 
 External packages must not edit the built-in manifest. They register through the
-`bithumb_bot.strategy_plugins` entry-point group in their package metadata.
+`operation.strategy_plugins` entry-point group in their package metadata.
 
 Built-in registration is reserved for strategies that are appropriate to carry
 inside the repository:
@@ -104,7 +104,7 @@ strategies should use external entry points instead of the built-in manifest.
 Strategy PR evidence must declare `Registration Path: builtin_manifest` with a
 valid `Built-in Reason` for built-in additions, or
 `Registration Path: external_entry_point` with
-`Entry Point Group: bithumb_bot.strategy_plugins` for external packages.
+`Entry Point Group: operation.strategy_plugins` for external packages.
 
 Any public in-repo plugin export such as `*_PLUGIN`, `STRATEGY_PLUGIN`, or
 `STRATEGY_PLUGINS` must either appear in the built-in manifest or be explicitly
@@ -130,14 +130,14 @@ Operators and reviewers can inspect the read-only discovery surface without a
 trading DB, broker credentials, order submission, or runtime artifact writes:
 
 ```bash
-uv run bithumb-bot strategy-plugin-inventory --json
+uv run operation strategy-plugin-inventory --json
 ```
 
 Operators can also request one target-specific verdict without combining nested
 inventory fields:
 
 ```bash
-uv run bithumb-bot strategy-plugin-validate --strategy <name> --target <target> --json
+uv run operation strategy-plugin-validate --strategy <name> --target <target> --json
 ```
 
 Supported targets are `research_backtest`, `runtime_replay`,
@@ -187,7 +187,7 @@ The generated payload also separates `operational_capability` from
 
 ## Level 1: Fast Research Path
 
-Use `bithumb_bot.strategy_authoring.ResearchOnlyStrategyPlugin` or one of its helpers:
+Use `operation.strategy_authoring.ResearchOnlyStrategyPlugin` or one of its helpers:
 
 - `research_plugin_from_decide_snapshot()`
 - `research_plugin_from_event_builder()`
@@ -252,7 +252,7 @@ O(N^2) computation inside a single event builder.
 
 ## Level 2: Replay-Compatible Path
 
-Use `bithumb_bot.strategy_authoring.ReplayCompatibleStrategyPlugin`,
+Use `operation.strategy_authoring.ReplayCompatibleStrategyPlugin`,
 `ReplayCompatibleStrategyExtension`, or
 `build_replay_compatible_strategy_plugin()`.
 
@@ -284,7 +284,7 @@ fingerprints, and read-only SQLite replay without live eligibility.
 
 ## Level 3: Promotion-Grade Path
 
-Use `bithumb_bot.strategy_authoring.PromotionGradeStrategyExtension` with
+Use `operation.strategy_authoring.PromotionGradeStrategyExtension` with
 `build_live_eligible_strategy_plugin()`. The builder normalizes the public
 authoring object into the registry representation, so new live-eligible strategy
 modules should not hand-write `ResearchStrategyPlugin(...)`.
@@ -325,7 +325,7 @@ New strategies should not add strategy-specific fields to `Settings`.
 `STRATEGY_PARAMETERS_JSON` is the same paper legacy compatibility surface; it is
 not production authority for promotion, live dry-run, or live real-order runtime.
 These compatibility fallbacks live under the explicit
-`bithumb_bot.legacy_compat.runtime_parameters` boundary and may be invoked only
+`operation.legacy_compat.runtime_parameters` boundary and may be invoked only
 by the central `ParameterAuthorityResolver`.
 
 Production runtime decisions must enter the adapter through
@@ -377,7 +377,7 @@ public authoring API for new strategy modules. Public authoring should use:
 
 `research.backtest_runner` is generic and strategy-neutral. It may call explicit plugin hooks such as `research_parameter_materializer` and `research_event_builder`, but it must not branch on strategy names or own strategy-specific defaults. Strategy-specific research materialization, exploratory legacy behavior, empty-event policy, event generation, diagnostics, and payload adaptation belong in plugin-owned modules.
 
-`research.strategy_registry` owns normalized contract dataclasses, validation, registration, discovery, listing, resolving, and test reload behavior only. Built-in plugins are declared in `strategy_plugins/builtin_manifest.py` and loaded through `bithumb_bot.strategy_plugins.iter_builtin_strategy_plugins()` using lazy imports.
+`research.strategy_registry` owns normalized contract dataclasses, validation, registration, discovery, listing, resolving, and test reload behavior only. Built-in plugins are declared in `strategy_plugins/builtin_manifest.py` and loaded through `operation.strategy_plugins.iter_builtin_strategy_plugins()` using lazy imports.
 
 Existing `sma_with_filter`, `safe_hold`, and baseline direct
 `ResearchStrategyPlugin(...)` construction has been narrowed. `sma_with_filter`
@@ -463,7 +463,7 @@ New strategy PRs should normally modify one plugin file and one focused test fil
 
 ## Entry-Point Plugin Packages
 
-External packages register plugins through the `bithumb_bot.strategy_plugins`
+External packages register plugins through the `operation.strategy_plugins`
 entry-point group. The entry point may return a single public authoring object,
 a callable that returns one, or an iterable of public authoring objects. It must
 not require editing common engine files.
@@ -471,7 +471,7 @@ not require editing common engine files.
 Minimal `pyproject.toml` shape:
 
 ```toml
-[project.entry-points."bithumb_bot.strategy_plugins"]
+[project.entry-points."operation.strategy_plugins"]
 my_research_strategy = "my_package.my_strategy:RESEARCH_ONLY_PLUGIN"
 my_replay_strategy = "my_package.my_strategy:REPLAY_COMPATIBLE_PLUGIN"
 my_promotion_grade_strategy = "my_package.my_strategy:LEVEL_3_PROMOTION_GRADE_PLUGIN"

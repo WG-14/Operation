@@ -1,5 +1,5 @@
 [project]
-name = "bithumb-bot"
+name = "operation"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,7 +9,6 @@ dependencies = [
     "pandas>=3.0.1",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
-    "PyJWT>=2.10.1",
 ]
 
 [dependency-groups]
@@ -28,16 +27,13 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 [project.scripts]
-bithumb-bot = "bithumb_bot.bootstrap:run_cli"
+operation = "operation.bootstrap:run_cli"
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 pythonpath = ["."]
 tmp_path_retention_count = 1
 tmp_path_retention_policy = "failed"
-filterwarnings = [
-    "error::jwt.exceptions.InsecureKeyLengthWarning",
-]
 markers = [
     "fast_regression: quick deterministic regression checks for dust, auth, and order-validation behavior",
     "slow_integration: slower live-like or restart/reconcile integration checks",

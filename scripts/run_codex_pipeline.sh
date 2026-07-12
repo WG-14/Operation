@@ -43,16 +43,16 @@ notify() {
 fail() {
   local message="$1"
   echo "[PIPELINE] ${message}" >&2
-  notify "bithumb-bot pipeline failed" "high" "${message}"
+  notify "operation pipeline failed" "high" "${message}"
   exit 1
 }
 
 on_error() {
   local exit_code=$?
   trap - ERR
-  local message="bithumb-bot Codex pipeline failed during stage: ${stage}"
+  local message="operation Codex pipeline failed during stage: ${stage}"
   echo "[PIPELINE] ${message}" >&2
-  notify "bithumb-bot pipeline failed" "high" "${message}"
+  notify "operation pipeline failed" "high" "${message}"
   exit "$exit_code"
 }
 trap on_error ERR
@@ -257,8 +257,8 @@ EOF
 
   PATH="${CODEX_PYTEST_GUARD_DIR}:${PATH}" \
     CODEX_PYTEST_GUARD_REAL_UV="${uv_bin}" \
-    BITHUMB_CODEX_MODE="default_patch" \
-    BITHUMB_CODEX_BLOCK_BROAD_TEST_RUNNERS=1 \
+    OPERATION_CODEX_MODE="default_patch" \
+    OPERATION_CODEX_BLOCK_BROAD_TEST_RUNNERS=1 \
     "${CODEX_BIN}" exec --full-auto --cd "${PROJECT_ROOT}" - < "${REQUEST_FILE}"
 }
 
@@ -302,7 +302,7 @@ post_codex_non_request="$(dirty_paths_excluding_request_file "${request_rel}")"
 if [[ -z "${post_codex_non_request}" ]]; then
   stage="check Codex modifications"
   echo "[PIPELINE] Codex completed but did not modify any file other than the request file." >&2
-  notify "bithumb-bot pipeline failed" "high" \
+  notify "operation pipeline failed" "high" \
     "Codex did not modify any file other than ${request_rel}; no commit was created."
   exit 1
 fi

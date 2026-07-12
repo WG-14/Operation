@@ -5,8 +5,8 @@ from dataclasses import replace
 
 import pytest
 
-from bithumb_bot.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
-from bithumb_bot.operation_strategy.registry import (
+from operation.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
+from operation.operation_strategy.registry import (
     list_operation_strategy_plugins,
     operation_strategy_runtime_capability_issues,
 )

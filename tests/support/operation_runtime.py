@@ -7,16 +7,16 @@ import time
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.decision_equivalence import sha256_prefixed
-from bithumb_bot import runtime_state
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime.app_container import create_default_runtime_app
-from bithumb_bot.runtime.operator_event_composer import RuntimeOperatorEventComposer
-from bithumb_bot.runtime.runner import Runner
-from bithumb_bot.runtime.runtime_checkpoint import RuntimeCheckpoint
-from bithumb_bot.runtime.safety_controller import HaltReason
-from bithumb_bot.runtime_compat import evaluate_startup_safety_gate
+from operation.config import settings
+from operation.decision_equivalence import sha256_prefixed
+from operation import runtime_state
+from operation.db_core import ensure_db
+from operation.runtime.app_container import create_default_runtime_app
+from operation.runtime.operator_event_composer import RuntimeOperatorEventComposer
+from operation.runtime.runner import Runner
+from operation.runtime.runtime_checkpoint import RuntimeCheckpoint
+from operation.runtime.safety_controller import HaltReason
+from operation.runtime_compat import evaluate_startup_safety_gate
 
 
 def set_live_runtime_paths(
@@ -35,7 +35,7 @@ def set_live_runtime_paths(
     }
     for key, value in roots.items():
         monkeypatch.setenv(key, str(value))
-    monkeypatch.setenv("RUN_LOCK_PATH", str((roots["RUN_ROOT"] / "live" / "bithumb-bot.lock").resolve()))
+    monkeypatch.setenv("RUN_LOCK_PATH", str((roots["RUN_ROOT"] / "live" / "operation.lock").resolve()))
     live_db_path = (
         db_path.resolve()
         if db_path is not None
@@ -94,7 +94,7 @@ class _NoSubmitBroker:
         return []
 
     def get_balance(self):
-        from bithumb_bot.broker.base import BrokerBalance
+        from operation.broker.base import BrokerBalance
 
         return BrokerBalance(
             cash_available=100_000.0,
@@ -182,13 +182,13 @@ def prepare_runtime_loop(
     tracker = PreparedRuntimeLoop(runner=Runner(app))
 
     def mark_recovery_required(reason: str, marked_at_ms: int) -> int:
-        from bithumb_bot.runtime_data_access import mark_open_orders_recovery_required
+        from operation.runtime_data_access import mark_open_orders_recovery_required
 
         count = mark_open_orders_recovery_required(reason, marked_at_ms)
         tracker.marked_recovery_required += count
         return count
 
-    import bithumb_bot.recovery as recovery_module
+    import operation.recovery as recovery_module
 
     app = replace(
         app,
@@ -202,7 +202,7 @@ def prepare_runtime_loop(
         interval_parser=lambda _interval: 60,
         runtime_strategy_set_manifest_provider=unit_runtime_strategy_set_manifest,
         open_order_snapshot=lambda timestamp_ms: __import__(
-            "bithumb_bot.runtime_data_access", fromlist=["open_order_snapshot"]
+            "operation.runtime_data_access", fromlist=["open_order_snapshot"]
         ).open_order_snapshot(timestamp_ms),
         mark_open_orders_recovery_required=mark_recovery_required,
         reconcile_with_broker=lambda broker: recovery_module.reconcile_with_broker(broker),
@@ -212,7 +212,7 @@ def prepare_runtime_loop(
         safety_controller=replace(
             app.safety_controller,
             legacy_cancel_open_orders=lambda broker, reason: bool(
-                __import__("bithumb_bot.compat.engine_legacy", fromlist=["_attempt_open_order_cancellation"])
+                __import__("operation.compat.engine_legacy", fromlist=["_attempt_open_order_cancellation"])
                 ._attempt_open_order_cancellation(broker, reason)
             ),
         ),

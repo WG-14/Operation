@@ -4,12 +4,12 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
-from bithumb_bot import runtime_state
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.no_submit_diagnostic import diagnostic_for_stage
+from operation import runtime_state
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.no_submit_diagnostic import diagnostic_for_stage
 from tests.test_runtime_cycle_artifact_assembler import _decision_result
-from bithumb_bot.runtime.execution_coordinator import ExecutionCycleResult
+from operation.runtime.execution_coordinator import ExecutionCycleResult
 
 
 def test_runtime_data_preflight_failure_records_diagnostic_stage() -> None:
@@ -162,7 +162,7 @@ def _pipeline_runner(*, now: float = 100.0):
             self.artifacts = []
 
         def _record_artifact(self, cycle_id: str, **kwargs: object):
-            from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+            from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
 
             artifact = RuntimeCycleArtifact(
                 cycle_id=cycle_id,
@@ -212,7 +212,7 @@ def test_failsafe_pause_records_diagnostic_artifact(monkeypatch) -> None:
 
 
 def test_cycle_pipeline_record_artifact_calls_attach_diagnostic() -> None:
-    path = Path("src/bithumb_bot/runtime/cycle_pipeline.py")
+    path = Path("src/operation/runtime/cycle_pipeline.py")
     tree = ast.parse(path.read_text(encoding="utf-8"))
     missing: list[int] = []
     for node in ast.walk(tree):
@@ -231,7 +231,7 @@ def test_cycle_pipeline_record_artifact_calls_attach_diagnostic() -> None:
 
 
 def test_cycle_pipeline_has_no_bare_return_none_early_exit() -> None:
-    path = Path("src/bithumb_bot/runtime/cycle_pipeline.py")
+    path = Path("src/operation/runtime/cycle_pipeline.py")
     tree = ast.parse(path.read_text(encoding="utf-8"))
     missing: list[int] = []
     for node in ast.walk(tree):

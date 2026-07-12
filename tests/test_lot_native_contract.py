@@ -6,12 +6,12 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot.decision_context import (
+from operation.decision_context import (
     normalize_strategy_decision_context,
     resolve_canonical_position_exposure_snapshot,
 )
-from bithumb_bot.broker.order_rules import DerivedOrderConstraints, normalize_limit_price_for_side
-from bithumb_bot.dust import (
+from operation.broker.order_rules import DerivedOrderConstraints, normalize_limit_price_for_side
+from operation.dust import (
     DUST_TRACKING_LOT_STATE,
     OPEN_EXPOSURE_LOT_STATE,
     build_position_state_model,
@@ -20,8 +20,8 @@ from bithumb_bot.dust import (
     lot_native_position_contract,
     lot_state_quantity_contract,
 )
-from bithumb_bot.lifecycle import summarize_position_lots
-from bithumb_bot.order_sizing import SellExecutionAuthority, build_sell_execution_sizing
+from operation.lifecycle import summarize_position_lots
+from operation.order_sizing import SellExecutionAuthority, build_sell_execution_sizing
 
 
 pytestmark = pytest.mark.fast_regression

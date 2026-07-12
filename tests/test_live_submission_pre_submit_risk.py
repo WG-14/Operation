@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bithumb_bot.broker.live_submission_execution import _build_live_submission_pre_submit_risk_fields
-from bithumb_bot.submit_authority_policy import is_pre_submit_risk_approved_for_plan
+from operation.broker.live_submission_execution import _build_live_submission_pre_submit_risk_fields
+from operation.submit_authority_policy import is_pre_submit_risk_approved_for_plan
 
 
 PLAN_HASH = "sha256:" + "a" * 64

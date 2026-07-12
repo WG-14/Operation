@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.experiment_fingerprint import (
+from operation.experiment_fingerprint import (
     build_experiment_fingerprint_payload,
     experiment_fingerprint,
 )

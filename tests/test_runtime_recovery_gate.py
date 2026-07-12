@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bithumb_bot.runtime_recovery_gate import ResumeBlocker, RuntimeRecoveryGateService
-from bithumb_bot.runtime_resume_services import RestartReadinessService, RuntimeResumeService
+from operation.runtime_recovery_gate import ResumeBlocker, RuntimeRecoveryGateService
+from operation.runtime_resume_services import RestartReadinessService, RuntimeResumeService
 
 
 @dataclass(frozen=True)

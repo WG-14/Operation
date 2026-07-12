@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.operator_closeout import build_operator_clean_closeout_contract
-from bithumb_bot.quantity_contract import ExchangeQuantityContract
-from bithumb_bot.residual_disposition import build_residual_disposition
+from operation.operator_closeout import build_operator_clean_closeout_contract
+from operation.quantity_contract import ExchangeQuantityContract
+from operation.residual_disposition import build_residual_disposition
 
 
 def test_residual_verdict_includes_quantity_rule_sources():

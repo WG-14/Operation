@@ -4,14 +4,14 @@ import json
 from pathlib import Path
 import pytest
 
-from bithumb_bot.cli.main import main as app_main
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.execution import record_order_if_missing
-from bithumb_bot.fee_pending_repair import apply_fee_pending_accounting_repair
-from bithumb_bot.paths import PathManager
-from bithumb_bot.reporting import FeeDiagnosticSummary, cmd_fee_diagnostics, fetch_fee_diagnostics
-import bithumb_bot.reporting as reporting
+from operation.cli.main import main as app_main
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.execution import record_order_if_missing
+from operation.fee_pending_repair import apply_fee_pending_accounting_repair
+from operation.paths import PathManager
+from operation.reporting import FeeDiagnosticSummary, cmd_fee_diagnostics, fetch_fee_diagnostics
+import operation.reporting as reporting
 
 
 def _set_managed_runtime_paths(monkeypatch, tmp_path: Path) -> PathManager:
@@ -302,7 +302,7 @@ def test_fee_diagnostics_treats_repaired_fee_pending_history_as_diagnostic_only(
             client_order_id="historical-fee-pending",
             fill_id="historical-fill-1",
             fee=26.86,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         conn.commit()
     finally:
@@ -413,11 +413,11 @@ def test_fee_diagnostics_fee_model_validation_disambiguates_chance_doc_source(mo
             notes=[],
         )
 
-    monkeypatch.setattr("bithumb_bot.reporting.ensure_db", lambda: _DummyConn())
-    monkeypatch.setattr("bithumb_bot.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
-    monkeypatch.setattr("bithumb_bot.reporting.resolve_fee_authority_snapshot", lambda _pair: _Authority())
+    monkeypatch.setattr("operation.reporting.ensure_db", lambda: _DummyConn())
+    monkeypatch.setattr("operation.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
+    monkeypatch.setattr("operation.reporting.resolve_fee_authority_snapshot", lambda _pair: _Authority())
     monkeypatch.setattr(
-        "bithumb_bot.reporting.build_fee_rate_drift_diagnostics",
+        "operation.reporting.build_fee_rate_drift_diagnostics",
         lambda _conn: {
             "configured_fee_rate": 0.0004,
             "configured_fee_rate_estimate": 0.0004,
@@ -502,8 +502,8 @@ def test_fee_diagnostics_default_estimate_uses_live_fee_rate_in_live_mode(monkey
             notes=[],
         )
 
-    monkeypatch.setattr("bithumb_bot.reporting.ensure_db", lambda: _DummyConn())
-    monkeypatch.setattr("bithumb_bot.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
+    monkeypatch.setattr("operation.reporting.ensure_db", lambda: _DummyConn())
+    monkeypatch.setattr("operation.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
     orig_mode = settings.MODE
     orig_live = settings.LIVE_FEE_RATE_ESTIMATE
     orig_paper = settings.PAPER_FEE_RATE
@@ -549,8 +549,8 @@ def test_fee_diagnostics_default_estimate_uses_paper_fee_rate_in_non_live_mode(m
             notes=[],
         )
 
-    monkeypatch.setattr("bithumb_bot.reporting.ensure_db", lambda: _DummyConn())
-    monkeypatch.setattr("bithumb_bot.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
+    monkeypatch.setattr("operation.reporting.ensure_db", lambda: _DummyConn())
+    monkeypatch.setattr("operation.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
     orig_mode = settings.MODE
     orig_live = settings.LIVE_FEE_RATE_ESTIMATE
     orig_paper = settings.PAPER_FEE_RATE
@@ -596,8 +596,8 @@ def test_fee_diagnostics_explicit_estimate_overrides_mode_defaults(monkeypatch):
             notes=[],
         )
 
-    monkeypatch.setattr("bithumb_bot.reporting.ensure_db", lambda: _DummyConn())
-    monkeypatch.setattr("bithumb_bot.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
+    monkeypatch.setattr("operation.reporting.ensure_db", lambda: _DummyConn())
+    monkeypatch.setattr("operation.reporting.fetch_fee_diagnostics", _fake_fetch_fee_diagnostics)
     orig_mode = settings.MODE
     orig_live = settings.LIVE_FEE_RATE_ESTIMATE
     orig_paper = settings.PAPER_FEE_RATE

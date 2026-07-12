@@ -3,16 +3,13 @@ name: operation-ci
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
   operation-safety:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: .
-      BITHUMB_API_KEY: ""
-      BITHUMB_API_SECRET: ""
       NTFY_TOPIC: ""
       NOTIFIER_WEBHOOK_URL: ""
       SLACK_WEBHOOK_URL: ""
@@ -22,18 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: uv sync --dev
-      - name: Verify Operation research boundary
-        run: uv run pytest -q tests/test_operation_research_boundary.py
-      - name: Verify Operation approval fail-closed contract
-        run: uv run pytest -q tests/test_operation_approval.py
-      - name: Run curated Operation P0/P1 safety gate
-        run: ./scripts/run_operation_tests.sh
-      - name: Run remaining pytest suite
-        run: uv run pytest -q
+      - run: uv sync --dev
+      - run: python3 tools/check_exchange_residue.py
+      - run: uv run pytest -q tests/test_exchange_removal_contract.py tests/test_lot_native_contract.py

@@ -12,7 +12,7 @@ It does not contain runtime artifacts.
 
 - Do not write runtime artifacts into the Git repository.
 - Do not write runtime artifacts to repo-relative paths such as `./data`, `./backups`, `./tmp`, or repo-root `*.log`.
-- All path resolution must go through `PathManager`, `PathConfig`, and the helpers in `src/bithumb_bot/paths.py`.
+- All path resolution must go through `PathManager`, `PathConfig`, and the helpers in `src/operation/paths.py`.
 - Paper and live data must remain fully separated.
 - Live mode must fail fast on relative paths, repo-internal paths, and wrong-environment segments such as `paper`.
 - Every new file output must be classified into exactly one storage bucket.
@@ -55,7 +55,7 @@ Managed roots:
 
 Current paper/default behavior:
 
-- When `MODE=paper` and `ENV_ROOT`, `RUN_ROOT`, `DATA_ROOT`, `LOG_ROOT`, or `BACKUP_ROOT` are unset, `PathManager` falls back to the default runtime root under `XDG_STATE_HOME/bithumb-bot` or `~/.local/state/bithumb-bot`.
+- When `MODE=paper` and `ENV_ROOT`, `RUN_ROOT`, `DATA_ROOT`, `LOG_ROOT`, or `BACKUP_ROOT` are unset, `PathManager` falls back to the default runtime root under `XDG_STATE_HOME/operation` or `~/.local/state/operation`.
 - When `ARCHIVE_ROOT` is unset, both `paper` and `live` use the default runtime root's `archive/` subtree.
 - Explicit paper overrides may still be supplied, but the preferred operator layout remains repository-external absolute paths.
 
@@ -76,12 +76,12 @@ ENV_ROOT/
 
 RUN_ROOT/
   paper/
-    bithumb-bot.pid
-    bithumb-bot.lock
+    operation.pid
+    operation.lock
     runtime_state.json
   live/
-    bithumb-bot.pid
-    bithumb-bot.lock
+    operation.pid
+    operation.lock
     runtime_state.json
 
 DATA_ROOT/
@@ -163,7 +163,7 @@ Path creation and path resolution must use the shared path layer:
 
 - `PathManager`
 - `PathConfig`
-- `src/bithumb_bot/paths.py`
+- `src/operation/paths.py`
 
 ## Runtime Roots
 
@@ -172,12 +172,12 @@ Recommended live/runtime shape: choose separate absolute roots and pass them thr
 Example:
 
 ```text
-ENV_ROOT=/var/lib/bithumb-bot/env
-RUN_ROOT=/var/lib/bithumb-bot/run
-DATA_ROOT=/var/lib/bithumb-bot/data
-LOG_ROOT=/var/log/bithumb-bot
-BACKUP_ROOT=/var/backups/bithumb-bot
-ARCHIVE_ROOT=/srv/bithumb-bot-archive
+ENV_ROOT=/var/lib/operation/env
+RUN_ROOT=/var/lib/operation/run
+DATA_ROOT=/var/lib/operation/data
+LOG_ROOT=/var/log/operation
+BACKUP_ROOT=/var/backups/operation
+ARCHIVE_ROOT=/srv/operation-archive
 ```
 
 These examples are illustrative locations only. The contract is the managed-root separation and the mode-relative bucket structure, not a single required parent directory.
@@ -196,8 +196,8 @@ GitHub stores only `.env.example`. Real API keys, webhook secrets, and DB paths 
 ### run
 
 ```text
-RUN_ROOT/live/bithumb-bot.lock
-RUN_ROOT/live/bithumb-bot.pid
+RUN_ROOT/live/operation.lock
+RUN_ROOT/live/operation.pid
 RUN_ROOT/live/runtime_state.json
 ```
 

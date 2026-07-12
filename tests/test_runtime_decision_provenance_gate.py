@@ -8,11 +8,11 @@ from typing import Any, Callable
 
 import pytest
 
-from bithumb_bot.db_core import ensure_schema
-from bithumb_bot import runtime_strategy_decision, runtime_strategy_set
-from bithumb_bot.runtime_strategy_decision import RuntimeDecisionRequest
-from bithumb_bot.runtime_strategy_set import validate_runtime_decision_result_provenance
-from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
+from operation.db_core import ensure_schema
+from operation import runtime_strategy_decision, runtime_strategy_set
+from operation.runtime_strategy_decision import RuntimeDecisionRequest
+from operation.runtime_strategy_set import validate_runtime_decision_result_provenance
+from operation.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
 
 def _request() -> RuntimeDecisionRequest:
@@ -199,7 +199,7 @@ def test_runtime_result_bundle_rejects_missing_plugin_contract_hash() -> None:
 
 
 def test_runtime_result_bundle_creation_validates_provenance() -> None:
-    source = Path("src/bithumb_bot/runtime_strategy_set.py").read_text(encoding="utf-8")
+    source = Path("src/operation/runtime_strategy_set.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     bundle_class = next(
         node
@@ -315,13 +315,13 @@ def test_decision_runner_rejects_plugin_contract_hash_provenance_errors(
 
 def test_production_runtime_modules_do_not_call_runtime_adapters_directly() -> None:
     allowed = {
-        ("src/bithumb_bot/runtime_strategy_set.py", "_decide_with_feature_snapshot"),
+        ("src/operation/runtime_strategy_set.py", "_decide_with_feature_snapshot"),
     }
     production_files = (
-        "src/bithumb_bot/runtime_strategy_set.py",
-        "src/bithumb_bot/runtime_strategy_decision.py",
-        "src/bithumb_bot/runtime_decision_service.py",
-        "src/bithumb_bot/runtime_adapter_bootstrap.py",
+        "src/operation/runtime_strategy_set.py",
+        "src/operation/runtime_strategy_decision.py",
+        "src/operation/runtime_decision_service.py",
+        "src/operation/runtime_adapter_bootstrap.py",
     )
     violations: list[str] = []
     for path in production_files:

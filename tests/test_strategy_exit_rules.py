@@ -4,11 +4,11 @@ import os
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.strategy.base import PositionContext
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.strategy.base import PositionContext
 
-from bithumb_bot.strategy.exit_rules import (
+from operation.strategy.exit_rules import (
     MaxHoldingTimeExitRule,
     OppositeCrossExitRule,
     StopLossExitRule,
@@ -17,7 +17,7 @@ from bithumb_bot.strategy.exit_rules import (
     create_sma_exit_rules,
     merge_exit_rules,
 )
-from bithumb_bot.compat.sma_legacy_adapter import (
+from operation.compat.sma_legacy_adapter import (
     create_legacy_sma_with_filter_db_adapter,
     create_sma_strategy,
 )

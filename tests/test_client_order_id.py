@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.oms import MAX_CLIENT_ORDER_ID_LENGTH, build_client_order_id
+from operation.oms import MAX_CLIENT_ORDER_ID_LENGTH, build_client_order_id
 
 
 def test_build_client_order_id_live_format_and_max_length() -> None:

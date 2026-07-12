@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${BITHUMB_CODEX_BLOCK_BROAD_TEST_RUNNERS:-0}" == "1" ]]; then
-  echo "[CODEX-BROAD-RUNNER-GUARD] Codex ${BITHUMB_CODEX_MODE:-session} must not run ${BASH_SOURCE[0]}." >&2
+if [[ "${OPERATION_CODEX_BLOCK_BROAD_TEST_RUNNERS:-0}" == "1" ]]; then
+  echo "[CODEX-BROAD-RUNNER-GUARD] Codex ${OPERATION_CODEX_MODE:-session} must not run ${BASH_SOURCE[0]}." >&2
   echo "[CODEX-BROAD-RUNNER-GUARD] Run only focused validation directly related to the patch or failure packet." >&2
   exit 126
 fi
@@ -29,11 +29,11 @@ OPERATION_TESTS=(
   tests/operator/test_reconcile_recovery.py
 )
 
-bithumb_pytest_setup_workspace "operation"
+operation_pytest_setup_workspace "operation"
 status=0
-trap 'status=$?; bithumb_pytest_cleanup_workspace "$status"; exit "$status"' EXIT
+trap 'status=$?; operation_pytest_cleanup_workspace "$status"; exit "$status"' EXIT
 
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
-bithumb_pytest_sanitize_unsafe_env "operation safety pytest runner"
-bithumb_pytest_mark_pytest_started
+operation_pytest_sanitize_unsafe_env "operation safety pytest runner"
+operation_pytest_mark_pytest_started
 uv run pytest -q "${OPERATION_TESTS[@]}"

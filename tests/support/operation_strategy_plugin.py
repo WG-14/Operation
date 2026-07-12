@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from bithumb_bot.operation_strategy.builtin import BUILTIN_OPERATION_STRATEGY_PLUGINS
-from bithumb_bot.operation_strategy.capabilities import RuntimeParameterAdapter
-from bithumb_bot.operation_strategy.registry import (
+from operation.operation_strategy.builtin import BUILTIN_OPERATION_STRATEGY_PLUGINS
+from operation.operation_strategy.capabilities import RuntimeParameterAdapter
+from operation.operation_strategy.registry import (
     OperationStrategyRegistryError,
     register_operation_strategy_plugin,
 )
-from bithumb_bot.operation_strategy.spec import StrategyParameterSchema, StrategySpec
-from bithumb_bot.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
+from operation.operation_strategy.spec import StrategyParameterSchema, StrategySpec
+from operation.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
 
 
 TEST_ONLY_OPERATION_STRATEGY_NAME = "canary_non_sma"

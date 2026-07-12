@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tests.test_submit_authority_policy import _approved, _plan
 
-from bithumb_bot.submit_authority_policy import is_pre_submit_risk_approved_for_plan
+from operation.submit_authority_policy import is_pre_submit_risk_approved_for_plan
 
 
 def test_pre_submit_risk_integrity_passes_for_reduce_only_sell() -> None:

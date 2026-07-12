@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot import runtime_state
-from bithumb_bot.broker.base import BrokerBalance, BrokerFill, BrokerOrder
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime_compat import evaluate_startup_safety_gate
-from bithumb_bot.execution import apply_fill_and_trade, record_order_if_missing
-from bithumb_bot.oms import set_exchange_order_id, set_status
-from bithumb_bot.recovery import reconcile_with_broker
+from operation import runtime_state
+from operation.broker.base import BrokerBalance, BrokerFill, BrokerOrder
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.runtime_compat import evaluate_startup_safety_gate
+from operation.execution import apply_fill_and_trade, record_order_if_missing
+from operation.oms import set_exchange_order_id, set_status
+from operation.recovery import reconcile_with_broker
 from tests.support.operation_runtime import (
     prepare_runtime_loop,
     run_one_runtime_cycle,
@@ -205,8 +205,8 @@ def test_failure_scenario_cancel_then_late_fill_is_applied_deterministically(iso
 def test_failure_scenario_stale_open_order_detection_triggers_safe_halt(isolated_db, monkeypatch):
     loop = prepare_runtime_loop(monkeypatch, open_order_created_ts=1)
     object.__setattr__(settings, "MAX_OPEN_ORDER_AGE_SEC", 5)
-    monkeypatch.setattr("bithumb_bot.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy._attempt_open_order_cancellation", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("operation.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
+    monkeypatch.setattr("operation.compat.engine_legacy._attempt_open_order_cancellation", lambda *_args, **_kwargs: True)
 
     object.__setattr__(settings, "MAX_MARKET_SLIPPAGE_BPS", 50.0)
     object.__setattr__(settings, "LIVE_PRICE_PROTECTION_MAX_SLIPPAGE_BPS", 25.0)
@@ -226,7 +226,7 @@ def test_failure_scenario_stale_open_order_detection_triggers_safe_halt(isolated
 
 def test_failure_scenario_recovery_required_ambiguity_blocks_new_trading_loop_progress(isolated_db, monkeypatch):
     loop = prepare_runtime_loop(monkeypatch, open_order_created_ts=0)
-    monkeypatch.setattr("bithumb_bot.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
+    monkeypatch.setattr("operation.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
 
     conn = ensure_db(str(isolated_db))
     try:
@@ -244,7 +244,7 @@ def test_failure_scenario_recovery_required_ambiguity_blocks_new_trading_loop_pr
         conn.close()
 
     calls = {"n": 0}
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.live_execute_signal", lambda *_args, **_kwargs: calls.__setitem__("n", calls["n"] + 1))
+    monkeypatch.setattr("operation.compat.engine_legacy.live_execute_signal", lambda *_args, **_kwargs: calls.__setitem__("n", calls["n"] + 1))
 
     run_one_runtime_cycle(loop)
 
@@ -258,18 +258,18 @@ def test_failure_scenario_recovery_required_ambiguity_blocks_new_trading_loop_pr
 
 def test_failure_scenario_position_hard_loss_breach_triggers_halt(isolated_db, monkeypatch):
     loop = prepare_runtime_loop(monkeypatch)
-    monkeypatch.setattr("bithumb_bot.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
+    monkeypatch.setattr("operation.recovery.reconcile_with_broker", lambda _broker: None, raising=False)
     monkeypatch.setattr(
-        "bithumb_bot.runtime.safety_controller.evaluate_daily_loss_breach",
+        "operation.runtime.safety_controller.evaluate_daily_loss_breach",
         lambda *_args, **_kwargs: (False, "ok"),
     )
     monkeypatch.setattr(
-        "bithumb_bot.runtime.safety_controller.evaluate_position_loss_breach",
+        "operation.runtime.safety_controller.evaluate_position_loss_breach",
         lambda *_args, **_kwargs: (True, "position loss threshold breached (8.00%/5.00%, entry=100, mark=92)"),
     )
 
     live_calls = {"n": 0}
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.live_execute_signal", lambda *_args, **_kwargs: live_calls.__setitem__("n", live_calls["n"] + 1))
+    monkeypatch.setattr("operation.compat.engine_legacy.live_execute_signal", lambda *_args, **_kwargs: live_calls.__setitem__("n", live_calls["n"] + 1))
 
     run_one_runtime_cycle(loop)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.evidence_safety import evidence_rejection_reasons, smoke_only_evidence_rejection_reasons
+from operation.evidence_safety import evidence_rejection_reasons, smoke_only_evidence_rejection_reasons
 
 
 def test_diagnostic_only_payload_is_rejected_as_promotion_evidence() -> None:

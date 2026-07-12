@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot import runtime_state
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, init_portfolio, set_portfolio_breakdown
-from bithumb_bot.lifecycle import DUST_TRACKING_STATE, summarize_non_executable_residuals
-from bithumb_bot.runtime_readiness import compute_runtime_readiness_snapshot, evaluate_clean_account_gate
+from operation import runtime_state
+from operation.config import settings
+from operation.db_core import ensure_db, init_portfolio, set_portfolio_breakdown
+from operation.lifecycle import DUST_TRACKING_STATE, summarize_non_executable_residuals
+from operation.runtime_readiness import compute_runtime_readiness_snapshot, evaluate_clean_account_gate
 
 
 RESIDUAL_QTY = 0.00009996

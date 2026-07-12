@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot import config
-import bithumb_bot.run_lock as run_lock
-from bithumb_bot.run_lock import (
+from operation import config
+import operation.run_lock as run_lock
+from operation.run_lock import (
     STALE_LOCK_MAX_AGE_SECONDS,
     RunLockError,
     acquire_run_lock,
@@ -99,7 +99,7 @@ def test_default_lock_path_supports_dryrun_mode_scoping(monkeypatch: pytest.Monk
     dryrun_lock = run_lock._default_lock_path()
 
     assert "/dryrun/" in str(dryrun_lock).replace("\\", "/")
-    assert dryrun_lock.name == "bithumb-bot.lock"
+    assert dryrun_lock.name == "operation.lock"
 
 
 def test_default_lock_path_rejects_live_relative_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,7 +139,7 @@ def test_same_runtime_storage_second_process_fails(monkeypatch: pytest.MonkeyPat
     ready = ctx.Event()
     release = ctx.Event()
     result_queue = ctx.Queue()
-    lock_path = str((tmp_path / "run" / "paper" / "bithumb-bot.lock").resolve())
+    lock_path = str((tmp_path / "run" / "paper" / "operation.lock").resolve())
 
     first = _spawn_process(ctx, _hold_lock_worker, lock_path, ready, release, result_queue)
     try:
@@ -176,13 +176,13 @@ def test_different_mode_runtime_storages_do_not_conflict(
     paper_ready = ctx.Event()
     paper_release = ctx.Event()
     paper_result = ctx.Queue()
-    paper_lock_path = str((tmp_path / "run" / "paper" / "bithumb-bot.lock").resolve())
+    paper_lock_path = str((tmp_path / "run" / "paper" / "operation.lock").resolve())
     paper_proc = _spawn_process(ctx, _hold_lock_worker, paper_lock_path, paper_ready, paper_release, paper_result)
 
     live_ready = ctx.Event()
     live_release = ctx.Event()
     live_result = ctx.Queue()
-    live_lock_path = str((tmp_path / "run" / "live" / "bithumb-bot.lock").resolve())
+    live_lock_path = str((tmp_path / "run" / "live" / "operation.lock").resolve())
     live_proc = _spawn_process(ctx, _hold_lock_worker, live_lock_path, live_ready, live_release, live_result)
     try:
         assert paper_ready.wait(timeout=10) is True
@@ -309,7 +309,7 @@ def test_abnormal_termination_stale_lock_file_is_reclaimed(tmp_path: Path) -> No
         import time
         from pathlib import Path
 
-        from bithumb_bot.run_lock import acquire_run_lock
+        from operation.run_lock import acquire_run_lock
 
         lock_path = Path(sys.argv[1])
         lock = acquire_run_lock(lock_path)

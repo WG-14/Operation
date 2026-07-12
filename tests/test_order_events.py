@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.flatten import _flatten_submit_evidence
-from bithumb_bot.oms import (
+from operation.db_core import ensure_db
+from operation.flatten import _flatten_submit_evidence
+from operation.oms import (
     OPEN_ORDER_STATUSES,
     TERMINAL_ORDER_STATUSES,
     add_fill,
@@ -20,8 +20,8 @@ from bithumb_bot.oms import (
     synchronize_order_state_invariants,
     validate_status_transition,
 )
-from bithumb_bot.reason_codes import DUST_RESIDUAL_SUPPRESSED, DUST_RESIDUAL_UNSELLABLE
-from bithumb_bot.observability import safety_event
+from operation.reason_codes import DUST_RESIDUAL_SUPPRESSED, DUST_RESIDUAL_UNSELLABLE
+from operation.observability import safety_event
 
 
 pytestmark = pytest.mark.fast_regression

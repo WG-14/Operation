@@ -7,12 +7,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 COMMON_CORE_FILES = (
-    "src/bithumb_bot/strategy_decision_service.py",
-    "src/bithumb_bot/runtime_data_provider.py",
-    "src/bithumb_bot/runtime_strategy_decision.py",
-    "src/bithumb_bot/runtime_strategy_set.py",
-    "src/bithumb_bot/execution_service.py",
-    "src/bithumb_bot/run_loop_execution_planner.py",
+    "src/operation/strategy_decision_service.py",
+    "src/operation/runtime_data_provider.py",
+    "src/operation/runtime_strategy_decision.py",
+    "src/operation/runtime_strategy_set.py",
+    "src/operation/execution_service.py",
+    "src/operation/run_loop_execution_planner.py",
 )
 
 BUILT_IN_STRATEGY_LITERALS = (

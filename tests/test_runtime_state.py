@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 
-from bithumb_bot import runtime_state
-from bithumb_bot.config import settings
+from operation import runtime_state
+from operation.config import settings
 
 
 def _set_tmp_db(tmp_path):

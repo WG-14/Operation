@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.cli.main import main as cli_main
-from bithumb_bot import config
-from bithumb_bot.config import settings
+from operation.cli.main import main as cli_main
+from operation import config
+from operation.config import settings
 
 
 def test_validate_mode_or_raise_rejects_typo() -> None:
@@ -68,7 +68,7 @@ def test_main_health_fails_fast_on_invalid_mode(monkeypatch: pytest.MonkeyPatch,
         lambda _mode: (_ for _ in ()).throw(config.ModeValidationError("invalid MODE='papre'; allowed values: paper, live")),
     )
     monkeypatch.setattr(
-        "bithumb_bot.operator_commands.cmd_health",
+        "operation.operator_commands.cmd_health",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
     )
 
@@ -88,7 +88,7 @@ def test_main_run_fails_fast_on_invalid_mode(monkeypatch: pytest.MonkeyPatch, ca
         lambda _mode: (_ for _ in ()).throw(config.ModeValidationError("invalid MODE='papre'; allowed values: paper, live")),
     )
     monkeypatch.setattr(
-        "bithumb_bot.operator_commands.cmd_run",
+        "operation.operator_commands.cmd_run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
     )
 
@@ -106,7 +106,7 @@ def test_main_health_keeps_existing_valid_mode(monkeypatch: pytest.MonkeyPatch) 
 
     object.__setattr__(settings, "MODE", "paper")
     monkeypatch.setattr(
-        "bithumb_bot.operator_commands.cmd_health",
+        "operation.operator_commands.cmd_health",
         lambda *_args, **_kwargs: calls.append("cmd_health"),
     )
 

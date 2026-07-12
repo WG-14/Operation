@@ -1,4 +1,4 @@
-# Limited Unattended Live Ops Checklist (Bithumb BTC)
+# Limited Unattended Live Ops Checklist (Operation BTC)
 
 Background: This document is a limited live operations checklist and does not imply full 24/7 autonomous operation.
 
@@ -14,18 +14,18 @@ Background: This document is a limited live operations checklist and does not im
 Example commands:
 
 ```bash
-MODE=paper DB_PATH=/var/lib/bithumb-bot/data/paper/trades/paper.safe.sqlite uv run bithumb-bot health
-MODE=live DB_PATH=/var/lib/bithumb-bot/data/live/trades/live.safe.sqlite LIVE_DRY_RUN=true uv run bithumb-bot health
+MODE=paper DB_PATH=/var/lib/operation/data/paper/trades/paper.safe.sqlite uv run operation health
+MODE=live DB_PATH=/var/lib/operation/data/live/trades/live.safe.sqlite LIVE_DRY_RUN=true uv run operation health
 ```
 
 ## 2. Live Preflight
 
 ```bash
-uv run bithumb-bot broker-diagnose
-uv run bithumb-bot health
-uv run bithumb-bot recovery-report
-uv run bithumb-bot reconcile
-uv run bithumb-bot recovery-report
+uv run operation broker-diagnose
+uv run operation health
+uv run operation recovery-report
+uv run operation reconcile
+uv run operation recovery-report
 ```
 
 Pass criteria:
@@ -48,7 +48,7 @@ Live safety reminders:
 
 ## 3. API and Notifier Checks
 
-- [ ] Bithumb API read and order permissions are confirmed
+- [ ] Operation API read and order permissions are confirmed
 - [ ] Withdraw permissions remain disabled
 - [ ] IP whitelist state is understood
 - [ ] At least one notifier path is configured
@@ -58,22 +58,22 @@ Live safety reminders:
 
 ```bash
 # Integrated emergency path
-uv run bithumb-bot panic-stop
-uv run bithumb-bot panic-stop --flatten
+uv run operation panic-stop
+uv run operation panic-stop --flatten
 
 # Manual halt without integrated cleanup
-uv run bithumb-bot pause
-uv run bithumb-bot cancel-open-orders
+uv run operation pause
+uv run operation cancel-open-orders
 
 # Reconcile the ledger
-uv run bithumb-bot reconcile
-uv run bithumb-bot recovery-report
+uv run operation reconcile
+uv run operation recovery-report
 ```
 
 Resume:
 
 ```bash
-uv run bithumb-bot resume
+uv run operation resume
 ```
 
 - Use `panic-stop` as the current integrated live emergency command.
@@ -84,8 +84,8 @@ uv run bithumb-bot resume
 Targeted unresolved-order recovery:
 
 ```bash
-uv run bithumb-bot recover-order --client-order-id <client_id> --exchange-order-id <exchange_id> --dry-run
-uv run bithumb-bot recover-order --client-order-id <client_id> --exchange-order-id <exchange_id> --yes
+uv run operation recover-order --client-order-id <client_id> --exchange-order-id <exchange_id> --dry-run
+uv run operation recover-order --client-order-id <client_id> --exchange-order-id <exchange_id> --yes
 ```
 
 - Use `recover-order` only for a specific unresolved live order after reviewing `recovery-report`.
@@ -94,15 +94,15 @@ uv run bithumb-bot recover-order --client-order-id <client_id> --exchange-order-
 ## 5. Restart / Reconcile Checklist
 
 ```bash
-uv run bithumb-bot restart-checklist
-uv run bithumb-bot health
-uv run bithumb-bot recovery-report
-uv run bithumb-bot reconcile
-uv run bithumb-bot recovery-report
-uv run bithumb-bot cancel-open-orders
-uv run bithumb-bot reconcile
-uv run bithumb-bot recovery-report
-uv run bithumb-bot resume
+uv run operation restart-checklist
+uv run operation health
+uv run operation recovery-report
+uv run operation reconcile
+uv run operation recovery-report
+uv run operation cancel-open-orders
+uv run operation reconcile
+uv run operation recovery-report
+uv run operation resume
 ```
 
 Pass criteria:
@@ -130,13 +130,13 @@ Backup verification:
 
 ```bash
 BACKUP_VERIFY_RESTORE=1 ./scripts/backup_sqlite.sh
-python3 tools/verify_sqlite_restore.py /var/lib/bithumb-bot/backup/live/db/<backup_file>.sqlite
+python3 tools/verify_sqlite_restore.py /var/lib/operation/backup/live/db/<backup_file>.sqlite
 ```
 
 ## 8. systemd Env File Separation
 
-- `bithumb-bot.service` uses `BITHUMB_ENV_FILE=/etc/bithumb-bot/bithumb-bot.live.env`
-- `bithumb-bot-healthcheck.service` and `bithumb-bot-backup.service` use the same explicit runtime env file
+- `operation.service` uses `OPERATION_ENV_FILE=/etc/operation/operation.live.env`
+- `operation-healthcheck.service` and `operation-backup.service` use the same explicit runtime env file
 - The env file must keep DB, notifier, and safety settings aligned
 
 ## 9. Pass / Fail

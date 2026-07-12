@@ -10,4 +10,4 @@ def test_bot_compiles():
 
 
 def test_package_main_compiles():
-    py_compile.compile("src/bithumb_bot/__main__.py", doraise=True)
+    py_compile.compile("src/operation/__main__.py", doraise=True)

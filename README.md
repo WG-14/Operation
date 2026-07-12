@@ -1,48 +1,29 @@
-# bithumb-bot
+# operation
 
-Safety-first Bithumb trading bot. Preventing wrong orders, duplicate orders,
-state corruption, and unsafe recovery takes precedence over profitability.
+Safety-first investment strategy operation and execution runtime.
 
-Runtime artifacts belong outside the repository and are resolved only through
-`PathManager`. Paper and live storage remain fully separated; live requires
-explicit, repository-external absolute runtime roots.
+Operation is not connected to any exchange. Paper and research execution are
+offline-first: runtime candles are read from the mode-separated SQLite store
+and are never implicitly synchronized from the network. If no candle data is
+available, the cycle returns its normal no-data result.
 
-## Operation approval
+Live execution is deliberately fail-closed. No broker adapter is configured,
+so a live startup is blocked with `LIVE_BROKER_NOT_CONFIGURED` before
+reconciliation or submission can begin. Live requests are never simulated as
+paper orders.
 
-Live dry-run and armed live operation require an external `OPERATION_APPROVAL_PATH`.
-An approval is fail-closed against the active Operation strategy name/version,
-strategy spec and plugin contract hashes, materialized parameters, exit policy,
-market/interval, risk policy, execution contract, allowed mode, expiry, maximum
-order amount, and content hash. It does not consume external provenance inputs.
+Future integrations belong behind `operation.broker.base.Broker` and the
+`BrokerFactory` boundary in `operation.broker.availability`. New market-data
+integrations must implement the narrow provider boundary in
+`operation.marketdata_provider`; they must be explicitly selected and must
+not become a paper default.
 
-```bash
-uv run bithumb-bot operation-approval-create \
-  --out /var/lib/bithumb-bot/approvals/btc.json \
-  --approved-by operator \
-  --expires-at 2026-12-31T00:00:00+00:00 \
-  --allowed-mode live_dry_run
-uv run bithumb-bot operation-approval-verify --approval /var/lib/bithumb-bot/approvals/btc.json
-```
-
-The canonical CLI is `uv run bithumb-bot <command>`. Useful commands include
-`health`, `status`, `sync`, `run`, `live-dry-run`, `reconcile`, `resume`,
-`ops-report`, and `execution-quality-report`.
-
-## Configuration check
-
-Use the bootstrap-aware CLI to inspect the effective configuration without
-exposing secrets:
+Runtime artifacts are resolved by `PathManager` outside the repository. New
+runtime defaults use `~/.local/state/operation`; existing data under older
+runtime locations is intentionally neither moved nor deleted.
 
 ```bash
-uv run bithumb-bot config-dump --masked
+uv run operation --help
+uv run operation health
+uv run operation config-dump --masked
 ```
-
-Direct Python imports do not run the CLI bootstrap path and therefore are not
-the supported way to verify selected environment configuration.
-
-## Validation
-
-Codex patch sessions run only focused tests. The full suite remains owned by
-the dedicated CI/WSL pipeline. See [storage-layout.md](docs/storage-layout.md)
-and [runtime-data-policy.md](docs/runtime-data-policy.md) for the runtime
-storage contract.

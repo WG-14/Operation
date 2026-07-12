@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.paths import PathManager, PathPolicyError
+from operation.paths import PathManager, PathPolicyError
 
 
 def _set_roots(monkeypatch: pytest.MonkeyPatch, root: Path, mode: str) -> None:

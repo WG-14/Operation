@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.execution_service import ExecutionSubmitPlan
-from bithumb_bot.run_loop_execution_planner import (
+from operation.db_core import ensure_db
+from operation.execution_service import ExecutionSubmitPlan
+from operation.run_loop_execution_planner import (
     ExecutionPlanner,
     _build_execution_plan_batch_for_runtime_pair,
     resolve_target_position_state_for_run_loop,
 )
-from bithumb_bot.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec
-from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec
+from operation.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 
 
 def _count(conn, table: str) -> int:
@@ -334,7 +334,7 @@ def test_sell_submit_plan_returns_order_lock_intent_without_order_lock_row(tmp_p
 
 
 def test_planner_source_has_no_forbidden_write_calls() -> None:
-    source = "src/bithumb_bot/run_loop_execution_planner.py"
+    source = "src/operation/run_loop_execution_planner.py"
     text = open(source, encoding="utf-8").read()
     forbidden = (
         "upsert_target_position_state",

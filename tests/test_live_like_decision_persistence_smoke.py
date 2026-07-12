@@ -6,16 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db, record_portfolio_allocation_decision
-from bithumb_bot.config import settings
-from bithumb_bot.execution_service import ExecutionSubmitPlan
-from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
-from bithumb_bot.runtime import cycle_pipeline
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
-from bithumb_bot.runtime.decision_persistence import DecisionPersistenceUnitOfWork
-from bithumb_bot.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec
-from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.db_core import ensure_db, record_portfolio_allocation_decision
+from operation.config import settings
+from operation.execution_service import ExecutionSubmitPlan
+from operation.run_loop_execution_planner import ExecutionPlanner
+from operation.runtime import cycle_pipeline
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.decision_coordinator import DecisionCoordinator
+from operation.runtime.decision_persistence import DecisionPersistenceUnitOfWork
+from operation.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec
+from operation.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 
 
 STRATEGY_NAME = "canary_non_sma"

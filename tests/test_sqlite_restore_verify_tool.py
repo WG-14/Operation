@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from bithumb_bot.db_core import ensure_db
+from operation.db_core import ensure_db
 
 
 def test_restore_verify_tool_smoke(tmp_path: Path) -> None:

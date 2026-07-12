@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot import notifier
+from operation import notifier
 
 
 class FakeResponse:

@@ -8,19 +8,19 @@ Background: This checklist is for validation only and does not permit real order
 
 ## Startup Checks
 
-- [ ] `BITHUMB_ENV_FILE` points to the explicit live env file with live DB and run-lock paths
+- [ ] `OPERATION_ENV_FILE` points to the explicit live env file with live DB and run-lock paths
 - [ ] `LIVE_DRY_RUN=true`
 - [ ] `LIVE_REAL_ORDER_ARMED=false`
 - [ ] Notifier configuration is present and valid
-- [ ] `/var/lib/bithumb-bot/data/live/trades/live.sqlite` backup is reachable
-- [ ] `bithumb-bot.service` is running normally
-- [ ] `bithumb-bot-healthcheck.timer` is enabled
-- [ ] `bithumb-bot-backup.timer` is enabled
+- [ ] `/var/lib/operation/data/live/trades/live.sqlite` backup is reachable
+- [ ] `operation.service` is running normally
+- [ ] `operation-healthcheck.timer` is enabled
+- [ ] `operation-backup.timer` is enabled
 
 ## Runtime Checks
 
-- [ ] `sudo systemctl status bithumb-bot.service`
-- [ ] `sudo journalctl -u bithumb-bot.service -n 100 --no-pager`
+- [ ] `sudo systemctl status operation.service`
+- [ ] `sudo journalctl -u operation.service -n 100 --no-pager`
 - [ ] No healthcheck error is present
 - [ ] No halt state is present
 - [ ] The service can still recover after restart

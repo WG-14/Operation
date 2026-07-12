@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.execution_coordinator import ExecutionCycleResult
-from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.execution_coordinator import ExecutionCycleResult
+from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
 
 
 def test_gate_trace_records_first_blocking_gate() -> None:

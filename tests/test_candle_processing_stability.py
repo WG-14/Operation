@@ -5,24 +5,24 @@ import os
 
 import pytest
 
-from bithumb_bot import runtime_state
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.compat.engine_legacy import run_loop
-from bithumb_bot.runtime_compat import _close_guard_ms, _is_closed_candle, _select_latest_closed_candle
-from bithumb_bot.execution_service import ExecutionDecisionSummary, ExecutionSubmitPlan
-from bithumb_bot.execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
-from bithumb_bot.run_loop_execution_planner import ExecutionPlanBundle
-from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
-from bithumb_bot.compat.sma_legacy_adapter import compute_signal
+from operation import runtime_state
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.compat.engine_legacy import run_loop
+from operation.runtime_compat import _close_guard_ms, _is_closed_candle, _select_latest_closed_candle
+from operation.execution_service import ExecutionDecisionSummary, ExecutionSubmitPlan
+from operation.execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
+from operation.run_loop_execution_planner import ExecutionPlanBundle
+from operation.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.compat.sma_legacy_adapter import compute_signal
 
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path):
-    from bithumb_bot.config import settings as current_settings
-    import bithumb_bot.db_core as db_core_module
-    import bithumb_bot.compat.engine_legacy as engine_settings_module
-    import bithumb_bot.runtime_state as runtime_state_module
+    from operation.config import settings as current_settings
+    import operation.db_core as db_core_module
+    import operation.compat.engine_legacy as engine_settings_module
+    import operation.runtime_state as runtime_state_module
 
     globals()["settings"] = current_settings
     db_core_module.settings = current_settings
@@ -192,7 +192,7 @@ def _install_runtime_gateway(monkeypatch, result_factory) -> None:
             )
             return _RuntimeDecisionBundle(result, strategy_set)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.RuntimeDecisionGateway", _Gateway)
+    monkeypatch.setattr("operation.compat.engine_legacy.RuntimeDecisionGateway", _Gateway)
 
     class _Planner:
         def plan_runtime_strategy_results(self, _conn, result_bundle, *, updated_ts: int):
@@ -202,7 +202,7 @@ def _install_runtime_gateway(monkeypatch, result_factory) -> None:
                 return _buy_execution_plan()
             return _hold_execution_plan(result)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.run_loop_execution_planner", lambda **_kwargs: _Planner())
+    monkeypatch.setattr("operation.compat.engine_legacy.run_loop_execution_planner", lambda **_kwargs: _Planner())
 
 
 def _buy_execution_plan() -> ExecutionPlanBundle:
@@ -387,7 +387,7 @@ def test_compute_signal_ignores_open_candle_tail_when_bounded(monkeypatch) -> No
 
     # Force the strategy's default closed-only cutoff to land before the open tail.
     monkeypatch.setattr(
-        "bithumb_bot.compat.sma_legacy_adapter.time.time",
+        "operation.compat.sma_legacy_adapter.time.time",
         lambda: (base_ts + 5 * 60_000 + 3_100) / 1000,
     )
 
@@ -481,15 +481,15 @@ def test_run_loop_logs_duplicate_and_incomplete_candle_and_skips_reprocessing(mo
     _insert_candle(open_ts, 101.0)
     runtime_state.mark_processed_candle(candle_ts_ms=closed_ts, now_epoch_sec=1.0)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.parse_interval_sec", lambda _: 60)
+    monkeypatch.setattr("operation.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
+    monkeypatch.setattr("operation.compat.engine_legacy.parse_interval_sec", lambda _: 60)
     _install_runtime_gateway(
         monkeypatch,
         lambda *_args, **_kwargs: pytest.fail("duplicate candle should not reach runtime gateway"),
     )
 
     times = iter([64.0, 65.0, 65.0])
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.time", lambda: next(times, 65.0))
+    monkeypatch.setattr("operation.compat.engine_legacy.time.time", lambda: next(times, 65.0))
     sleep_calls = {"n": 0}
 
     def _sleep(_sec: float) -> None:
@@ -497,9 +497,9 @@ def test_run_loop_logs_duplicate_and_incomplete_candle_and_skips_reprocessing(mo
         if sleep_calls["n"] >= 2:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.sleep", _sleep)
+    monkeypatch.setattr("operation.compat.engine_legacy.time.sleep", _sleep)
 
-    with caplog.at_level("INFO", logger="bithumb_bot.run"):
+    with caplog.at_level("INFO", logger="operation.run"):
         run_loop()
 
     output = caplog.text
@@ -516,8 +516,8 @@ def test_run_loop_processes_latest_closed_candle_and_persists_it(monkeypatch, ca
     _insert_candle(closed_ts, 100.0)
     _insert_candle(open_ts, 101.0)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.parse_interval_sec", lambda _: 60)
+    monkeypatch.setattr("operation.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
+    monkeypatch.setattr("operation.compat.engine_legacy.parse_interval_sec", lambda _: 60)
     _install_runtime_gateway(
         monkeypatch,
         lambda _conn, *, through_ts_ms=None: _runtime_handoff(
@@ -528,7 +528,7 @@ def test_run_loop_processes_latest_closed_candle_and_persists_it(monkeypatch, ca
     )
 
     times = iter([64.0, 65.0, 65.0])
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.time", lambda: next(times, 65.0))
+    monkeypatch.setattr("operation.compat.engine_legacy.time.time", lambda: next(times, 65.0))
     sleep_calls = {"n": 0}
 
     def _sleep(_sec: float) -> None:
@@ -536,10 +536,10 @@ def test_run_loop_processes_latest_closed_candle_and_persists_it(monkeypatch, ca
         if sleep_calls["n"] >= 2:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.sleep", _sleep)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.paper_execute", lambda *_args, **_kwargs: pytest.fail("HOLD should not execute"))
+    monkeypatch.setattr("operation.compat.engine_legacy.time.sleep", _sleep)
+    monkeypatch.setattr("operation.compat.engine_legacy.paper_execute", lambda *_args, **_kwargs: pytest.fail("HOLD should not execute"))
 
-    with caplog.at_level("INFO", logger="bithumb_bot.run"):
+    with caplog.at_level("INFO", logger="operation.run"):
         run_loop()
 
     output = caplog.text
@@ -557,8 +557,8 @@ def test_run_loop_does_not_mark_candle_processed_when_decision_persistence_fails
     _insert_candle(closed_ts, 100.0)
     _insert_candle(open_ts, 101.0)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.parse_interval_sec", lambda _: 60)
+    monkeypatch.setattr("operation.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
+    monkeypatch.setattr("operation.compat.engine_legacy.parse_interval_sec", lambda _: 60)
     _install_runtime_gateway(
         monkeypatch,
         lambda _conn, *, through_ts_ms=None: _runtime_handoff(
@@ -571,9 +571,9 @@ def test_run_loop_does_not_mark_candle_processed_when_decision_persistence_fails
     def _record_failure(*_args, **_kwargs):
         raise RuntimeError("unit persistence failure")
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.record_strategy_decision", _record_failure)
+    monkeypatch.setattr("operation.compat.engine_legacy.record_strategy_decision", _record_failure)
     times = iter([64.0, 65.0, 65.0])
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.time", lambda: next(times, 65.0))
+    monkeypatch.setattr("operation.compat.engine_legacy.time.time", lambda: next(times, 65.0))
     sleep_calls = {"n": 0}
 
     def _sleep(_sec: float) -> None:
@@ -581,9 +581,9 @@ def test_run_loop_does_not_mark_candle_processed_when_decision_persistence_fails
         if sleep_calls["n"] >= 2:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.sleep", _sleep)
+    monkeypatch.setattr("operation.compat.engine_legacy.time.sleep", _sleep)
 
-    with caplog.at_level("INFO", logger="bithumb_bot.run"):
+    with caplog.at_level("INFO", logger="operation.run"):
         run_loop()
 
     output = caplog.text
@@ -599,8 +599,8 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
     _insert_candle(closed_ts, 100.0)
     _insert_candle(open_ts, 200.0)
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.parse_interval_sec", lambda _: 60)
+    monkeypatch.setattr("operation.compat.engine_legacy.cmd_sync", lambda quiet=True: None)
+    monkeypatch.setattr("operation.compat.engine_legacy.parse_interval_sec", lambda _: 60)
 
     def _decide(_conn, *, through_ts_ms=None):
         assert through_ts_ms == closed_ts
@@ -608,7 +608,7 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
 
     _install_runtime_gateway(monkeypatch, _decide)
     monkeypatch.setattr(
-        "bithumb_bot.compat.engine_legacy.paper_execute",
+        "operation.compat.engine_legacy.paper_execute",
         lambda _signal, _ts, _price, **_kwargs: {
             "ts": closed_ts,
             "signal_ts": closed_ts,
@@ -629,7 +629,7 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
     )
 
     times = iter([64.0, 65.0, 65.0])
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.time", lambda: next(times, 65.0))
+    monkeypatch.setattr("operation.compat.engine_legacy.time.time", lambda: next(times, 65.0))
     sleep_calls = {"n": 0}
 
     def _sleep(_sec: float) -> None:
@@ -637,7 +637,7 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
         if sleep_calls["n"] >= 2:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.time.sleep", _sleep)
+    monkeypatch.setattr("operation.compat.engine_legacy.time.sleep", _sleep)
     plan_bundle = _buy_execution_plan()
 
     class _Planner:
@@ -647,9 +647,9 @@ def test_run_loop_uses_closed_candle_for_signal_and_trade_log_correlation(monkey
         def plan_runtime_strategy_results(self, *_args, **_kwargs):
             return plan_bundle
 
-    monkeypatch.setattr("bithumb_bot.compat.engine_legacy.run_loop_execution_planner", lambda **_kwargs: _Planner())
+    monkeypatch.setattr("operation.compat.engine_legacy.run_loop_execution_planner", lambda **_kwargs: _Planner())
 
-    with caplog.at_level("INFO", logger="bithumb_bot.run"):
+    with caplog.at_level("INFO", logger="operation.run"):
         run_loop()
 
     output = caplog.text

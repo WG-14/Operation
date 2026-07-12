@@ -1,8 +1,8 @@
 import sqlite3
 
-import bithumb_bot.broker.paper as paper
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, init_portfolio, get_portfolio
+import operation.broker.paper as paper
+from operation.config import settings
+from operation.db_core import ensure_db, init_portfolio, get_portfolio
 
 
 def test_paper_execute_is_atomic_on_failure(tmp_path, monkeypatch):

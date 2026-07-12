@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from bithumb_bot import config
+from operation import config
 import pytest
 
-from bithumb_bot.db import connect
-from bithumb_bot.db_core import ensure_db
+from operation.db import connect
+from operation.db_core import ensure_db
 
 
 def test_relative_db_path_is_rejected() -> None:
@@ -37,7 +37,7 @@ def test_connect_does_not_create_parent_directory_directly(tmp_path: Path) -> No
     db_path = (tmp_path / "managed" / "centralized.sqlite").resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with (
-        patch("bithumb_bot.db.prepare_db_path_for_connection", return_value=str(db_path)),
+        patch("operation.db.prepare_db_path_for_connection", return_value=str(db_path)),
         patch("pathlib.Path.mkdir", side_effect=AssertionError("db connect layer must not mkdir")),
     ):
         conn = connect(str(db_path))
@@ -48,7 +48,7 @@ def test_ensure_db_does_not_create_parent_directory_directly(tmp_path: Path) -> 
     db_path = (tmp_path / "managed" / "centralized.sqlite").resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with (
-        patch("bithumb_bot.db_core.prepare_db_path_for_connection", return_value=str(db_path)),
+        patch("operation.db_core.prepare_db_path_for_connection", return_value=str(db_path)),
         patch("pathlib.Path.mkdir", side_effect=AssertionError("db open layer must not mkdir")),
     ):
         conn = ensure_db(str(db_path))

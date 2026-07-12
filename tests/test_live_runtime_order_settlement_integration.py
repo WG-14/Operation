@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.order_settlement import OrderSettlementCoordinator, SettlementBarrierConfig
-from bithumb_bot.runtime.execution_coordinator import ExecutionCoordinator
+from operation.order_settlement import OrderSettlementCoordinator, SettlementBarrierConfig
+from operation.runtime.execution_coordinator import ExecutionCoordinator
 
 
 class _Summary:

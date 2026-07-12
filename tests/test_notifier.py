@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot import notifier
-from bithumb_bot.notifier import AlertSeverity
-from bithumb_bot.observability import safety_event
-from bithumb_bot.operator_notification_service import OperatorNotificationService
+from operation import notifier
+from operation.notifier import AlertSeverity
+from operation.observability import safety_event
+from operation.operator_notification_service import OperatorNotificationService
 
 
 class FakeResponse:

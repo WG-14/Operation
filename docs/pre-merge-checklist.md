@@ -44,13 +44,13 @@ research artifacts, cleanup, and artifact summaries are handled consistently.
 
 Pytest workspace controls:
 
-- `BITHUMB_PYTEST_WORKSPACE_ROOT`: optional absolute repository-external root.
-  Defaults to `/tmp/bithumb-bot-pytest-${USER:-user}`.
-- `BITHUMB_PYTEST_RUN_ID`: optional run id. Defaults to a timestamp/PID value.
-- `KEEP_BITHUMB_TEST_ARTIFACTS=1`: keep the run workspace and print its path
+- `OPERATION_PYTEST_WORKSPACE_ROOT`: optional absolute repository-external root.
+  Defaults to `/tmp/operation-pytest-${USER:-user}`.
+- `OPERATION_PYTEST_RUN_ID`: optional run id. Defaults to a timestamp/PID value.
+- `KEEP_OPERATION_TEST_ARTIFACTS=1`: keep the run workspace and print its path
   and size summary.
-- `BITHUMB_PYTEST_WORKSPACE_MAX_TOTAL_BYTES` and
-  `BITHUMB_PYTEST_WORKSPACE_MAX_SINGLE_FILE_BYTES`: optional per-test workspace
+- `OPERATION_PYTEST_WORKSPACE_MAX_TOTAL_BYTES` and
+  `OPERATION_PYTEST_WORKSPACE_MAX_SINGLE_FILE_BYTES`: optional per-test workspace
   budgets enforced by the pytest fixture.
 
 On WSL, local Linux, and CI, official runners keep pytest and generated test
@@ -70,12 +70,12 @@ Use the official full runner only:
 
 ```bash
 df -h /
-du -sh /tmp /tmp/bithumb-bot-pytest-* /tmp/pytest-of-$USER 2>/dev/null || true
+du -sh /tmp /tmp/operation-pytest-* /tmp/pytest-of-$USER 2>/dev/null || true
 ./scripts/check_repo_runtime_artifacts.sh
 ./scripts/run_full_pytest_tests.sh
 ./scripts/check_repo_runtime_artifacts.sh
 df -h /
-du -sh /tmp /tmp/bithumb-bot-pytest-* /tmp/pytest-of-$USER 2>/dev/null || true
+du -sh /tmp /tmp/operation-pytest-* /tmp/pytest-of-$USER 2>/dev/null || true
 ```
 
 Do not use raw selector-less `uv run pytest -q` as the WSL full-suite disk
@@ -91,7 +91,7 @@ Interpretation:
 - `pytest failure with retained workspace`: pytest started and failed. Inspect
   the retained repo-external workspace and largest-file summary before cleanup.
 - `pytest success with workspace cleanup`: the full runner prints the final size
-  summary and removes the run workspace unless `KEEP_BITHUMB_TEST_ARTIFACTS=1`
+  summary and removes the run workspace unless `KEEP_OPERATION_TEST_ARTIFACTS=1`
   is set.
 
 On Windows, check the WSL distribution `ext4.vhdx` size before and after the
@@ -103,7 +103,7 @@ only after internal WSL free space has been reclaimed and no WSL distro is
 running.
 
 Solved criteria: repo artifact checks pass before and after, `/tmp` and the
-official `/tmp/bithumb-bot-pytest-*` workspace do not retain unexpected large
+official `/tmp/operation-pytest-*` workspace do not retain unexpected large
 files after a successful run, pytest success cleans the workspace, and any VHDX
 growth is explained by known retained artifacts or normal sparse-file behavior.
 Unresolved criteria: the repo artifact checker fails, a failed pytest workspace
@@ -130,13 +130,13 @@ Existing operator/mobile-style notification commands remain valid:
 
 ```bash
 export NTFY_TOPIC=<topic>
-cd ~/work/bithumb-bot
+cd ~/work/operation
 ./scripts/run_codex_pipeline.sh
 ```
 
 ```bash
 export NTFY_TOPIC=<topic>
-cd ~/work/bithumb-bot
+cd ~/work/operation
 ./scripts/run_codex_pytest_pipeline.sh
 ```
 
@@ -159,7 +159,7 @@ For self-hosted ntfy:
 ```bash
 export NTFY_TOPIC=<topic>
 export NTFY_SERVER=https://your-ntfy-server.example
-cd ~/work/bithumb-bot
+cd ~/work/operation
 ./scripts/run_codex_pipeline.sh
 ```
 
@@ -190,13 +190,5 @@ Required gate coverage:
 - Live execution contract metadata includes config, docs, template, effective
   settings, env-file, provenance, approved-profile, managed-root, and runtime
   path fingerprints.
-- Bithumb JWT auth warning budget is zero:
-  `jwt.exceptions.InsecureKeyLengthWarning` is a test failure. Normal
-  live-like tests must use centralized HS256-safe Bithumb test auth material.
-  Short Bithumb secret literals are forbidden as normal test auth material and
-  are allowed only in intentional negative tests that assert repo-owned
-  rejection before PyJWT signing. The AST static regression test in
-  `tests/test_bithumb_auth_material_policy.py` is the source of truth for that
-  allowlist distinction; do not replace it with a grep-only policy.
 - Operator-facing no-data diagnostics stay English, reason-coded, and
   action-oriented.

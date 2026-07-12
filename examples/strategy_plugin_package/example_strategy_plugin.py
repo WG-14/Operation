@@ -3,19 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from bithumb_bot.research.strategy_spec import StrategyParameterSchema
-from bithumb_bot.research.strategy_spec import StrategySpec
-from bithumb_bot.research.hashing import sha256_prefixed
-from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
-from bithumb_bot.strategy_authoring import PromotionGradeStrategyExtension
-from bithumb_bot.strategy_authoring import ReplayCompatibleStrategyExtension
-from bithumb_bot.strategy_authoring import build_live_eligible_strategy_plugin
-from bithumb_bot.strategy_authoring import build_replay_compatible_strategy_plugin
-from bithumb_bot.strategy_authoring import research_plugin_from_decide_snapshot
-from bithumb_bot.strategy_evidence import StrategyDecisionEvidenceBuilder
-from bithumb_bot.strategy_evidence_contract import DecisionEvidenceContract
-from bithumb_bot.strategy_policy_contract import PositionSnapshot
-from bithumb_bot.strategy_policy_contract import StrategyDecisionV2
+from operation.research.strategy_spec import StrategyParameterSchema
+from operation.research.strategy_spec import StrategySpec
+from operation.research.hashing import sha256_prefixed
+from operation.runtime_decision_contract import RuntimeStrategyPolicyHashes
+from operation.strategy_authoring import PromotionGradeStrategyExtension
+from operation.strategy_authoring import ReplayCompatibleStrategyExtension
+from operation.strategy_authoring import build_live_eligible_strategy_plugin
+from operation.strategy_authoring import build_replay_compatible_strategy_plugin
+from operation.strategy_authoring import research_plugin_from_decide_snapshot
+from operation.strategy_evidence import StrategyDecisionEvidenceBuilder
+from operation.strategy_evidence_contract import DecisionEvidenceContract
+from operation.strategy_policy_contract import PositionSnapshot
+from operation.strategy_policy_contract import StrategyDecisionV2
 
 
 LEVEL_1_SPEC = StrategySpec(
@@ -150,7 +150,7 @@ class ExampleReplayStrategy:
     parameters: dict[str, Any] | None = None
 
     def decide(self, conn: Any, *, through_ts_ms: int | None = None) -> Any | None:
-        from bithumb_bot.strategy.base import StrategyDecision
+        from operation.strategy.base import StrategyDecision
 
         row = conn.execute(
             """
@@ -278,7 +278,7 @@ class ExampleLevel3ReplayStrategy:
     parameters: dict[str, Any] | None = None
 
     def decide_runtime_snapshot(self, conn: Any, *, through_ts_ms: int | None = None) -> Any | None:
-        from bithumb_bot.strategy.base import StrategyDecision
+        from operation.strategy.base import StrategyDecision
 
         row = conn.execute(
             """

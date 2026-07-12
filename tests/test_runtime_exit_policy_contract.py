@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.operation_strategy.registry import operation_exit_policy_materialization_from_parameters
+from operation.operation_strategy.registry import operation_exit_policy_materialization_from_parameters
 
 
 def test_sma_operation_exit_policy_payload_and_hash_are_stable() -> None:

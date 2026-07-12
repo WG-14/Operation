@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import inspect
 
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.decision_coordinator import (
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.decision_coordinator import (
     DecisionCycleResult,
     _hard_gate_trace_entries_from_context,
 )
-from bithumb_bot.runtime.execution_coordinator import ExecutionCycleResult
-from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+from operation.runtime.execution_coordinator import ExecutionCycleResult
+from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
 
 
 def _decision_result(**overrides: object) -> DecisionCycleResult:

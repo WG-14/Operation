@@ -5,15 +5,15 @@ from dataclasses import replace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.market_regime import MARKET_REGIME_VERSION
-from bithumb_bot.decision_attribution import (
+from operation.config import settings
+from operation.market_regime import MARKET_REGIME_VERSION
+from operation.decision_attribution import (
     DecisionAttributionSummary,
     normalize_decision_attribution_from_context,
     summarize_decision_attributions,
 )
-from bithumb_bot.strategy_config import sma_strategy_config_from_settings
-from bithumb_bot.strategy_replay import (
+from operation.strategy_config import sma_strategy_config_from_settings
+from operation.strategy_replay import (
     CandleReplayDataset,
     StrategyReplayConfig,
     _replay_decision_context,

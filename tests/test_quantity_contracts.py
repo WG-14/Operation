@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.quantity_contracts import build_quantity_semantics
+from operation.quantity_contracts import build_quantity_semantics
 
 
 def test_quantity_semantics_distinguishes_exchange_sellable_from_strategy_dust() -> None:

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 
-from bithumb_bot import runtime_state
-from bithumb_bot.config import PATH_MANAGER, settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.cli.main import main as app_main
-from bithumb_bot.reporting import cmd_experiment_report, fetch_experiment_report_summary
+from operation import runtime_state
+from operation.config import PATH_MANAGER, settings
+from operation.db_core import ensure_db
+from operation.cli.main import main as app_main
+from operation.reporting import cmd_experiment_report, fetch_experiment_report_summary
 
 
 def _insert_decision_with_context(conn, *, decision_id: int, candle_ts: int, volatility_ratio: float) -> None:
@@ -165,7 +165,7 @@ def test_experiment_report_command_writes_report_and_prints_warning(
     assert "concentrated pnl" in out
     assert "regime_pnl_skew_ratio" in out
 
-    from bithumb_bot.config import PATH_MANAGER as current_path_manager
+    from operation.config import PATH_MANAGER as current_path_manager
 
     report_path = current_path_manager.report_path("experiment_report")
     assert report_path.exists()

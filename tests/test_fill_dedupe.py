@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.execution import apply_fill_and_trade, order_fill_tolerance, record_order_if_missing
-import bithumb_bot.execution as execution_module
-import bithumb_bot.observability as observability_module
-from bithumb_bot.oms import set_exchange_order_id
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.execution import apply_fill_and_trade, order_fill_tolerance, record_order_if_missing
+import operation.execution as execution_module
+import operation.observability as observability_module
+from operation.oms import set_exchange_order_id
 
 
 def test_apply_fill_dedupes_by_fill_id_and_notifies_once(tmp_path, monkeypatch):
@@ -233,7 +233,7 @@ def test_apply_fill_rejects_material_live_zero_fee(tmp_path, caplog):
             ts_ms=1000,
         )
 
-        with caplog.at_level("WARNING", logger="bithumb_bot.execution"):
+        with caplog.at_level("WARNING", logger="operation.execution"):
             with pytest.raises(RuntimeError, match="zero fill fee blocked for materially sized live fill"):
                 apply_fill_and_trade(
                     conn,
@@ -320,7 +320,7 @@ def test_apply_fill_does_not_warn_for_live_positive_fee(tmp_path, caplog):
             ts_ms=1000,
         )
 
-        with caplog.at_level("WARNING", logger="bithumb_bot.execution"):
+        with caplog.at_level("WARNING", logger="operation.execution"):
             apply_fill_and_trade(
                 conn,
                 client_order_id="o-live-positive-fee",
@@ -356,7 +356,7 @@ def test_apply_fill_does_not_warn_for_paper_zero_fee(tmp_path, caplog):
             ts_ms=1000,
         )
 
-        with caplog.at_level("WARNING", logger="bithumb_bot.execution"):
+        with caplog.at_level("WARNING", logger="operation.execution"):
             apply_fill_and_trade(
                 conn,
                 client_order_id="o-paper-zero-fee",
@@ -399,7 +399,7 @@ def test_apply_fill_and_trade_logs_correlation_fields(tmp_path, caplog, monkeypa
         )
         set_exchange_order_id("o-log", "ex-log", conn=conn)
 
-        with caplog.at_level("INFO", logger="bithumb_bot.execution"):
+        with caplog.at_level("INFO", logger="operation.execution"):
             trade = apply_fill_and_trade(
                 conn,
                 client_order_id="o-log",
@@ -467,7 +467,7 @@ def test_apply_fill_warns_for_live_fee_ratio_outlier(tmp_path, caplog):
             price=100000000.0,
             ts_ms=1000,
         )
-        with caplog.at_level("WARNING", logger="bithumb_bot.observability"):
+        with caplog.at_level("WARNING", logger="operation.observability"):
             apply_fill_and_trade(
                 conn,
                 client_order_id="o-live-ratio-outlier",
@@ -510,7 +510,7 @@ def test_apply_fill_fee_ratio_anomaly_check_is_division_safe(tmp_path, caplog):
             price=100000000.0,
             ts_ms=1000,
         )
-        with caplog.at_level("WARNING", logger="bithumb_bot.observability"):
+        with caplog.at_level("WARNING", logger="operation.observability"):
             with pytest.raises(RuntimeError):
                 apply_fill_and_trade(
                     conn,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from bithumb_bot.notification_outbox import append_notification_result
-from bithumb_bot.notifier import AlertSeverity, NotificationAttempt, NotificationResult
+from operation.notification_outbox import append_notification_result
+from operation.notifier import AlertSeverity, NotificationAttempt, NotificationResult
 
 
 def _result(*, status: str = "delivered") -> NotificationResult:
@@ -34,7 +34,7 @@ def _rows(path):
 
 
 def test_notification_result_is_appended_to_jsonl(managed_runtime_env) -> None:
-    from bithumb_bot.config import PATH_MANAGER
+    from operation.config import PATH_MANAGER
 
     path = append_notification_result(
         _result(),
@@ -53,7 +53,7 @@ def test_notification_result_is_appended_to_jsonl(managed_runtime_env) -> None:
 
 
 def test_notification_outbox_masks_topic_and_urls(managed_runtime_env) -> None:
-    from bithumb_bot.config import PATH_MANAGER
+    from operation.config import PATH_MANAGER
 
     path = append_notification_result(
         _result(status="failed"),
@@ -70,7 +70,7 @@ def test_notification_outbox_masks_topic_and_urls(managed_runtime_env) -> None:
 
 
 def test_failed_delivery_records_http_status_and_failure_class(managed_runtime_env) -> None:
-    from bithumb_bot.config import PATH_MANAGER
+    from operation.config import PATH_MANAGER
 
     path = append_notification_result(
         _result(status="failed"),

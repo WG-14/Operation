@@ -23,7 +23,7 @@ def _run_path_cli(tmp_path: Path, env: dict[str, str], kind: str, mode: str) -> 
         [
             sys.executable,
             "-m",
-            "bithumb_bot.paths",
+            "operation.paths",
             "--project-root",
             str((tmp_path / "repo").resolve()),
             "--mode",

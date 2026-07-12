@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, set_portfolio_breakdown
-from bithumb_bot.execution import apply_fill_and_trade, record_order_if_missing
-from bithumb_bot.lifecycle import rebuild_lifecycle_projections_from_trades
-from bithumb_bot.oms import set_status
-from bithumb_bot.position_authority_state import build_position_authority_assessment
+from operation.config import settings
+from operation.db_core import ensure_db, set_portfolio_breakdown
+from operation.execution import apply_fill_and_trade, record_order_if_missing
+from operation.lifecycle import rebuild_lifecycle_projections_from_trades
+from operation.oms import set_status
+from operation.position_authority_state import build_position_authority_assessment
 
 
 BUY_QTY = 0.00099996

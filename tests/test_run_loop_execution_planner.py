@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bithumb_bot.core.sma_policy import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
-from bithumb_bot.decision_envelope import DecisionEnvelope
-from bithumb_bot.execution_service import (
+from operation.core.sma_policy import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.decision_envelope import DecisionEnvelope
+from operation.execution_service import (
     ExecutionDecisionSummary,
     ExecutionSubmitPlan,
     TypedExecutionPlanningInput,
 )
-from bithumb_bot.run_loop_compatibility import RunLoopCompatibilityPlanner
-from bithumb_bot.run_loop_execution_planner import ExecutionPlanner
+from operation.run_loop_compatibility import RunLoopCompatibilityPlanner
+from operation.run_loop_execution_planner import ExecutionPlanner
 
 
 @dataclass(frozen=True)
@@ -399,7 +399,7 @@ def test_plan_envelope_planning_error_returns_fail_closed_bundle_status() -> Non
 
 
 def test_run_loop_execution_request_signal_uses_planned_authority() -> None:
-    from bithumb_bot.runtime_compat import authoritative_execution_signal_for_trade, build_signal_execution_request
+    from operation.runtime_compat import authoritative_execution_signal_for_trade, build_signal_execution_request
 
     context = {
         "signal": "HOLD",
@@ -424,7 +424,7 @@ def test_run_loop_execution_request_signal_uses_planned_authority() -> None:
 
 
 def test_run_loop_execution_request_does_not_submit_representative_buy_when_planner_holds() -> None:
-    from bithumb_bot.runtime_compat import authoritative_execution_signal_for_trade
+    from operation.runtime_compat import authoritative_execution_signal_for_trade
 
     context = {
         "signal": "BUY",

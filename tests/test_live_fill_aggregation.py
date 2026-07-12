@@ -4,10 +4,10 @@ import logging
 
 import pytest
 
-from bithumb_bot.broker.base import BrokerFill
-from bithumb_bot.broker.live import FillFeeStrictModeError, _aggregate_fills_for_apply
-from bithumb_bot.broker.live_submission_execution import _fill_accounting_status
-from bithumb_bot.config import settings
+from operation.broker.base import BrokerFill
+from operation.broker.live import FillFeeStrictModeError, _aggregate_fills_for_apply
+from operation.broker.live_submission_execution import _fill_accounting_status
+from operation.config import settings
 
 
 def test_aggregate_fills_sums_qty_and_fee_and_keeps_weighted_price() -> None:
@@ -179,7 +179,7 @@ def test_aggregate_fills_warns_when_fee_missing_or_invalid(caplog: pytest.LogCap
     ]
 
     try:
-        with caplog.at_level(logging.WARNING, logger="bithumb_bot.run"):
+        with caplog.at_level(logging.WARNING, logger="operation.run"):
             aggregated = _aggregate_fills_for_apply(
                 fills=fills,
                 client_order_id="cid-2",
@@ -231,7 +231,7 @@ def test_aggregate_fills_high_notional_invalid_fee_blocks_after_hard_alert(
     ]
 
     try:
-        with caplog.at_level(logging.WARNING, logger="bithumb_bot.run"):
+        with caplog.at_level(logging.WARNING, logger="operation.run"):
             with pytest.raises(FillFeeStrictModeError, match="material fee validation blocked fill aggregation"):
                 _aggregate_fills_for_apply(
                     fills=fills,
@@ -428,7 +428,7 @@ def test_aggregate_fills_returns_empty_when_no_valid_fills(caplog: pytest.LogCap
         ),
     ]
 
-    with caplog.at_level(logging.WARNING, logger="bithumb_bot.run"):
+    with caplog.at_level(logging.WARNING, logger="operation.run"):
         aggregated = _aggregate_fills_for_apply(
             fills=fills,
             client_order_id="cid-3",

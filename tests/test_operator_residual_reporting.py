@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.operator_commands import _print_residual_operator_fields
-from bithumb_bot.reporting import _format_residual_report_fields
-from bithumb_bot.runtime.public_api import RuntimeHealthQuery
-from bithumb_bot.residual_disposition import build_residual_disposition
+from operation.operator_commands import _print_residual_operator_fields
+from operation.reporting import _format_residual_report_fields
+from operation.runtime.public_api import RuntimeHealthQuery
+from operation.residual_disposition import build_residual_disposition
 
 
 def _payload(*, mismatch: bool = False) -> dict[str, object]:
@@ -100,9 +100,9 @@ class _State:
 
 def test_health_reports_tracked_residual_manual_action_false(monkeypatch):
     payload = _payload()
-    monkeypatch.setattr("bithumb_bot.runtime.public_api.ensure_db", lambda: _Conn())
+    monkeypatch.setattr("operation.runtime.public_api.ensure_db", lambda: _Conn())
     monkeypatch.setattr(
-        "bithumb_bot.runtime.public_api.compute_runtime_readiness_snapshot",
+        "operation.runtime.public_api.compute_runtime_readiness_snapshot",
         lambda _conn: SimpleNamespace(
             as_dict=lambda: {
                 "residual_disposition": {"disposition": payload["residual_disposition"]},

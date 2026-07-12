@@ -30,7 +30,7 @@ def test_config_fail_fast_when_live_mode_missing_db_path(tmp_path: Path) -> None
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -54,7 +54,7 @@ def test_config_keeps_paper_default_db_path_when_unset(tmp_path: Path) -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.DB_PATH)",
+            "import operation.config as c; print(c.settings.DB_PATH)",
         ],
         env=env,
         capture_output=True,
@@ -74,7 +74,7 @@ def test_config_market_accepts_canonical_market_env() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.PAIR)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.PAIR)"],
         env=env,
         capture_output=True,
         text=True,
@@ -95,7 +95,7 @@ def test_config_live_market_accepts_canonical_market_env(tmp_path: Path) -> None
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.PAIR)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.PAIR)"],
         env=env,
         capture_output=True,
         text=True,
@@ -114,7 +114,7 @@ def test_config_market_accepts_legacy_pair_alias() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.PAIR)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.PAIR)"],
         env=env,
         capture_output=True,
         text=True,
@@ -131,7 +131,7 @@ def test_config_rejects_dryrun_mode_at_startup() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -152,7 +152,7 @@ def test_config_live_market_rejects_bare_symbol_pair_alias(tmp_path: Path) -> No
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -173,7 +173,7 @@ def test_config_live_market_rejects_legacy_pair_alias(tmp_path: Path) -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -192,7 +192,7 @@ def test_config_market_prefers_market_over_pair_when_both_match() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.PAIR)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.PAIR)"],
         env=env,
         capture_output=True,
         text=True,
@@ -211,7 +211,7 @@ def test_config_market_rejects_flipped_legacy_alias_against_canonical_pair() -> 
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -230,7 +230,7 @@ def test_config_market_rejects_invalid_market_format_at_startup() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -249,7 +249,7 @@ def test_config_market_rejects_market_pair_mismatch() -> None:
     env["PYTHONPATH"] = "src"
 
     proc = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config"],
+        [sys.executable, "-c", "import operation.config"],
         env=env,
         capture_output=True,
         text=True,
@@ -270,7 +270,7 @@ def test_config_live_fee_rate_estimate_defaults_when_unset() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
+            "import operation.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
         ],
         env=env,
         capture_output=True,
@@ -292,7 +292,7 @@ def test_config_live_fee_rate_estimate_supports_env_override() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
+            "import operation.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
         ],
         env=env,
         capture_output=True,
@@ -315,7 +315,7 @@ def test_config_live_fee_rate_estimate_falls_back_to_legacy_fee_rate() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
+            "import operation.config as c; print(c.settings.LIVE_FEE_RATE_ESTIMATE)",
         ],
         env=env,
         capture_output=True,
@@ -339,7 +339,7 @@ def test_config_paper_fee_rate_reuses_live_estimate_by_default() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.PAPER_FEE_RATE)",
+            "import operation.config as c; print(c.settings.PAPER_FEE_RATE)",
         ],
         env=env,
         capture_output=True,
@@ -362,7 +362,7 @@ def test_config_paper_fee_rate_supports_env_override() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.PAPER_FEE_RATE)",
+            "import operation.config as c; print(c.settings.PAPER_FEE_RATE)",
         ],
         env=env,
         capture_output=True,
@@ -387,7 +387,7 @@ def test_config_paper_fee_rate_falls_back_to_legacy_fee_rate() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.PAPER_FEE_RATE)",
+            "import operation.config as c; print(c.settings.PAPER_FEE_RATE)",
         ],
         env=env,
         capture_output=True,
@@ -410,7 +410,7 @@ def test_config_strategy_name_missing_stays_empty_without_legacy_compat() -> Non
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_NAME)",
+            "import operation.config as c; print(c.settings.STRATEGY_NAME)",
         ],
         env=env,
         capture_output=True,
@@ -433,7 +433,7 @@ def test_config_strategy_name_legacy_default_requires_explicit_compat() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_NAME)",
+            "import operation.config as c; print(c.settings.STRATEGY_NAME)",
         ],
         env=env,
         capture_output=True,
@@ -455,7 +455,7 @@ def test_config_strategy_name_supports_legacy_override_to_sma_cross() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_NAME)",
+            "import operation.config as c; print(c.settings.STRATEGY_NAME)",
         ],
         env=env,
         capture_output=True,
@@ -477,7 +477,7 @@ def test_config_strategy_name_normalizes_case_and_whitespace() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_NAME)",
+            "import operation.config as c; print(c.settings.STRATEGY_NAME)",
         ],
         env=env,
         capture_output=True,
@@ -499,7 +499,7 @@ def test_config_entry_edge_buffer_ratio_defaults_when_unset() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
+            "import operation.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
         ],
         env=env,
         capture_output=True,
@@ -521,7 +521,7 @@ def test_config_entry_edge_buffer_ratio_supports_env_override() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
+            "import operation.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
         ],
         env=env,
         capture_output=True,
@@ -542,7 +542,7 @@ def test_config_strategy_min_expected_edge_ratio_defaults_and_override() -> None
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO)",
+            "import operation.config as c; print(c.settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO)",
         ],
         env=env_default,
         capture_output=True,
@@ -561,7 +561,7 @@ def test_config_strategy_min_expected_edge_ratio_defaults_and_override() -> None
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO)",
+            "import operation.config as c; print(c.settings.STRATEGY_MIN_EXPECTED_EDGE_RATIO)",
         ],
         env=env_override,
         capture_output=True,
@@ -582,7 +582,7 @@ def test_config_strategy_exit_min_take_profit_ratio_defaults_and_override() -> N
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO)",
+            "import operation.config as c; print(c.settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO)",
         ],
         env=env_default,
         capture_output=True,
@@ -601,7 +601,7 @@ def test_config_strategy_exit_min_take_profit_ratio_defaults_and_override() -> N
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO)",
+            "import operation.config as c; print(c.settings.STRATEGY_EXIT_MIN_TAKE_PROFIT_RATIO)",
         ],
         env=env_override,
         capture_output=True,
@@ -623,7 +623,7 @@ def test_config_float_env_blank_value_falls_back_to_default() -> None:
         [
             sys.executable,
             "-c",
-            "import bithumb_bot.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
+            "import operation.config as c; print(c.settings.ENTRY_EDGE_BUFFER_RATIO)",
         ],
         env=env,
         capture_output=True,

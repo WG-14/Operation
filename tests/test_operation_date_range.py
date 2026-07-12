@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from bithumb_bot.date_range import DateRange
+from operation.date_range import DateRange
 
 
 def test_operation_date_range_start_timestamp_is_utc_midnight() -> None:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.lifecycle import LotDefinitionSnapshot, LOT_SEMANTIC_VERSION_V1
-from bithumb_bot.order_sizing import (
+from operation.config import settings
+from operation.lifecycle import LotDefinitionSnapshot, LOT_SEMANTIC_VERSION_V1
+from operation.order_sizing import (
     BUY_BLOCK_REASON_ENTRY_MIN_NOTIONAL_MISS,
     BUY_BLOCK_REASON_ENTRY_QTY_ROUNDED_TO_ZERO,
     BUY_BLOCK_REASON_NON_POSITIVE_ENTRY_BUDGET,

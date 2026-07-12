@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.public_api_orderbook import BestQuote
+from operation.public_api_orderbook import BestQuote
 
 
 class FakeMarketData:

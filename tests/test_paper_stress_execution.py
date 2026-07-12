@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.broker import paper
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, set_portfolio
-from bithumb_bot.execution_quality import build_execution_quality_record
-from bithumb_bot.public_api_orderbook import BestQuote
+from operation.broker import paper
+from operation.config import settings
+from operation.db_core import ensure_db, set_portfolio
+from operation.execution_quality import build_execution_quality_record
+from operation.public_api_orderbook import BestQuote
 
 
 def _set(attr: str, value):
@@ -332,7 +332,7 @@ def test_partial_stress_order_blocks_new_intent_with_different_timestamp(
 
         first = paper.paper_execute("BUY", ts=1_700_000_000_000, price=100.0)
 
-        caplog.set_level(logging.INFO, logger="bithumb_bot.run")
+        caplog.set_level(logging.INFO, logger="operation.run")
         second = paper.paper_execute("SELL", ts=1_700_000_060_000, price=100.0)
 
         assert first is not None
@@ -388,7 +388,7 @@ def test_unresolved_paper_order_gate_runs_before_orderbook_fetch(
 
         first = paper.paper_execute("BUY", ts=1_700_000_000_000, price=100.0)
 
-        caplog.set_level(logging.INFO, logger="bithumb_bot.run")
+        caplog.set_level(logging.INFO, logger="operation.run")
         second = paper.paper_execute("SELL", ts=1_700_000_060_000, price=100.0)
 
         assert first is not None

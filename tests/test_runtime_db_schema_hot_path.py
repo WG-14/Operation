@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from bithumb_bot.runtime import cycle_pipeline, decision_coordinator
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
-from bithumb_bot.db_core import ensure_db
+from operation.runtime import cycle_pipeline, decision_coordinator
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.decision_coordinator import DecisionCoordinator
+from operation.db_core import ensure_db
 
 
 def test_runtime_container_uses_schema_ready_db_factory_after_startup() -> None:
-    source = Path("src/bithumb_bot/runtime/app_container.py").read_text(encoding="utf-8")
+    source = Path("src/operation/runtime/app_container.py").read_text(encoding="utf-8")
     assert "startup_schema_conn = ensure_db(ensure_schema_ready=True)" in source
     assert "return ensure_db(ensure_schema_ready=False)" in source
     assert "db_factory=ensure_db" not in source
@@ -127,7 +127,7 @@ def test_run_loop_cycle_db_factory_does_not_call_ensure_schema_after_startup(tmp
     startup.close()
     calls = {"ensure_schema": 0}
 
-    import bithumb_bot.db_core as db_core
+    import operation.db_core as db_core
 
     original_ensure_schema = db_core.ensure_schema
 

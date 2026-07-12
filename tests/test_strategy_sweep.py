@@ -5,19 +5,19 @@ from dataclasses import asdict, fields, replace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.decision_attribution import DecisionAttributionSummary
-from bithumb_bot.market_regime import MARKET_REGIME_VERSION
-from bithumb_bot.strategy_config import sma_strategy_config_from_settings
-from bithumb_bot.strategy_replay import CandleReplayDataset, StrategyReplayResult
-from bithumb_bot.strategy_sweep import (
+from operation.config import settings
+from operation.decision_attribution import DecisionAttributionSummary
+from operation.market_regime import MARKET_REGIME_VERSION
+from operation.strategy_config import sma_strategy_config_from_settings
+from operation.strategy_replay import CandleReplayDataset, StrategyReplayResult
+from operation.strategy_sweep import (
     StrategySweepGrid,
     StrategySweepSummaryRow,
     build_strategy_sweep_execution_plan,
     run_sma_strategy_sweep,
     summarize_strategy_sweep_results,
 )
-import bithumb_bot.strategy_sweep as strategy_sweep_module
+import operation.strategy_sweep as strategy_sweep_module
 
 
 def _build_candle_db(closes: list[float]) -> sqlite3.Connection:

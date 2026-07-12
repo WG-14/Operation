@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.evidence_bundle import (
+from operation.evidence_bundle import (
     BUNDLE_MANIFEST_NAME,
     EvidenceBundleError,
     create_evidence_bundle,

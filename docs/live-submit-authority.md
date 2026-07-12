@@ -214,8 +214,8 @@ evidence.
 Operators can replay persisted risk-layer hashes without broker access:
 
 ```bash
-uv run bithumb-bot risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json
-uv run bithumb-bot risk-layer-replay --db <runtime.sqlite> --execution-plan-id <id> --json
+uv run operation risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json
+uv run operation risk-layer-replay --db <runtime.sqlite> --execution-plan-id <id> --json
 ```
 
 The verifier opens SQLite read-only, never submits orders, never calls live

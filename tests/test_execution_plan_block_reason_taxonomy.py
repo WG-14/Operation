@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.runtime.lifecycle_artifacts import final_action_for_primary_block_gate
+from operation.runtime.lifecycle_artifacts import final_action_for_primary_block_gate
 
 
 def test_strategy_risk_block_maps_to_block_strategy_risk() -> None:

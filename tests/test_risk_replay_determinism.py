@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from bithumb_bot.canonical_decision import sha256_prefixed
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.risk_contract import RiskPolicy
-from bithumb_bot.risk_layer_replay import build_risk_replay_input_artifact, verify_risk_layer_replay
-from bithumb_bot.risk_policy_engine import RiskPolicyEngine
-from bithumb_bot.strategy_risk_state import StrategyRiskStateProvider
+from operation.canonical_decision import sha256_prefixed
+from operation.db_core import ensure_db
+from operation.risk_contract import RiskPolicy
+from operation.risk_layer_replay import build_risk_replay_input_artifact, verify_risk_layer_replay
+from operation.risk_policy_engine import RiskPolicyEngine
+from operation.strategy_risk_state import StrategyRiskStateProvider
 
 
 def _persisted_strategy_fixture(
@@ -44,7 +44,7 @@ def _persisted_strategy_fixture(
         evidence.pop("replay_input_bundle_hash", None)
     if env_hash == "" or not include_tables:
         decision["evidence"] = evidence
-        from bithumb_bot.risk_contract import build_risk_decision
+        from operation.risk_contract import build_risk_decision
 
         rebuilt_snapshot = type(snapshot)(
             **{

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, init_portfolio
-from bithumb_bot.repair_zero_price_sell_ledger import run_repair
+from operation.config import settings
+from operation.db_core import ensure_db, init_portfolio
+from operation.repair_zero_price_sell_ledger import run_repair
 
 
 def _seed_contaminated_db(db_path: str) -> None:

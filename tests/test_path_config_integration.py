@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot import config
-from bithumb_bot.config import settings
+from operation import config
+from operation.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +40,7 @@ def test_db_path_uses_path_manager_when_unset(tmp_path: Path) -> None:
     env["MODE"] = "paper"
     env.pop("DB_PATH", None)
     out = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.DB_PATH)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.DB_PATH)"],
         env=env,
         capture_output=True,
         text=True,
@@ -55,7 +55,7 @@ def test_db_path_keeps_explicit_override(tmp_path: Path) -> None:
     env["MODE"] = "paper"
     env["DB_PATH"] = str((tmp_path / "custom.sqlite").resolve())
     out = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.DB_PATH)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.DB_PATH)"],
         env=env,
         capture_output=True,
         text=True,
@@ -70,7 +70,7 @@ def test_db_path_rejects_relative_override(tmp_path: Path) -> None:
     env["MODE"] = "paper"
     env["DB_PATH"] = "data/paper.sqlite"
     out = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.DB_PATH)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.DB_PATH)"],
         env=env,
         capture_output=True,
         text=True,
@@ -86,14 +86,14 @@ def test_run_lock_uses_path_manager_when_unset(tmp_path: Path) -> None:
     env["DB_PATH"] = str((Path(env["DATA_ROOT"]) / "live" / "trades" / "live.sqlite").resolve())
     env.pop("RUN_LOCK_PATH", None)
     out = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.RUN_LOCK_PATH)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.RUN_LOCK_PATH)"],
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     assert out.returncode == 0
-    assert Path(out.stdout.strip()) == Path(env["RUN_ROOT"]) / "live" / "bithumb-bot.lock"
+    assert Path(out.stdout.strip()) == Path(env["RUN_ROOT"]) / "live" / "operation.lock"
 
 
 def test_run_lock_keeps_explicit_override(tmp_path: Path) -> None:
@@ -102,7 +102,7 @@ def test_run_lock_keeps_explicit_override(tmp_path: Path) -> None:
     env["DB_PATH"] = str((Path(env["DATA_ROOT"]) / "live" / "trades" / "live.sqlite").resolve())
     env["RUN_LOCK_PATH"] = str((tmp_path / "live.lock").resolve())
     out = subprocess.run(
-        [sys.executable, "-c", "import bithumb_bot.config as c; print(c.settings.RUN_LOCK_PATH)"],
+        [sys.executable, "-c", "import operation.config as c; print(c.settings.RUN_LOCK_PATH)"],
         env=env,
         capture_output=True,
         text=True,
@@ -138,7 +138,7 @@ def test_live_blocks_paper_lock_path(monkeypatch: pytest.MonkeyPatch, tmp_path: 
             monkeypatch.setenv(key, value)
     monkeypatch.setenv("MODE", "live")
     monkeypatch.setenv("DB_PATH", str((Path(env["DATA_ROOT"]) / "live" / "trades" / "live.sqlite").resolve()))
-    monkeypatch.setenv("RUN_LOCK_PATH", str((Path(env["RUN_ROOT"]) / "paper" / "bithumb-bot.lock").resolve()))
+    monkeypatch.setenv("RUN_LOCK_PATH", str((Path(env["RUN_ROOT"]) / "paper" / "operation.lock").resolve()))
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "DB_PATH", str((Path(env["DATA_ROOT"]) / "live" / "trades" / "live.sqlite").resolve()))
 

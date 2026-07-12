@@ -6,20 +6,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import (
+from operation.config import settings
+from operation.db_core import (
     ensure_db,
     ensure_schema,
     load_target_position_state,
     upsert_target_position_state,
 )
-from bithumb_bot.runtime_compat import (
+from operation.runtime_compat import (
     _load_previous_target_exposure_for_run_loop,
     _resolve_target_position_state_for_run_loop,
     _persist_target_position_state_for_run_loop,
 )
-from bithumb_bot.execution_service import build_execution_decision_summary
-from bithumb_bot.target_position import (
+from operation.execution_service import build_execution_decision_summary
+from operation.target_position import (
     ACTUAL_PAIR_TARGET_SOURCE,
     STARTUP_TARGET_SOURCE_BROKER_POSITION_ADOPTION,
     STARTUP_TARGET_SOURCE_POLICY_INITIALIZATION,
@@ -1197,7 +1197,7 @@ def test_strategy_performance_gate_does_not_block_recovery_or_flatten_commands_i
 def test_target_delta_ec2_reproduction_uses_settings_rules_when_payload_lacks_min_qty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from bithumb_bot.broker import order_rules
+    from operation.broker import order_rules
 
     old_engine = settings.EXECUTION_ENGINE
     old_target = settings.TARGET_EXPOSURE_KRW
@@ -1255,7 +1255,7 @@ def test_target_delta_ec2_reproduction_uses_settings_rules_when_payload_lacks_mi
 def test_target_delta_fails_closed_without_payload_effective_or_settings_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from bithumb_bot.broker import order_rules
+    from operation.broker import order_rules
 
     old_engine = settings.EXECUTION_ENGINE
     old_target = settings.TARGET_EXPOSURE_KRW
@@ -1299,7 +1299,7 @@ def test_target_delta_fails_closed_without_payload_effective_or_settings_rules(
 
 
 def test_target_delta_audit_prefers_payload_rule_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    from bithumb_bot.broker import order_rules
+    from operation.broker import order_rules
 
     old_engine = settings.EXECUTION_ENGINE
     old_target = settings.TARGET_EXPOSURE_KRW
@@ -1450,7 +1450,7 @@ def test_target_position_state_persists_pair_actual_target_provenance(tmp_path) 
 
 
 def test_run_loop_target_state_persister_records_allocator_execution_provenance(tmp_path) -> None:
-    from bithumb_bot.runtime.decision_coordinator import persist_target_position_state_for_run_loop
+    from operation.runtime.decision_coordinator import persist_target_position_state_for_run_loop
 
     manifest_hash = "sha256:" + "a" * 64
     bundle_hash = "sha256:" + "b" * 64
@@ -1503,7 +1503,7 @@ def test_run_loop_target_state_persister_records_allocator_execution_provenance(
 
 
 def test_run_loop_target_state_persister_rejects_incomplete_allocator_provenance(tmp_path) -> None:
-    from bithumb_bot.runtime.decision_coordinator import persist_target_position_state_for_run_loop
+    from operation.runtime.decision_coordinator import persist_target_position_state_for_run_loop
 
     conn = ensure_db(str(tmp_path / "target-persister-incomplete-provenance.sqlite"))
     try:

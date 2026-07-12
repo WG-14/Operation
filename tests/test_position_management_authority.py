@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from bithumb_bot.config import settings
-from bithumb_bot.execution_service import build_execution_decision_summary
+from operation.config import settings
+from operation.execution_service import build_execution_decision_summary
 
 from tests.test_target_delta_entry_authority import _readiness, _restore, _set_target_delta
 

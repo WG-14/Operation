@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from bithumb_bot.runtime_recovery_gate import RuntimeRecoveryGateService
-from bithumb_bot.runtime_recovery_services import StartupSafetyGateService
-from bithumb_bot.runtime_resume_services import RuntimeResumeService
-from bithumb_bot.residual_disposition import build_residual_disposition
+from operation.runtime_recovery_gate import RuntimeRecoveryGateService
+from operation.runtime_recovery_services import StartupSafetyGateService
+from operation.runtime_resume_services import RuntimeResumeService
+from operation.residual_disposition import build_residual_disposition
 
 
 def _verdict(*, run_allowed: bool = True, mismatch: bool = False):
@@ -143,16 +143,16 @@ def test_startup_gate_allows_tracked_non_executable_residual_from_readiness(monk
     )
     gates: list[str | None] = []
 
-    monkeypatch.setattr("bithumb_bot.runtime_recovery_services.ensure_db", lambda *_, **__: _Conn())
+    monkeypatch.setattr("operation.runtime_recovery_services.ensure_db", lambda *_, **__: _Conn())
     monkeypatch.setattr(
-        "bithumb_bot.runtime_recovery_services.collect_risky_order_state",
+        "operation.runtime_recovery_services.collect_risky_order_state",
         lambda *_args, **_kwargs: {
             "submit_unknown_without_exchange_id_count": 0,
             "stray_remote_open_order_count": 0,
         },
     )
     monkeypatch.setattr(
-        "bithumb_bot.runtime_recovery_services.compute_runtime_readiness_snapshot",
+        "operation.runtime_recovery_services.compute_runtime_readiness_snapshot",
         lambda _conn: _readiness_from_verdict(verdict),
     )
 
@@ -197,7 +197,7 @@ def test_resume_service_uses_residual_disposition_before_dust_metadata(monkeypat
     )
     gates: list[tuple[bool, str | None]] = []
     monkeypatch.setattr(
-        "bithumb_bot.runtime_resume_services.compute_runtime_readiness_snapshot",
+        "operation.runtime_resume_services.compute_runtime_readiness_snapshot",
         lambda _conn: _readiness_from_verdict(verdict),
     )
 
@@ -227,7 +227,7 @@ def test_resume_service_uses_residual_disposition_before_dust_metadata(monkeypat
 
 
 def test_reconcile_halt_clear_uses_residual_disposition_run_allowed(monkeypatch):
-    import bithumb_bot.recovery as recovery
+    import operation.recovery as recovery
 
     verdict = _verdict(run_allowed=True)
     state = SimpleNamespace(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.broker import live_submit_planning
+from operation.broker import live_submit_planning
 
 
 def test_build_live_submit_plan_uses_explicit_market(monkeypatch) -> None:

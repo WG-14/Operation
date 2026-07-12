@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator, DecisionCycleResult
-from bithumb_bot.runtime.decision_persistence import DecisionPersistenceError, DecisionPersistenceUnitOfWork
+from operation.db_core import ensure_db
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.decision_coordinator import DecisionCoordinator, DecisionCycleResult
+from operation.runtime.decision_persistence import DecisionPersistenceError, DecisionPersistenceUnitOfWork
 
 
 def test_locked_db_failure_artifact_contains_subphase_sql_group_and_retry_count(tmp_path, caplog) -> None:
@@ -232,7 +232,7 @@ def _persist_late_lock(conn, *, lock_after: str):
 
 
 def test_locked_db_failure_log_contains_sql_group_without_raw_sql_payload(tmp_path, caplog) -> None:
-    caplog.set_level("WARNING", logger="bithumb_bot.run")
+    caplog.set_level("WARNING", logger="operation.run")
     conn = ensure_db(str(tmp_path / "late-log.sqlite"))
 
     with pytest.raises(DecisionPersistenceError):

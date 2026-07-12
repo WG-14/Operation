@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.fee_observation import (
+from operation.config import settings
+from operation.fee_observation import (
     MultiFillTradeEvidence,
     validate_multi_fill_order_level_paid_fee_allocation,
     validate_single_fill_order_level_paid_fee,

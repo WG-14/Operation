@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.lifecycle import apply_fill_lifecycle
-from bithumb_bot.runtime_scope import derive_risk_scope_id, require_risk_scope_reset_authority, strategy_revision_id
-from bithumb_bot.risk_contract import RiskPolicy
-from bithumb_bot.risk_policy_engine import RiskPolicyEngine
-from bithumb_bot.strategy_risk_state import StrategyRiskStateProvider
+from operation.db_core import ensure_db
+from operation.lifecycle import apply_fill_lifecycle
+from operation.runtime_scope import derive_risk_scope_id, require_risk_scope_reset_authority, strategy_revision_id
+from operation.risk_contract import RiskPolicy
+from operation.risk_policy_engine import RiskPolicyEngine
+from operation.strategy_risk_state import StrategyRiskStateProvider
 
 
 def _payload(**overrides: object) -> dict[str, object]:

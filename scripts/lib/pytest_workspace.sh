@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BITHUMB_PYTEST_WORKSPACE=""
-BITHUMB_PYTEST_WORKSPACE_PARENT=""
-BITHUMB_PYTEST_SUITE=""
-BITHUMB_PYTEST_PREFLIGHT_STAGE=""
-BITHUMB_PYTEST_STARTED=0
+OPERATION_PYTEST_WORKSPACE=""
+OPERATION_PYTEST_WORKSPACE_PARENT=""
+OPERATION_PYTEST_SUITE=""
+OPERATION_PYTEST_PREFLIGHT_STAGE=""
+OPERATION_PYTEST_STARTED=0
 
-BITHUMB_PYTEST_BROKER_PRIVATE_ENV_KEYS=(
-  BITHUMB_API_KEY
-  BITHUMB_API_SECRET
+OPERATION_PYTEST_BROKER_PRIVATE_ENV_KEYS=(
 )
 
-BITHUMB_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS=(
+OPERATION_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS=(
   NTFY_TOPIC
   NOTIFIER_WEBHOOK_URL
   SLACK_WEBHOOK_URL
@@ -20,11 +18,11 @@ BITHUMB_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS=(
   TELEGRAM_CHAT_ID
 )
 
-bithumb_pytest_repo_root() {
+operation_pytest_repo_root() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
 }
 
-bithumb_pytest_resolve_path() {
+operation_pytest_resolve_path() {
   local path="$1"
   python3 - "$path" <<'PY'
 from pathlib import Path
@@ -33,7 +31,7 @@ print(Path(sys.argv[1]).expanduser().resolve())
 PY
 }
 
-bithumb_pytest_refuse_unsafe_path() {
+operation_pytest_refuse_unsafe_path() {
   local target="$1"
   local repo_root="$2"
   if [[ -z "$target" || "$target" == "/" ]]; then
@@ -51,72 +49,72 @@ if target == repo or repo in target.parents:
 PY
 }
 
-bithumb_pytest_setup_workspace() {
+operation_pytest_setup_workspace() {
   local suite_name="${1:?suite name required}"
   local repo_root
-  repo_root="$(bithumb_pytest_repo_root)"
-  local workspace_root="${BITHUMB_PYTEST_WORKSPACE_ROOT:-/tmp/bithumb-bot-pytest-${USER:-user}}"
-  workspace_root="$(bithumb_pytest_resolve_path "$workspace_root")"
-  bithumb_pytest_refuse_unsafe_path "$workspace_root" "$repo_root"
+  repo_root="$(operation_pytest_repo_root)"
+  local workspace_root="${OPERATION_PYTEST_WORKSPACE_ROOT:-/tmp/operation-pytest-${USER:-user}}"
+  workspace_root="$(operation_pytest_resolve_path "$workspace_root")"
+  operation_pytest_refuse_unsafe_path "$workspace_root" "$repo_root"
 
-  local run_id="${BITHUMB_PYTEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
-  BITHUMB_PYTEST_WORKSPACE_PARENT="$workspace_root"
-  BITHUMB_PYTEST_WORKSPACE="$workspace_root/$suite_name/$run_id"
-  BITHUMB_PYTEST_SUITE="$suite_name"
-  export BITHUMB_PYTEST_RUN_ID="$run_id"
-  export BITHUMB_PYTEST_SUITE
-  export PYTEST_DEBUG_TEMPROOT="$BITHUMB_PYTEST_WORKSPACE/pytest-debug"
+  local run_id="${OPERATION_PYTEST_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+  OPERATION_PYTEST_WORKSPACE_PARENT="$workspace_root"
+  OPERATION_PYTEST_WORKSPACE="$workspace_root/$suite_name/$run_id"
+  OPERATION_PYTEST_SUITE="$suite_name"
+  export OPERATION_PYTEST_RUN_ID="$run_id"
+  export OPERATION_PYTEST_SUITE
+  export PYTEST_DEBUG_TEMPROOT="$OPERATION_PYTEST_WORKSPACE/pytest-debug"
   mkdir -p "$PYTEST_DEBUG_TEMPROOT"
   echo "[PYTEST-WORKSPACE] suite=$suite_name run_id=$run_id"
-  echo "[PYTEST-WORKSPACE] root=$BITHUMB_PYTEST_WORKSPACE"
+  echo "[PYTEST-WORKSPACE] root=$OPERATION_PYTEST_WORKSPACE"
   echo "[PYTEST-WORKSPACE] PYTEST_DEBUG_TEMPROOT=$PYTEST_DEBUG_TEMPROOT"
 }
 
-bithumb_pytest_sanitize_unsafe_env() {
+operation_pytest_sanitize_unsafe_env() {
   local runner_name="${1:-pytest runner}"
   local key
 
-  for key in "${BITHUMB_PYTEST_BROKER_PRIVATE_ENV_KEYS[@]}"; do
+  for key in "${OPERATION_PYTEST_BROKER_PRIVATE_ENV_KEYS[@]}"; do
     unset "$key"
   done
 
-  if [[ "${BITHUMB_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS:-0}" == "1" ]]; then
+  if [[ "${OPERATION_PYTEST_ALLOW_EXTERNAL_NOTIFICATIONS:-0}" == "1" ]]; then
     echo "[PYTEST-SAFETY] broker-private env disabled for ${runner_name}; external notification env allowed by explicit opt-in"
     return 0
   fi
 
   export NOTIFIER_ENABLED=false
-  for key in "${BITHUMB_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS[@]}"; do
+  for key in "${OPERATION_PYTEST_EXTERNAL_NOTIFICATION_ENV_KEYS[@]}"; do
     unset "$key"
   done
   echo "[PYTEST-SAFETY] unsafe inherited env disabled for ${runner_name}"
 }
 
-bithumb_pytest_preflight_report_path() {
-  if [[ -z "${BITHUMB_PYTEST_WORKSPACE:-}" ]]; then
+operation_pytest_preflight_report_path() {
+  if [[ -z "${OPERATION_PYTEST_WORKSPACE:-}" ]]; then
     return 1
   fi
-  printf '%s\n' "$BITHUMB_PYTEST_WORKSPACE/preflight_failure.json"
+  printf '%s\n' "$OPERATION_PYTEST_WORKSPACE/preflight_failure.json"
 }
 
-bithumb_pytest_workspace_size_bytes() {
-  if [[ -z "${BITHUMB_PYTEST_WORKSPACE:-}" || ! -d "$BITHUMB_PYTEST_WORKSPACE" ]]; then
+operation_pytest_workspace_size_bytes() {
+  if [[ -z "${OPERATION_PYTEST_WORKSPACE:-}" || ! -d "$OPERATION_PYTEST_WORKSPACE" ]]; then
     printf '0\n'
     return 0
   fi
-  du -sb "$BITHUMB_PYTEST_WORKSPACE" 2>/dev/null | awk '{print $1}'
+  du -sb "$OPERATION_PYTEST_WORKSPACE" 2>/dev/null | awk '{print $1}'
 }
 
-bithumb_pytest_record_preflight_failure() {
+operation_pytest_record_preflight_failure() {
   local stage="${1:?preflight stage required}"
   local status="${2:-1}"
   local command="${3:-}"
   local workspace_size
-  workspace_size="$(bithumb_pytest_workspace_size_bytes)"
+  workspace_size="$(operation_pytest_workspace_size_bytes)"
   local report_path
-  report_path="$(bithumb_pytest_preflight_report_path)"
+  report_path="$(operation_pytest_preflight_report_path)"
   mkdir -p "$(dirname "$report_path")"
-  python3 - "$report_path" "$BITHUMB_PYTEST_SUITE" "$BITHUMB_PYTEST_WORKSPACE" "$stage" "$status" "$command" "$workspace_size" <<'PY'
+  python3 - "$report_path" "$OPERATION_PYTEST_SUITE" "$OPERATION_PYTEST_WORKSPACE" "$stage" "$status" "$command" "$workspace_size" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -135,65 +133,65 @@ payload = {
 }
 report_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
-  echo "[PYTEST-PREFLIGHT] failed suite=$BITHUMB_PYTEST_SUITE stage=$stage exit_code=$status"
+  echo "[PYTEST-PREFLIGHT] failed suite=$OPERATION_PYTEST_SUITE stage=$stage exit_code=$status"
   echo "[PYTEST-PREFLIGHT] pytest did not start"
-  echo "[PYTEST-PREFLIGHT] workspace=$BITHUMB_PYTEST_WORKSPACE retained_size_bytes=${workspace_size:-0}"
+  echo "[PYTEST-PREFLIGHT] workspace=$OPERATION_PYTEST_WORKSPACE retained_size_bytes=${workspace_size:-0}"
   echo "[PYTEST-PREFLIGHT] report=$report_path"
 }
 
-bithumb_pytest_run_preflight() {
+operation_pytest_run_preflight() {
   local stage="${1:?preflight stage required}"
   shift
   local status
-  BITHUMB_PYTEST_PREFLIGHT_STAGE="$stage"
-  echo "[PYTEST-PREFLIGHT] start suite=$BITHUMB_PYTEST_SUITE stage=$stage command=$*"
+  OPERATION_PYTEST_PREFLIGHT_STAGE="$stage"
+  echo "[PYTEST-PREFLIGHT] start suite=$OPERATION_PYTEST_SUITE stage=$stage command=$*"
   if "$@"; then
-    echo "[PYTEST-PREFLIGHT] ok suite=$BITHUMB_PYTEST_SUITE stage=$stage"
-    BITHUMB_PYTEST_PREFLIGHT_STAGE=""
+    echo "[PYTEST-PREFLIGHT] ok suite=$OPERATION_PYTEST_SUITE stage=$stage"
+    OPERATION_PYTEST_PREFLIGHT_STAGE=""
     return 0
   else
     status=$?
-    bithumb_pytest_record_preflight_failure "$stage" "$status" "$*"
-    BITHUMB_PYTEST_PREFLIGHT_STAGE=""
+    operation_pytest_record_preflight_failure "$stage" "$status" "$*"
+    OPERATION_PYTEST_PREFLIGHT_STAGE=""
     return "$status"
   fi
 }
 
-bithumb_pytest_mark_pytest_started() {
-  BITHUMB_PYTEST_STARTED=1
-  export BITHUMB_PYTEST_STARTED
-  echo "[PYTEST-WORKSPACE] pytest_started=1 suite=$BITHUMB_PYTEST_SUITE workspace=$BITHUMB_PYTEST_WORKSPACE"
+operation_pytest_mark_pytest_started() {
+  OPERATION_PYTEST_STARTED=1
+  export OPERATION_PYTEST_STARTED
+  echo "[PYTEST-WORKSPACE] pytest_started=1 suite=$OPERATION_PYTEST_SUITE workspace=$OPERATION_PYTEST_WORKSPACE"
 }
 
-bithumb_pytest_workspace_summary() {
-  if [[ -z "${BITHUMB_PYTEST_WORKSPACE:-}" || ! -d "$BITHUMB_PYTEST_WORKSPACE" ]]; then
+operation_pytest_workspace_summary() {
+  if [[ -z "${OPERATION_PYTEST_WORKSPACE:-}" || ! -d "$OPERATION_PYTEST_WORKSPACE" ]]; then
     return 0
   fi
   local bytes
-  bytes="$(du -sb "$BITHUMB_PYTEST_WORKSPACE" 2>/dev/null | awk '{print $1}')"
-  echo "[PYTEST-WORKSPACE] retained_size_bytes=${bytes:-0} path=$BITHUMB_PYTEST_WORKSPACE"
-  find "$BITHUMB_PYTEST_WORKSPACE" -type f -printf '%s %p\n' 2>/dev/null \
+  bytes="$(du -sb "$OPERATION_PYTEST_WORKSPACE" 2>/dev/null | awk '{print $1}')"
+  echo "[PYTEST-WORKSPACE] retained_size_bytes=${bytes:-0} path=$OPERATION_PYTEST_WORKSPACE"
+  find "$OPERATION_PYTEST_WORKSPACE" -type f -printf '%s %p\n' 2>/dev/null \
     | sort -nr \
     | head -10 \
     | awk '{print "[PYTEST-WORKSPACE] large_file_bytes="$1" path="$2}'
 }
 
-bithumb_pytest_cleanup_workspace() {
+operation_pytest_cleanup_workspace() {
   local status="${1:-0}"
   local repo_root
-  repo_root="$(bithumb_pytest_repo_root)"
-  if [[ -z "${BITHUMB_PYTEST_WORKSPACE:-}" ]]; then
+  repo_root="$(operation_pytest_repo_root)"
+  if [[ -z "${OPERATION_PYTEST_WORKSPACE:-}" ]]; then
     return 0
   fi
-  bithumb_pytest_refuse_unsafe_path "$BITHUMB_PYTEST_WORKSPACE" "$repo_root"
-  if [[ "${KEEP_BITHUMB_TEST_ARTIFACTS:-0}" == "1" || "$status" != "0" ]]; then
-    echo "[PYTEST-WORKSPACE] keeping workspace: $BITHUMB_PYTEST_WORKSPACE"
-    bithumb_pytest_workspace_summary
+  operation_pytest_refuse_unsafe_path "$OPERATION_PYTEST_WORKSPACE" "$repo_root"
+  if [[ "${KEEP_OPERATION_TEST_ARTIFACTS:-0}" == "1" || "$status" != "0" ]]; then
+    echo "[PYTEST-WORKSPACE] keeping workspace: $OPERATION_PYTEST_WORKSPACE"
+    operation_pytest_workspace_summary
     return 0
   fi
-  if [[ "${BITHUMB_PYTEST_SUMMARY_ON_SUCCESS:-0}" == "1" ]]; then
-    bithumb_pytest_workspace_summary
+  if [[ "${OPERATION_PYTEST_SUMMARY_ON_SUCCESS:-0}" == "1" ]]; then
+    operation_pytest_workspace_summary
   fi
-  rm -rf "$BITHUMB_PYTEST_WORKSPACE"
-  echo "[PYTEST-WORKSPACE] cleaned workspace: $BITHUMB_PYTEST_WORKSPACE"
+  rm -rf "$OPERATION_PYTEST_WORKSPACE"
+  echo "[PYTEST-WORKSPACE] cleaned workspace: $OPERATION_PYTEST_WORKSPACE"
 }

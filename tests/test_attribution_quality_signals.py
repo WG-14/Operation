@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from bithumb_bot import runtime_state
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.reporting import (
+from operation import runtime_state
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.reporting import (
     fetch_attribution_quality_summary,
     fetch_recovery_attribution_signal_summary,
 )

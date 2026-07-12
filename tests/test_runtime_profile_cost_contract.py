@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.operation_approval import profile_runtime_cost_match_status
+from operation.operation_approval import profile_runtime_cost_match_status
 
 
 def _approval(*, max_order_krw: float = 50_000.0) -> dict[str, object]:

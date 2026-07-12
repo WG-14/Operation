@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.cli.parser import build_parser
-from bithumb_bot.cli.registry import command_registry
+from operation.cli.parser import build_parser
+from operation.cli.registry import command_registry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +16,7 @@ def _source(relative: str) -> str:
 
 
 def test_forward_diagnostics_not_implemented_inside_strategy_sweep() -> None:
-    source = _source("src/bithumb_bot/strategy_sweep.py")
+    source = _source("src/operation/strategy_sweep.py")
 
     for forbidden in ("forward_return", "ForwardTarget", "mfe", "mae", "feature_bucket", "bucket_metrics"):
         assert forbidden not in source
@@ -35,7 +35,7 @@ def test_strategy_sweep_help_does_not_expose_forward_diagnostics_options(capsys:
 
 
 def test_strategy_sweep_source_does_not_import_forward_targets() -> None:
-    source = _source("src/bithumb_bot/strategy_sweep.py")
+    source = _source("src/operation/strategy_sweep.py")
 
     assert "forward_targets" not in source
     assert "ForwardTarget" not in source

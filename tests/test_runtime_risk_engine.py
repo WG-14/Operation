@@ -3,10 +3,10 @@ from __future__ import annotations
 import sqlite3
 from types import SimpleNamespace
 
-from bithumb_bot.config import settings
-from bithumb_bot.risk import DailyLossEvaluation
-from bithumb_bot.risk_contract import RiskPolicy, SubmitPlan
-from bithumb_bot.runtime_risk_engine import RuntimeRiskEngineAdapter
+from operation.config import settings
+from operation.risk import DailyLossEvaluation
+from operation.risk_contract import RiskPolicy, SubmitPlan
+from operation.runtime_risk_engine import RuntimeRiskEngineAdapter
 
 
 def test_pre_submit_flat_buy_uses_broker_qty_zero_not_submit_qty(monkeypatch) -> None:
@@ -29,15 +29,15 @@ def test_pre_submit_flat_buy_uses_broker_qty_zero_not_submit_qty(monkeypatch) ->
             details={"current_source": "broker_balance_snapshot"},
         )
 
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
+    monkeypatch.setattr("operation.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
+    monkeypatch.setattr("operation.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
+    monkeypatch.setattr("operation.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine.collect_risky_order_state",
+        "operation.runtime_risk_engine.collect_risky_order_state",
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine._record_typed_decision_identity",
+        "operation.runtime_risk_engine._record_typed_decision_identity",
         lambda *_args, **_kwargs: None,
     )
 
@@ -85,11 +85,11 @@ def test_pre_submit_requires_explicit_submit_qty(monkeypatch) -> None:
             details={},
         )
 
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
+    monkeypatch.setattr("operation.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
+    monkeypatch.setattr("operation.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
+    monkeypatch.setattr("operation.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine.collect_risky_order_state",
+        "operation.runtime_risk_engine.collect_risky_order_state",
         lambda *_args, **_kwargs: {},
     )
 
@@ -135,15 +135,15 @@ def test_pre_submit_sell_legacy_qty_does_not_overwrite_broker_current_asset_qty(
             details={"current_source": "broker_balance_snapshot"},
         )
 
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
+    monkeypatch.setattr("operation.runtime_risk_engine.evaluate_daily_loss_state", _daily_loss_state)
+    monkeypatch.setattr("operation.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
+    monkeypatch.setattr("operation.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine.collect_risky_order_state",
+        "operation.runtime_risk_engine.collect_risky_order_state",
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine._record_typed_decision_identity",
+        "operation.runtime_risk_engine._record_typed_decision_identity",
         lambda *_args, **_kwargs: None,
     )
 
@@ -178,21 +178,21 @@ def test_live_pre_submit_requires_broker_snapshot_even_when_global_daily_loss_di
     object.__setattr__(settings, "MODE", "live")
     object.__setattr__(settings, "MAX_DAILY_LOSS_KRW", 0.0)
     monkeypatch.setattr(
-        "bithumb_bot.risk.runtime_state.snapshot",
+        "operation.risk.runtime_state.snapshot",
         lambda: SimpleNamespace(
             last_reconcile_epoch_sec=1_800_000_000.0,
             last_reconcile_reason_code="OK",
             last_reconcile_status="ok",
         ),
     )
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
-    monkeypatch.setattr("bithumb_bot.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
+    monkeypatch.setattr("operation.runtime_risk_engine._latest_position_entry_price", lambda _conn: None)
+    monkeypatch.setattr("operation.runtime_risk_engine._count_orders_today", lambda _conn, _ts: 0)
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine.collect_risky_order_state",
+        "operation.runtime_risk_engine.collect_risky_order_state",
         lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
-        "bithumb_bot.runtime_risk_engine._record_typed_decision_identity",
+        "operation.runtime_risk_engine._record_typed_decision_identity",
         lambda *_args, **_kwargs: None,
     )
 

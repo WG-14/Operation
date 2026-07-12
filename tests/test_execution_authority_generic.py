@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.execution_authority import (
+from operation.execution_authority import (
     execution_authority_from_payload,
     require_authority_operation,
 )
-from bithumb_bot.operator_smoke_authority import OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE
+from operation.operator_smoke_authority import OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE
 
 
 def test_execution_authority_scopes_are_not_interchangeable() -> None:

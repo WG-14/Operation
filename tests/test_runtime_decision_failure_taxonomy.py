@@ -4,8 +4,8 @@ import inspect
 import sqlite3
 from types import SimpleNamespace
 
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.decision_coordinator import DecisionCoordinator
 
 
 class _Conn:

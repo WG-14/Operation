@@ -1,6 +1,6 @@
-# RUNBOOK (Bithumb BTC Limited Unattended Operations)
+# RUNBOOK (Operation BTC Limited Unattended Operations)
 
-> Scope: Bithumb BTC live operations with limited unattended runtime and explicit human intervention gates.
+> Scope: Operation BTC live operations with limited unattended runtime and explicit human intervention gates.
 >
 > Background: This runbook preserves the existing operating procedure and serves as a quick reference for limited unattended operations.
 
@@ -41,9 +41,9 @@ Emergency rule:
 
 ## Deployment and Units
 
-- `deploy/systemd/bithumb-bot.service`: main loop (`Restart=always`)
-- `deploy/systemd/bithumb-bot-healthcheck.timer`: hourly status check
-- `deploy/systemd/bithumb-bot-backup.timer`: periodic SQLite backup
+- `deploy/systemd/operation.service`: main loop (`Restart=always`)
+- `deploy/systemd/operation-healthcheck.timer`: hourly status check
+- `deploy/systemd/operation-backup.timer`: periodic SQLite backup
 - `scripts/healthcheck.py`: stale candle, error count, and trading-enabled checks
 - `scripts/backup_sqlite.sh`: SQLite backup and restore-verify flow
 
@@ -55,29 +55,29 @@ Operating scope:
 ## Installation and Enablement
 
 ```bash
-sudo mkdir -p /etc/bithumb-bot
-sudo cp .env.example /etc/bithumb-bot/bithumb-bot.live.env
+sudo mkdir -p /etc/operation
+sudo cp .env.example /etc/operation/operation.live.env
 
 RENDER_DIR="$(mktemp -d)"
-BITHUMB_BOT_ROOT="$(pwd)" \
-BITHUMB_UV_BIN="$(command -v uv)" \
-BITHUMB_RUN_USER="$(id -un)" \
+OPERATION_BOT_ROOT="$(pwd)" \
+OPERATION_UV_BIN="$(command -v uv)" \
+OPERATION_RUN_USER="$(id -un)" \
 ./deploy/systemd/render_units.sh "${RENDER_DIR}"
-sudo cp "${RENDER_DIR}"/bithumb-bot.service /etc/systemd/system/
-sudo cp "${RENDER_DIR}"/bithumb-bot-healthcheck.service /etc/systemd/system/
-sudo cp "${RENDER_DIR}"/bithumb-bot-healthcheck.timer /etc/systemd/system/
-sudo cp "${RENDER_DIR}"/bithumb-bot-backup.service /etc/systemd/system/
-sudo cp "${RENDER_DIR}"/bithumb-bot-backup.timer /etc/systemd/system/
+sudo cp "${RENDER_DIR}"/operation.service /etc/systemd/system/
+sudo cp "${RENDER_DIR}"/operation-healthcheck.service /etc/systemd/system/
+sudo cp "${RENDER_DIR}"/operation-healthcheck.timer /etc/systemd/system/
+sudo cp "${RENDER_DIR}"/operation-backup.service /etc/systemd/system/
+sudo cp "${RENDER_DIR}"/operation-backup.timer /etc/systemd/system/
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now bithumb-bot.service
-sudo systemctl enable --now bithumb-bot-healthcheck.timer
-sudo systemctl enable --now bithumb-bot-backup.timer
+sudo systemctl enable --now operation.service
+sudo systemctl enable --now operation-healthcheck.timer
+sudo systemctl enable --now operation-backup.timer
 ```
 
 Notes:
 
-- The rendered units point `BITHUMB_ENV_FILE` at the explicit runtime env file.
+- The rendered units point `OPERATION_ENV_FILE` at the explicit runtime env file.
 - The service and timer units must all reference the same explicit env file.
 - `healthcheck` is fail-fast. A missing env file must fail the run rather than continue.
 
@@ -104,28 +104,28 @@ Notes:
 Run these commands as written:
 
 ```bash
-uv run bithumb-bot broker-diagnose
-uv run bithumb-bot health
-uv run bithumb-bot recovery-report
-uv run bithumb-bot reconcile
-uv run bithumb-bot recovery-report
+uv run operation broker-diagnose
+uv run operation health
+uv run operation recovery-report
+uv run operation reconcile
+uv run operation recovery-report
 ```
 
 ### C. Service and log checks
 
 ```bash
-sudo systemctl restart bithumb-bot.service
-sudo systemctl status bithumb-bot.service
-sudo journalctl -u bithumb-bot.service -n 100 --no-pager
-sudo journalctl -u bithumb-bot.service -f
+sudo systemctl restart operation.service
+sudo systemctl status operation.service
+sudo journalctl -u operation.service -n 100 --no-pager
+sudo journalctl -u operation.service -f
 
-uv run bithumb-bot health
-uv run bithumb-bot recovery-report
+uv run operation health
+uv run operation recovery-report
 ```
 
 - Confirm the service is `active (running)`.
-- For the rendered `bithumb-bot.service`, `StandardOutput=journal` and `StandardError=journal`.
-  Treat `journalctl -u bithumb-bot.service -f` as the canonical live log stream unless the unit is explicitly changed to redirect stdout/stderr to a managed runtime log file.
+- For the rendered `operation.service`, `StandardOutput=journal` and `StandardError=journal`.
+  Treat `journalctl -u operation.service -f` as the canonical live log stream unless the unit is explicitly changed to redirect stdout/stderr to a managed runtime log file.
   File logs remain useful supporting evidence, but a quiet file log does not prove the systemd process is stopped.
 - Confirm `last_candle_age_sec`, `error_count`, and `trading_enabled` are healthy.
 - Confirm `recovery-report` still shows no unresolved or recovery-required order state.
@@ -154,8 +154,8 @@ Do not use mobile-app closeout for a converged, tracked, sub-min residual.
 ### A. Integrated emergency stop
 
 ```bash
-uv run bithumb-bot panic-stop
-uv run bithumb-bot panic-stop --flatten
+uv run operation panic-stop
+uv run operation panic-stop --flatten
 ```
 
 - `panic-stop` is the current integrated live emergency path.
@@ -166,7 +166,7 @@ uv run bithumb-bot panic-stop --flatten
 ### B. Pause only
 
 ```bash
-uv run bithumb-bot pause
+uv run operation pause
 ```
 
 - Use this to block new orders immediately.
@@ -176,7 +176,7 @@ uv run bithumb-bot pause
 ### C. Decomposed cleanup path
 
 ```bash
-uv run bithumb-bot cancel-open-orders
+uv run operation cancel-open-orders
 ```
 
 - Use this after `pause` when live mode needs exchange-side order cleanup without invoking `panic-stop`.
@@ -185,7 +185,7 @@ uv run bithumb-bot cancel-open-orders
 ### D. Resume
 
 ```bash
-uv run bithumb-bot resume
+uv run operation resume
 ```
 
 - Never use `resume` until `recovery-report` shows `resume_allowed=1` / `can_resume=true` and the blocker list is clear.
@@ -197,8 +197,8 @@ uv run bithumb-bot resume
 
 ## Recovery Checklist
 
-1. Check `journalctl -u bithumb-bot.service` for the last live-loop decision or error cause.
-2. Run `uv run bithumb-bot recovery-report`.
+1. Check `journalctl -u operation.service` for the last live-loop decision or error cause.
+2. Run `uv run operation recovery-report`.
 3. Confirm `unresolved_count` and `recovery_required_count` are both zero.
 4. Confirm `[P2] resume_eligibility` shows `resume_allowed=1`, `can_resume=true`, and no active blockers.
 5. Review `[P3] dust_residual` and `[P3.1] lot_exposure`.
@@ -211,16 +211,16 @@ uv run bithumb-bot resume
 Use these commands on EC2 after deployment:
 
 ```bash
-MODE=live uv run bithumb-bot health | egrep \
+MODE=live uv run operation health | egrep \
   'canonical_state|residual_inventory|new_entry_allowed|exit_allowed|sellable_executable|run_loop|can_resume'
 
-MODE=live uv run bithumb-bot decision-telemetry --limit 20 | egrep \
+MODE=live uv run operation decision-telemetry --limit 20 | egrep \
   'raw_signal|final_signal|final_action|submit_expected|pre_submit|residual|buy_delta|execution_block'
 
-MODE=live uv run bithumb-bot ops-report --limit 50 | egrep \
+MODE=live uv run operation ops-report --limit 50 | egrep \
   'final_action|submit_expected|pre_submit|residual|dust_only|buy_delta|execution_block'
 
-sudo journalctl -u bithumb-bot.service -n 100 --no-pager | egrep \
+sudo journalctl -u operation.service -n 100 --no-pager | egrep \
   'strategy decision|final_action|submit_expected|pre_submit|residual|dust_only|BUY|SELL'
 ```
 
@@ -242,9 +242,9 @@ Expected BUY sizing behavior:
 - `TARGET_EXECUTION_SHADOW=true` remains diagnostic telemetry only and does not authorize live real-order submission.
 - Target state and submit plans are persisted with `portfolio_target_hash`, `allocation_decision_hash`, `strategy_contribution_hash`, `submit_plan_hash`, `submit_authority_mode`, `submit_authority_policy_hash`, `exposure_boundary_artifact_hash`, and typed risk-layer hashes such as `strategy_risk_decision_hash`, `strategy_risk_evidence_hash`, `portfolio_risk_decision_hash`, `portfolio_risk_evidence_hash`, `pre_submit_risk_decision_hash`, and `pre_submit_risk_evidence_hash`.
 - For live real-order, the final broker-bound submit payload with `pre_submit_risk_*` proof is persisted in `execution_plan.execution_submit_plan_json` for the stable `execution_submit_plan_hash`; post-proof skips record the skip reason there as well.
-- Use `uv run bithumb-bot risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json` or `--execution-plan-id <id>` to verify strategy, portfolio, and pre-submit layers. The command opens SQLite read-only, does not call broker APIs or submit orders, and reports stored payload integrity separately from source reconstruction and final layer status.
+- Use `uv run operation risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json` or `--execution-plan-id <id>` to verify strategy, portfolio, and pre-submit layers. The command opens SQLite read-only, does not call broker APIs or submit orders, and reports stored payload integrity separately from source reconstruction and final layer status.
 - Compare `raw_signal`, `final_signal`, `final_action`, `submit_expected`, `execution_block_reason`, `residual_live_sell_mode`, and `residual_buy_sizing_mode` against `target_delta_side`, `target_would_submit`, `target_submit_qty`, `target_delta_notional_krw`, `target_block_reason`, and `target_position_truth_state` in `decision-telemetry` or `ops-report`.
-8. Run `uv run bithumb-bot reconcile` if state needs to be refreshed.
+8. Run `uv run operation reconcile` if state needs to be refreshed.
 9. Re-run `health` and confirm `trading_enabled` is healthy, `can_resume=true`, and the current dust indicators do not contradict resume.
 10. Resume only after the state is understood.
 
@@ -266,8 +266,8 @@ Before any live DB mutation:
 
 Allowed:
 
-- `uv run bithumb-bot rebuild-position-authority --full-projection-rebuild`
-- `uv run bithumb-bot rebuild-position-authority --full-projection-rebuild --apply --yes`
+- `uv run operation rebuild-position-authority --full-projection-rebuild`
+- `uv run operation rebuild-position-authority --full-projection-rebuild --apply --yes`
 
 Apply only after the dry-run shows:
 
@@ -279,21 +279,21 @@ Apply only after the dry-run shows:
 
 Forbidden:
 
-- `uv run bithumb-bot run`
-- `uv run bithumb-bot resume`
+- `uv run operation run`
+- `uv run operation resume`
 - manual SQL `DELETE` / `UPDATE` against `open_position_lots`
 
 Operator sequence:
 
 ```bash
 ./scripts/backup_sqlite.sh
-MODE=live uv run bithumb-bot rebuild-position-authority --full-projection-rebuild
+MODE=live uv run operation rebuild-position-authority --full-projection-rebuild
 # apply only if safe_to_apply=1
-MODE=live uv run bithumb-bot rebuild-position-authority --full-projection-rebuild --apply --yes --note "operator-reviewed projection rebuild"
-MODE=live uv run bithumb-bot audit-ledger
-MODE=live uv run bithumb-bot recovery-report
-MODE=live uv run bithumb-bot restart-checklist
-MODE=live uv run bithumb-bot health
+MODE=live uv run operation rebuild-position-authority --full-projection-rebuild --apply --yes --note "operator-reviewed projection rebuild"
+MODE=live uv run operation audit-ledger
+MODE=live uv run operation recovery-report
+MODE=live uv run operation restart-checklist
+MODE=live uv run operation health
 ```
 
 Do not resume live until all of the following are true:
@@ -318,7 +318,7 @@ After a live change, verify:
 
 ```bash
 ./scripts/backup_sqlite.sh
-python3 tools/verify_sqlite_restore.py /var/lib/bithumb-bot/backup/live/db/<backup_file>.sqlite
+python3 tools/verify_sqlite_restore.py /var/lib/operation/backup/live/db/<backup_file>.sqlite
 ```
 
 Note: backup verification is a recovery safety check, not a convenience-only workflow.

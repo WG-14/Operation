@@ -4,15 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 
-if [[ -n "${BITHUMB_ENV_FILE:-}" ]]; then
-  if [[ ! -f "$BITHUMB_ENV_FILE" ]]; then
-    echo "[BACKUP] env file not found: $BITHUMB_ENV_FILE" >&2
+if [[ -n "${OPERATION_ENV_FILE:-}" ]]; then
+  if [[ ! -f "$OPERATION_ENV_FILE" ]]; then
+    echo "[BACKUP] env file not found: $OPERATION_ENV_FILE" >&2
     exit 1
   fi
 
   set -a
   # shellcheck disable=SC1090
-  source "$BITHUMB_ENV_FILE"
+  source "$OPERATION_ENV_FILE"
   set +a
 fi
 
@@ -37,7 +37,7 @@ validate_live_override_path() {
   PYTHONPATH="$PROJECT_ROOT/src:${PYTHONPATH:-}" python3 - "$PROJECT_ROOT" "$key" "$path" <<'PY'
 from pathlib import Path
 import sys
-from bithumb_bot.paths import PathManager, PathPolicyError
+from operation.paths import PathManager, PathPolicyError
 
 project_root = Path(sys.argv[1]).resolve()
 key = sys.argv[2]

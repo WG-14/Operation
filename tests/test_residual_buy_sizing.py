@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.execution_service import build_execution_decision_summary
+from operation.config import settings
+from operation.execution_service import build_execution_decision_summary
 
 
 def _summary(monkeypatch, *, mode: str, target: float = 100_000.0, current: float = 9_665.0):

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.flatten import flatten_btc_position
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.flatten import flatten_btc_position
 
 
 class _Broker:
@@ -58,7 +58,7 @@ def test_flatten_reports_tracked_non_executable_residual_without_manual_closeout
     object.__setattr__(settings, "DB_PATH", str(db_path))
     object.__setattr__(settings, "PAIR", "BTC_KRW")
     ensure_db(str(db_path)).close()
-    monkeypatch.setattr("bithumb_bot.flatten.compute_runtime_readiness_snapshot", lambda _conn: _readiness())
+    monkeypatch.setattr("operation.flatten.compute_runtime_readiness_snapshot", lambda _conn: _readiness())
     try:
         result = flatten_btc_position(broker=_Broker(), dry_run=True, trigger="operator")
     finally:
@@ -81,7 +81,7 @@ def test_flatten_blocks_inconsistent_residual_with_manual_review(tmp_path, monke
     object.__setattr__(settings, "PAIR", "BTC_KRW")
     ensure_db(str(db_path)).close()
     monkeypatch.setattr(
-        "bithumb_bot.flatten.compute_runtime_readiness_snapshot",
+        "operation.flatten.compute_runtime_readiness_snapshot",
         lambda _conn: _readiness("BLOCKING_INCONSISTENT", recommended_action="review_recovery_report"),
     )
     try:
@@ -105,7 +105,7 @@ def test_flatten_closeout_candidate_requires_qty_and_notional_minimums(tmp_path,
     object.__setattr__(settings, "PAIR", "BTC_KRW")
     ensure_db(str(db_path)).close()
     monkeypatch.setattr(
-        "bithumb_bot.flatten.compute_runtime_readiness_snapshot",
+        "operation.flatten.compute_runtime_readiness_snapshot",
         lambda _conn: _readiness(
             "CLOSEOUT_EXECUTABLE",
             flatten_allowed=False,

@@ -5,17 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.canonical_decision import sha256_prefixed
-from bithumb_bot.db_core import (
+from operation.canonical_decision import sha256_prefixed
+from operation.db_core import (
     create_or_get_budget_lock,
     create_or_get_order_lock,
     ensure_schema,
     upsert_account_balance,
     upsert_pair_position,
 )
-from bithumb_bot.execution_plan_batch import ExecutionPlanBatch
-from bithumb_bot.execution_service import ExecutionSubmitPlan, _execution_batch_payload_extra
-from bithumb_bot.multi_pair_runtime import (
+from operation.execution_plan_batch import ExecutionPlanBatch
+from operation.execution_service import ExecutionSubmitPlan, _execution_batch_payload_extra
+from operation.multi_pair_runtime import (
     MultiPairFailClosed,
     MultiPairRuntimeAuthority,
     PairRuntimeInputs,
@@ -26,10 +26,10 @@ from bithumb_bot.multi_pair_runtime import (
     validate_multi_pair_replay_boundaries,
     verify_multi_asset_ledger_authority,
 )
-from bithumb_bot.portfolio_allocation import PortfolioAllocatorConfig
-from bithumb_bot.runtime_scope import RuntimeScopeKey
-from bithumb_bot.strategy_preference import StrategyPreference
-from bithumb_bot.virtual_target_state import StrategyVirtualTargetState
+from operation.portfolio_allocation import PortfolioAllocatorConfig
+from operation.runtime_scope import RuntimeScopeKey
+from operation.strategy_preference import StrategyPreference
+from operation.virtual_target_state import StrategyVirtualTargetState
 
 
 def _memory_conn() -> sqlite3.Connection:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from bithumb_bot.db_core import ensure_schema
+from operation.db_core import ensure_schema
 
 
 def _insert_backfill_fixture(conn: sqlite3.Connection) -> None:

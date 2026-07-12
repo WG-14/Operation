@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from bithumb_bot.storage_io import append_jsonl, write_json_atomic, write_text_atomic
+from operation.storage_io import append_jsonl, write_json_atomic, write_text_atomic
 
 
 def test_append_jsonl_writes_append_only_records(tmp_path: Path) -> None:

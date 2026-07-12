@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.execution_service import ExecutionSubmitPlan
+from operation.execution_service import ExecutionSubmitPlan
 
 
 def _plan() -> ExecutionSubmitPlan:
@@ -33,7 +33,7 @@ def test_as_final_payload_does_not_open_db(monkeypatch) -> None:
     def _fail(*_args, **_kwargs):
         raise AssertionError("ensure_db must not be called by as_final_payload")
 
-    monkeypatch.setattr("bithumb_bot.execution_service.ensure_db", _fail)
+    monkeypatch.setattr("operation.execution_service.ensure_db", _fail)
 
     payload = _plan().as_final_payload()
 

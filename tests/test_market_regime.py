@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.market_regime import (
+from operation.market_regime import (
     MARKET_REGIME_VERSION,
     RegimeAcceptanceGate,
     aggregate_regime_coverage,

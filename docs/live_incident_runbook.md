@@ -8,9 +8,9 @@ Background: This document preserves the operational intent while providing a sho
 
 ## 1. Initial Checks
 
-1. `sudo systemctl status bithumb-bot.service --no-pager`
-2. `sudo journalctl -u bithumb-bot.service -n 100 --no-pager`
-3. `sudo systemctl status bithumb-bot-healthcheck.timer --no-pager`
+1. `sudo systemctl status operation.service --no-pager`
+2. `sudo journalctl -u operation.service -n 100 --no-pager`
+3. `sudo systemctl status operation-healthcheck.timer --no-pager`
 4. `./scripts/check_live_runtime.sh`
 
 ## 2. When to Stop Immediately
@@ -26,9 +26,9 @@ Stop live execution immediately if any of the following are true:
 ## 3. Stop Procedure
 
 1. Stop the service:
-   - `sudo systemctl stop bithumb-bot.service`
+   - `sudo systemctl stop operation.service`
 2. Confirm the service is stopped:
-   - `sudo systemctl status bithumb-bot.service --no-pager`
+   - `sudo systemctl status operation.service --no-pager`
 3. Collect incident evidence:
    - `./scripts/collect_live_snapshot.sh`
 
@@ -40,7 +40,7 @@ Stop live execution immediately if any of the following are true:
 Example:
 
 ```bash
-cp /var/lib/bithumb-bot/data/live/trades/live.sqlite /var/lib/bithumb-bot/backup/live/db/live.manual.$(date +%Y%m%d_%H%M%S).sqlite
+cp /var/lib/operation/data/live/trades/live.sqlite /var/lib/operation/backup/live/db/live.manual.$(date +%Y%m%d_%H%M%S).sqlite
 ```
 
 ## 5. Minimum Forensics
@@ -63,9 +63,9 @@ Review the most recent journal evidence for:
 
 ## 7. Recovery Gate
 
-1. `sudo systemctl start bithumb-bot.service`
-2. `sudo systemctl status bithumb-bot.service --no-pager`
-3. `sudo journalctl -u bithumb-bot.service -n 100 --no-pager`
+1. `sudo systemctl start operation.service`
+2. `sudo systemctl status operation.service --no-pager`
+3. `sudo journalctl -u operation.service -n 100 --no-pager`
 
 ## 8. Incident Log
 

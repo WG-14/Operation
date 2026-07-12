@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.execution_order_rules import ExecutionOrderRules
-from bithumb_bot.live_pipeline_smoke import _validate_smoke_roundtrip_notional_buffer
-from bithumb_bot.live_pipeline_smoke_preflight import LivePipelineSmokePreflightError
-from bithumb_bot.live_pipeline_smoke_preflight import LivePipelineSmokeReadiness
-from bithumb_bot.runtime.live_pipeline_smoke_decision import (
+from operation.execution_order_rules import ExecutionOrderRules
+from operation.live_pipeline_smoke import _validate_smoke_roundtrip_notional_buffer
+from operation.live_pipeline_smoke_preflight import LivePipelineSmokePreflightError
+from operation.live_pipeline_smoke_preflight import LivePipelineSmokeReadiness
+from operation.runtime.live_pipeline_smoke_decision import (
     LivePipelineSmokeDecisionError,
     LivePipelineSmokeDecisionProvider,
 )

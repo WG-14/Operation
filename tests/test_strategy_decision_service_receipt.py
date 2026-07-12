@@ -4,10 +4,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from bithumb_bot.strategy_decision_input import StrategyDecisionInputBundle
-from bithumb_bot.strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
-from bithumb_bot.strategy_evaluation_receipt import validate_strategy_evaluation_receipt
-from bithumb_bot.strategy_policy_contract import ExecutionConstraintSnapshot, PositionSnapshot, StrategyDecisionV2
+from operation.strategy_decision_input import StrategyDecisionInputBundle
+from operation.strategy_decision_service import StrategyDecisionService, StrategyEvaluationRequest
+from operation.strategy_evaluation_receipt import validate_strategy_evaluation_receipt
+from operation.strategy_policy_contract import ExecutionConstraintSnapshot, PositionSnapshot, StrategyDecisionV2
 
 
 @dataclass(frozen=True)

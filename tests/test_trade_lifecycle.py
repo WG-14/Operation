@@ -5,9 +5,9 @@ import json
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, set_portfolio_breakdown
-from bithumb_bot.dust import (
+from operation.config import settings
+from operation.db_core import ensure_db, set_portfolio_breakdown
+from operation.dust import (
     DUST_TRACKING_LOT_STATE,
     OPEN_EXPOSURE_LOT_STATE,
     build_dust_display_context,
@@ -15,11 +15,11 @@ from bithumb_bot.dust import (
     classify_dust_residual,
     dust_qty_gap_tolerance,
 )
-from bithumb_bot.execution import apply_fill_and_trade, record_order_if_missing
-from bithumb_bot.oms import build_order_intent_key, claim_order_intent_dedup
-from bithumb_bot.lot_model import build_market_lot_rules, lot_count_to_qty
-from bithumb_bot.order_sizing import SellExecutionAuthority, build_sell_execution_sizing
-from bithumb_bot.lifecycle import (
+from operation.execution import apply_fill_and_trade, record_order_if_missing
+from operation.oms import build_order_intent_key, claim_order_intent_dedup
+from operation.lot_model import build_market_lot_rules, lot_count_to_qty
+from operation.order_sizing import SellExecutionAuthority, build_sell_execution_sizing
+from operation.lifecycle import (
     ENTRY_DECISION_LINKAGE_AMBIGUOUS_MULTI_CANDIDATE,
     ENTRY_DECISION_LINKAGE_DEGRADED_RECOVERY_UNATTRIBUTED,
     ENTRY_DECISION_LINKAGE_DIRECT,
@@ -32,7 +32,7 @@ from bithumb_bot.lifecycle import (
     resolve_execution_quantity_authority,
     summarize_position_lots,
 )
-from bithumb_bot.position_authority_state import build_lot_projection_convergence
+from operation.position_authority_state import build_lot_projection_convergence
 
 
 def _record_order(conn, *, client_order_id: str, side: str, qty_req: float, ts_ms: int) -> None:

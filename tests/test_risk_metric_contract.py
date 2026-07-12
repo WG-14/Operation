@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from bithumb_bot.reason_codes import (
+from operation.reason_codes import (
     RISK_METRIC_DENOMINATOR_MISSING,
     RISK_METRIC_SCOPE_MISMATCH,
     RISK_METRIC_UNIT_MISMATCH,
 )
-from bithumb_bot.risk_contract import RiskLimit, RiskMetric, compare_risk_metric_to_limit
+from operation.risk_contract import RiskLimit, RiskMetric, compare_risk_metric_to_limit
 
 
 def _metric(**overrides: object) -> RiskMetric:

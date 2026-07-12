@@ -1,0 +1,18 @@
+[Unit]
+Description=Operation bot trading loop (paper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@OPERATION_BOT_ROOT@
+Environment="MODE=paper" "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_PAPER@" "PYTHONUNBUFFERED=1" "ENV_ROOT=@OPERATION_ENV_ROOT@" "RUN_ROOT=@OPERATION_RUN_ROOT@" "DATA_ROOT=@OPERATION_DATA_ROOT@" "LOG_ROOT=@OPERATION_LOG_ROOT@" "BACKUP_ROOT=@OPERATION_BACKUP_ROOT@"
+ExecStart=/usr/bin/env bash -lc 'exec @OPERATION_UV_BIN@ run python -u -m operation run --mode paper --short ${SMA_SHORT:-7} --long ${SMA_LONG:-30}'
+Restart=always
+RestartSec=5
+SyslogIdentifier=operation-paper
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -68,7 +68,7 @@ Configuration contract:
 - `pair` defaults to `settings.PAIR`, `priority` defaults to `100`, `weight` defaults to `1.0`, and desired exposure defaults to `TARGET_EXPOSURE_KRW` when set or `MAX_ORDER_KRW`.
 - The current run loop is explicitly single-pair and single-interval. Every active strategy spec must use `settings.PAIR` and `settings.INTERVAL`; pair mismatches fail during startup validation with `multi_pair_runtime_unsupported`, and interval mismatches fail with `single_interval_runtime_unsupported`, before adapter execution in paper, live dry-run, and live real-order paths.
 - `multi_pair_runtime_unsupported` is intentional fail-closed behavior, not a validator bug. Removing it is unsafe because runtime data preflight, target state, execution plan persistence, submit/reconcile loops, and accounting are not multi-pair-safe yet. Future multi-pair support requires pair-scoped runtime shards plus a portfolio-level orchestrator.
-- Operators can validate and inspect the materialized active set without placing orders with `uv run bithumb-bot runtime-strategy-set-lint` and `uv run bithumb-bot runtime-strategy-set-dump`.
+- Operators can validate and inspect the materialized active set without placing orders with `uv run operation runtime-strategy-set-lint` and `uv run operation runtime-strategy-set-dump`.
 
 Strict runtime parameter authority is limited to `approved_profile` and `runtime_strategy_spec`. `STRATEGY_PARAMETERS_JSON` and plugin `runtime_parameter_adapter.from_settings()` are compatibility fallbacks only and are surfaced as `paper_legacy_compat`; they are rejected for live/live-like or profile-bound runtime.
 
@@ -272,8 +272,8 @@ a real order.
 Operators can verify persisted risk-layer hashes with:
 
 ```bash
-uv run bithumb-bot risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json
-uv run bithumb-bot risk-layer-replay --db <runtime.sqlite> --execution-plan-id <id> --json
+uv run operation risk-layer-replay --db <runtime.sqlite> --decision-id <id> --json
+uv run operation risk-layer-replay --db <runtime.sqlite> --execution-plan-id <id> --json
 ```
 
 The verifier is read-only: it opens SQLite with `mode=ro`, does not call broker

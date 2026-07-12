@@ -1,0 +1,11 @@
+[Unit]
+Description=Operation bot healthcheck
+After=operation.service
+
+[Service]
+Type=oneshot
+User=@OPERATION_RUN_USER@
+WorkingDirectory=@OPERATION_BOT_ROOT@
+Environment="MODE=live" "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_LIVE@" "ENV_ROOT=@OPERATION_ENV_ROOT@" "RUN_ROOT=@OPERATION_RUN_ROOT@" "DATA_ROOT=@OPERATION_DATA_ROOT@" "LOG_ROOT=@OPERATION_LOG_ROOT@" "BACKUP_ROOT=@OPERATION_BACKUP_ROOT@"
+SyslogIdentifier=operation-healthcheck
+ExecStart=@OPERATION_UV_BIN@ run python @OPERATION_BOT_ROOT@/scripts/healthcheck.py

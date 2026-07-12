@@ -5,11 +5,11 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot.cli.main import main
-from bithumb_bot.operator_commands import cmd_report
-from bithumb_bot.db_core import ensure_db, record_strategy_decision
-from bithumb_bot.config import settings
-from bithumb_bot.execution_quality import (
+from operation.cli.main import main
+from operation.operator_commands import cmd_report
+from operation.db_core import ensure_db, record_strategy_decision
+from operation.config import settings
+from operation.execution_quality import (
     ExecutionQualityThresholds,
     assess_execution_remainder,
     build_execution_quality_record,
@@ -19,10 +19,10 @@ from bithumb_bot.execution_quality import (
     side_aware_slippage_bps,
     summarize_execution_quality,
 )
-from bithumb_bot.execution_reality_contract import build_execution_reality_contract
-from bithumb_bot.order_semantics import classify_order_semantics
-from bithumb_bot.execution import apply_fill_and_trade
-from bithumb_bot.oms import add_fill, create_order, record_submit_attempt
+from operation.execution_reality_contract import build_execution_reality_contract
+from operation.order_semantics import classify_order_semantics
+from operation.execution import apply_fill_and_trade
+from operation.oms import add_fill, create_order, record_submit_attempt
 
 
 def test_fill_slippage_bps_calculated_from_submit_reference_price(tmp_path) -> None:
@@ -271,7 +271,7 @@ def test_canonical_order_semantics_side_aware() -> None:
     buy_price = classify_order_semantics(
         raw_order_type="price",
         side="BUY",
-        exchange="bithumb",
+        exchange="operation",
         submit_contract_kind="market_buy_notional",
     )
     assert buy_price.canonical_execution_kind == "market_buy_quote_notional"
@@ -288,7 +288,7 @@ def test_canonical_order_semantics_side_aware() -> None:
     conflicting_buy_price = classify_order_semantics(
         raw_order_type="price",
         side="BUY",
-        exchange="bithumb",
+        exchange="operation",
         submit_contract_kind="limit_qty_price",
     )
     assert conflicting_buy_price.canonical_execution_kind == "unsupported_unknown"
@@ -308,7 +308,7 @@ def test_canonical_order_semantics_side_aware() -> None:
     assert legacy.canonical_execution_kind == "legacy_unknown"
     assert legacy.legacy_unknown is True
 
-    invalid_buy_market = classify_order_semantics(raw_order_type="market", side="BUY", exchange="bithumb")
+    invalid_buy_market = classify_order_semantics(raw_order_type="market", side="BUY", exchange="operation")
     assert invalid_buy_market.canonical_execution_kind == "unsupported_unknown"
     assert invalid_buy_market.semantic_evidence_quality == "conflicting"
     assert invalid_buy_market.market_equivalent is False
@@ -451,7 +451,7 @@ def _seed_quality_order(
         conn=conn,
     )
     submit_evidence: dict[str, object] = {
-        "exchange": "bithumb",
+        "exchange": "operation",
         "submit_contract_kind": submit_contract_kind,
         "exchange_submit_notional_krw": exchange_submit_notional_krw,
         "request_ts": request_ts,

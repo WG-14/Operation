@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from bithumb_bot.analytics_context import (
+from operation.analytics_context import (
     classify_gap_bucket,
     classify_overextension_bucket,
     classify_signal_strength_bucket,
@@ -12,7 +12,7 @@ from bithumb_bot.analytics_context import (
     normalize_analysis_context_from_decision_row,
     normalize_analysis_context_from_lifecycle_row,
 )
-from bithumb_bot.db_core import ensure_db, record_strategy_decision
+from operation.db_core import ensure_db, record_strategy_decision
 
 
 def test_classify_bucket_functions_cover_expected_ranges() -> None:

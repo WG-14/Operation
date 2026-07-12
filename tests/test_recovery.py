@@ -4,20 +4,20 @@ import json
 
 import pytest
 
-from bithumb_bot import runtime_state
-from bithumb_bot.broker.accounts_v1 import (
+from operation import runtime_state
+from operation.broker.accounts_v1 import (
     AccountsRequiredCurrencyMissingError,
     parse_accounts_response,
     select_pair_balances,
     to_broker_balance,
 )
-from bithumb_bot.broker.balance_source import AccountsV1BalanceSource, BalanceSnapshot
-from bithumb_bot.broker.base import BrokerFill, BrokerOrder
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, get_portfolio_breakdown, set_portfolio_breakdown
-from bithumb_bot.execution import record_order_if_missing
-from bithumb_bot.oms import set_exchange_order_id
-from bithumb_bot.recovery import reconcile_with_broker
+from operation.broker.balance_source import AccountsV1BalanceSource, BalanceSnapshot
+from operation.broker.base import BrokerFill, BrokerOrder
+from operation.config import settings
+from operation.db_core import ensure_db, get_portfolio_breakdown, set_portfolio_breakdown
+from operation.execution import record_order_if_missing
+from operation.oms import set_exchange_order_id
+from operation.recovery import reconcile_with_broker
 
 
 pytestmark = pytest.mark.slow_integration

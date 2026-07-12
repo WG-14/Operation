@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bithumb_bot.promotion_evidence_verifier import verify_promotion_candidate_execution_evidence
+from operation.promotion_evidence_verifier import verify_promotion_candidate_execution_evidence
 
 
 def _valid_evidence(**overrides: object) -> dict[str, object]:
@@ -73,6 +73,6 @@ def test_promotion_verifier_rejects_missing_typed_submit_plan() -> None:
 
 
 def test_promotion_artifact_provenance_uses_single_execution_evidence_verifier() -> None:
-    source = Path("src/bithumb_bot/promotion_provenance.py").read_text(encoding="utf-8")
+    source = Path("src/operation/promotion_provenance.py").read_text(encoding="utf-8")
 
     assert "verify_promotion_candidate_execution_evidence" in source

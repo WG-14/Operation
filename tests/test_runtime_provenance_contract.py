@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot import config
-from bithumb_bot.config import (
+from operation import config
+from operation.config import (
     LiveModeValidationError,
     validate_live_run_startup_contract,
     validate_runtime_code_provenance_for_live_real_order,

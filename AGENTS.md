@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository is a safety-first Bithumb trading bot project.
+This repository is a safety-first Operation trading bot project.
 Optimize every change for:
 
 1. prevention of wrong orders
@@ -31,9 +31,9 @@ Before making any patch, read and follow:
 
 If the change touches path handling, runtime outputs, backups, logs, DB paths, or env loading, also inspect:
 
-- `src/bithumb_bot/paths.py`
-- `src/bithumb_bot/storage_io.py`
-- `src/bithumb_bot/run_lock.py`
+- `src/operation/paths.py`
+- `src/operation/storage_io.py`
+- `src/operation/run_lock.py`
 
 If the task touches WSL research/backtest execution, generated research artifacts,
 or local disk/workspace cleanup, also read:
@@ -125,7 +125,7 @@ All path creation and path resolution must go through the shared path layer:
 
 - `PathManager`
 - `PathConfig`
-- the path helpers in `src/bithumb_bot/paths.py`
+- the path helpers in `src/operation/paths.py`
 
 Do not:
 

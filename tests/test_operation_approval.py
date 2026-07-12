@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.cli.context import AppContext
-from bithumb_bot.cli.main import main as cli_main
-from bithumb_bot.operation_approval import (
+from operation.cli.context import AppContext
+from operation.cli.main import main as cli_main
+from operation.operation_approval import (
     OperationApprovalError,
     build_operation_approval,
     compute_operation_approval_hash,
@@ -19,9 +19,9 @@ from bithumb_bot.operation_approval import (
     verify_operation_approval_against_runtime,
     write_operation_approval_atomic,
 )
-from bithumb_bot.operation_strategy.spec import materialized_strategy_parameters_hash
-from bithumb_bot.paths import PathConfig, PathManager
-from bithumb_bot.risk_contract import RiskPolicy
+from operation.operation_strategy.spec import materialized_strategy_parameters_hash
+from operation.paths import PathConfig, PathManager
+from operation.risk_contract import RiskPolicy
 
 
 def _runtime() -> dict[str, object]:
@@ -112,7 +112,7 @@ def test_operation_approval_rejects_repository_local_path() -> None:
 
 
 def test_operation_approval_external_absolute_path_writes_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import bithumb_bot.storage_io as storage_io
+    import operation.storage_io as storage_io
 
     destination = tmp_path / "operator-custody" / "approval.json"
     original_replace = storage_io.os.replace
@@ -220,8 +220,8 @@ def test_operation_approval_rejects_disallowed_mode_max_order_and_expiry() -> No
 def test_operation_approval_create_inspect_diff_and_verify_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    import bithumb_bot.config as config
-    import bithumb_bot.operation_approval as operation_approval
+    import operation.config as config
+    import operation.operation_approval as operation_approval
 
     runtime = _runtime()
     manager = _manager(tmp_path)

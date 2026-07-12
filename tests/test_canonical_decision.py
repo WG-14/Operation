@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from bithumb_bot.canonical_decision import (
+from operation.canonical_decision import (
     CANONICAL_DECISION_SCHEMA_FIELDS,
     canonical_flat_position_state_hash,
     export_research_decisions,
     export_runtime_replay_decisions,
     runtime_decision_to_canonical_event,
 )
-from bithumb_bot import runtime_sma_snapshot as runtime_sma_snapshot_module
-from bithumb_bot.strategy.base import StrategyDecision
+from operation import runtime_sma_snapshot as runtime_sma_snapshot_module
+from operation.strategy.base import StrategyDecision
 
 
 def test_runtime_strategy_decision_exports_canonical_operational_fields() -> None:

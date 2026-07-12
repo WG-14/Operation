@@ -153,12 +153,12 @@ and must fail closed before broker dispatch.
 When extending the SELL path, keep this implementation boundary explicit:
 
 - Authoritative SELL path:
-  - `src/bithumb_bot/decision_context.py`
+  - `src/operation/decision_context.py`
   - canonical lot-native SELL authority is resolved from `position_state.normalized_exposure.sellable_executable_lot_count`
   - canonical SELL qty is re-materialized from that lot count via lot sizing; `position_state.normalized_exposure.sellable_executable_qty` is a derived handoff field, not the authority source
 - Non-authoritative surfaces:
   - fail-closed compatibility fallback handling in `decision_context.py` is an adapter boundary only
-  - qty normalization and dust-guard helpers in `src/bithumb_bot/broker/live.py` are observational/support-only and must not become SELL authority inputs
+  - qty normalization and dust-guard helpers in `src/operation/broker/live.py` are observational/support-only and must not become SELL authority inputs
   - `open_exposure`, `dust_tracking`, and `reserved_exit` remain separate semantics and must not be merged into one executable inventory
 - Prohibited shortcuts in new code:
   - do not source SELL eligibility or SELL sizing from qty aggregation, `submit_payload_qty`, `position_qty`, or other qty-only snapshots

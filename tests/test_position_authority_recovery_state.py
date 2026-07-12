@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from bithumb_bot.operator_commands import _load_recovery_report, main as app_main
-from bithumb_bot import runtime_state
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import (
+from operation.operator_commands import _load_recovery_report, main as app_main
+from operation import runtime_state
+from operation.config import settings
+from operation.db_core import (
     compute_accounting_replay,
     ensure_db,
     record_broker_fill_observation,
@@ -19,32 +19,32 @@ from bithumb_bot.db_core import (
     set_portfolio_breakdown,
     summarize_fill_accounting_incident_projection,
 )
-from bithumb_bot.runtime_compat import (
+from operation.runtime_compat import (
     evaluate_restart_readiness,
     evaluate_resume_eligibility,
     evaluate_startup_safety_gate,
     get_health_status,
 )
-from bithumb_bot.execution_service import build_execution_decision_summary
-from bithumb_bot.execution import apply_fill_and_trade, apply_fill_principal_with_pending_fee, record_order_if_missing
-from bithumb_bot.external_position_repair import (
+from operation.execution_service import build_execution_decision_summary
+from operation.execution import apply_fill_and_trade, apply_fill_principal_with_pending_fee, record_order_if_missing
+from operation.external_position_repair import (
     apply_external_position_accounting_repair,
     build_external_position_accounting_repair_preview,
 )
-from bithumb_bot.fee_gap_repair import apply_fee_gap_accounting_repair, build_fee_gap_accounting_repair_preview
-from bithumb_bot.fee_pending_repair import (
+from operation.fee_gap_repair import apply_fee_gap_accounting_repair, build_fee_gap_accounting_repair_preview
+from operation.fee_pending_repair import (
     apply_fee_pending_accounting_repair,
     build_fee_pending_accounting_repair_preview,
 )
-from bithumb_bot.lifecycle import (
+from operation.lifecycle import (
     rebuild_lifecycle_projections_from_trades,
     resolve_execution_quantity_authority,
     summarize_position_lots,
 )
-from bithumb_bot.flatten import _flatten_submit_evidence
-from bithumb_bot.oms import set_status
-import bithumb_bot.position_authority_repair as position_authority_repair
-from bithumb_bot.position_authority_repair import (
+from operation.flatten import _flatten_submit_evidence
+from operation.oms import set_status
+import operation.position_authority_repair as position_authority_repair
+from operation.position_authority_repair import (
     _simulate_non_full_position_authority_repair,
     _replace_with_portfolio_anchored_projection,
     apply_legacy_operator_closeout_evidence_enrichment,
@@ -56,9 +56,9 @@ from bithumb_bot.position_authority_repair import (
     build_historical_fragmentation_projection_drift_repair_preview,
     build_position_authority_rebuild_preview,
 )
-from bithumb_bot.position_authority_state import build_position_authority_assessment
-from bithumb_bot.position_authority_state import build_lot_projection_convergence
-from bithumb_bot.runtime_readiness import compute_runtime_readiness_snapshot
+from operation.position_authority_state import build_position_authority_assessment
+from operation.position_authority_state import build_lot_projection_convergence
+from operation.runtime_readiness import compute_runtime_readiness_snapshot
 
 
 FILL_QTY = 0.00059996
@@ -2840,7 +2840,7 @@ def test_portfolio_anchored_projection_repair_removes_false_executable_authority
     assert after.resume_ready is False
     assert after.canonical_state == "DUST_ONLY_TRACKED"
     assert after.position_state.normalized_exposure.sellable_executable_lot_count == 0
-    assert after.recommended_command == "uv run bithumb-bot residual-closeout-plan"
+    assert after.recommended_command == "uv run operation-bot residual-closeout-plan"
     assert preview_after["needs_repair"] is False
     assert replay.replayed_buy_count == 1
     assert len(replay_rows) == 1
@@ -3156,7 +3156,7 @@ def test_full_projection_rebuild_rolls_back_on_postcondition_failure(recovery_db
         ).fetchone()
 
         monkeypatch.setattr(
-            "bithumb_bot.position_authority_repair._assert_post_repair_projection_converged",
+            "operation.position_authority_repair._assert_post_repair_projection_converged",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("forced postcondition failure")),
         )
         with pytest.raises(RuntimeError, match="forced postcondition failure"):
@@ -3393,7 +3393,7 @@ def test_full_projection_rebuild_portfolio_anchor_does_not_require_fill_qty_matc
     assert readiness.recovery_stage == "NON_EXECUTABLE_RESIDUAL_HOLDINGS"
     assert readiness.resume_ready is False
     assert readiness.resume_blockers == ("NON_EXECUTABLE_RESIDUAL_HOLDINGS",)
-    assert readiness.recommended_command == "uv run bithumb-bot residual-closeout-plan"
+    assert readiness.recommended_command == "uv run operation-bot residual-closeout-plan"
     assert readiness.run_loop_allowed is False
     assert readiness.new_entry_allowed is False
     assert readiness.closeout_allowed is False
@@ -3432,7 +3432,7 @@ def test_broker_matched_residual_only_holdings_block_resume_without_rebuild_or_f
     assert readiness.new_entry_allowed is False
     assert readiness.closeout_allowed is False
     assert readiness.residual_class == "NON_EXECUTABLE_RESIDUAL_HOLDINGS"
-    assert readiness.recommended_command == "uv run bithumb-bot residual-closeout-plan"
+    assert readiness.recommended_command == "uv run operation-bot residual-closeout-plan"
     assert "rebuild-position-authority" not in readiness.recommended_command
     assert "flatten-position" not in readiness.recommended_command
     assert residual_inventory["exchange_sellable"] is True
@@ -3597,18 +3597,18 @@ def test_repair_plan_and_residual_closeout_plan_classify_residual_only_holdings_
     report = _load_recovery_report()
 
     assert report["blocking_incident_class"] == "TRADEABILITY_POLICY"
-    assert report["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
-    assert report["runtime_readiness"]["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
+    assert report["recommended_command"] == "uv run operation-bot residual-closeout-plan"
+    assert report["runtime_readiness"]["recommended_command"] == "uv run operation-bot residual-closeout-plan"
     assert report["recovery_policy"]["primary_incident_class"] == "TRADEABILITY_POLICY"
     assert report["recovery_policy"]["recommended_mode"] == "residual_policy_review"
-    assert report["recovery_policy"]["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
+    assert report["recovery_policy"]["recommended_command"] == "uv run operation-bot residual-closeout-plan"
 
     capsys.readouterr()
     app_main(["repair-plan", "--json"])
     plan = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert plan["primary_incident_class"] == "TRADEABILITY_POLICY"
     assert plan["recommended_mode"] == "residual_policy_review"
-    assert plan["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
+    assert plan["recommended_command"] == "uv run operation-bot residual-closeout-plan"
     assert plan["flatten_primary_recommendation"] is False
     assert plan["accounting_root_cause_unresolved"] is False
     rebuild_candidate = next(
@@ -3621,7 +3621,7 @@ def test_repair_plan_and_residual_closeout_plan_classify_residual_only_holdings_
     assert closeout_plan["reason_code"] == "NON_EXECUTABLE_RESIDUAL_HOLDINGS"
     assert closeout_plan["strategy_closeout_allowed"] is False
     assert closeout_plan["operator_closeout_possible"] is True
-    assert closeout_plan["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
+    assert closeout_plan["recommended_command"] == "uv run operation-bot residual-closeout-plan"
 
 
 def test_residual_only_holdings_scope_resume_gates_and_reasons_across_operator_surfaces(
@@ -3647,7 +3647,7 @@ def test_residual_only_holdings_scope_resume_gates_and_reasons_across_operator_s
     assert report["operator_next_action"] == "residual_policy_review"
     assert report["resume_blocked_reason"] == "run loop blocked by non-executable residual holdings policy"
     assert report["tradeability_resume_safety"] == "policy_blocked (NON_EXECUTABLE_RESIDUAL_HOLDINGS)"
-    assert report["recommended_command"] == "uv run bithumb-bot residual-closeout-plan"
+    assert report["recommended_command"] == "uv run operation-bot residual-closeout-plan"
 
     capsys.readouterr()
     app_main(["health"])
@@ -3660,7 +3660,7 @@ def test_residual_only_holdings_scope_resume_gates_and_reasons_across_operator_s
     assert "projection_reason=converged" in health_out
     assert "resume_safety=scoped_safe_halt_recovery_only (NON_EXECUTABLE_RESIDUAL_HOLDINGS)" in health_out
     assert "tradeability_resume_safety=policy_blocked (NON_EXECUTABLE_RESIDUAL_HOLDINGS)" in health_out
-    assert "next_commands=uv run bithumb-bot residual-closeout-plan" in health_out
+    assert "next_commands=uv run operation-bot residual-closeout-plan" in health_out
 
     app_main(["restart-checklist"])
     checklist_out = capsys.readouterr().out
@@ -3947,7 +3947,7 @@ def test_flat_stale_lot_projection_detector_identifies_ec2_style_case(recovery_d
     assert preview["stale_lot_qty_total"] == pytest.approx(0.0004998)
     assert preview["latest_sell_client_order_id"] == "live_1777367760000_sell_ae50365f"
     assert preview["recommended_command"] == (
-        "uv run bithumb-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
+        "uv run operation-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
     )
 
 
@@ -3982,7 +3982,7 @@ def test_repair_plan_reports_target_delta_terminal_flat_stale_dust_clearly(recov
     assert rebuild_preview["current_portfolio_qty"] == pytest.approx(0.0)
     assert rebuild_preview["materialized_lot_projection_qty"] == pytest.approx(0.00019997)
     assert rebuild_preview["recommended_command"] == (
-        "uv run bithumb-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
+        "uv run operation-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
     )
 
 
@@ -4340,7 +4340,7 @@ def test_legacy_operator_closeout_evidence_enrichment_makes_flat_stale_projectio
     assert after["terminal_flat_authority_open_exposure_qty"] == pytest.approx(0.0)
     assert after["terminal_flat_authority_expected_closed_qty"] == pytest.approx(0.00049913)
     assert after["recommended_command"] == (
-        "uv run bithumb-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
+        "uv run operation-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
     )
 
 
@@ -4825,7 +4825,7 @@ def test_flat_stale_lot_projection_operator_commands_and_repair_plan(recovery_db
     assert candidate["safe_to_apply"] is True
     assert candidate["final_safe_to_apply"] is True
     assert candidate["recommended_command"] == (
-        "uv run bithumb-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
+        "uv run operation-bot rebuild-position-authority --flat-stale-projection-repair --apply --yes"
     )
 
     app_main(["rebuild-position-authority", "--flat-stale-projection-repair"])
@@ -4906,7 +4906,7 @@ def test_historical_fragmentation_projection_repair_preview_is_safe_for_flat_dus
     assert preview["projected_total_qty_after_preview"] == pytest.approx(0.0)
     assert preview["expected_post_projection_converged"] is True
     assert preview["recommended_command"] == (
-        "uv run bithumb-bot rebuild-position-authority "
+        "uv run operation-bot rebuild-position-authority "
         "--historical-fragmentation-projection-repair --apply --yes"
     )
 
@@ -5674,7 +5674,7 @@ def test_full_projection_rebuild_preview_refuses_when_final_post_publish_state_f
             return anchor
 
         monkeypatch.setattr(
-            "bithumb_bot.position_authority_repair._replace_with_portfolio_anchored_projection",
+            "operation.position_authority_repair._replace_with_portfolio_anchored_projection",
             _broken_anchor,
         )
         preview = build_position_authority_rebuild_preview(conn, full_projection_rebuild=True)
@@ -5747,7 +5747,7 @@ def test_correction_preview_uses_simulated_final_post_state_before_recommending_
             return result
 
         monkeypatch.setattr(
-            "bithumb_bot.position_authority_repair._simulate_non_full_position_authority_repair",
+            "operation.position_authority_repair._simulate_non_full_position_authority_repair",
             _broken_simulator,
         )
 
@@ -6210,7 +6210,7 @@ def test_external_position_accounting_repair_blocks_resume_until_recorded_for_hi
     assert result["adjustment"]["reason"] == "external_position_accounting_repair"
     assert after.recovery_stage == "NON_EXECUTABLE_RESIDUAL_HOLDINGS"
     assert after.resume_ready is False
-    assert after.recommended_command == "uv run bithumb-bot residual-closeout-plan"
+    assert after.recommended_command == "uv run operation-bot residual-closeout-plan"
 
 
 def test_fee_gap_deadlock_reports_authority_correction_as_next_stage(recovery_db):
@@ -6793,7 +6793,7 @@ def test_recovery_policy_cross_module_consistency_for_representative_states(reco
 def test_canonical_open_exposure_clears_stale_risk_mismatch_and_resumes_position_management(
     recovery_db, monkeypatch, capsys
 ):
-    monkeypatch.setattr("bithumb_bot.operator_commands.write_json_atomic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("operation.operator_commands.write_json_atomic", lambda *_args, **_kwargs: None)
     conn = ensure_db(str(recovery_db))
     try:
         _apply_fee_pending_buy(conn, client_order_id="ec2_carry_buy", fill_id="ec2-carry-fill")
@@ -6964,14 +6964,14 @@ def test_fee_pending_repair_remains_applicable_when_fill_exists_but_fee_incomple
             client_order_id="fee_incomplete_existing_fill",
             fill_id="fee-incomplete-fill",
             fee=3.21,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         result = apply_fee_pending_accounting_repair(
             conn,
             client_order_id="fee_incomplete_existing_fill",
             fill_id="fee-incomplete-fill",
             fee=3.21,
-            fee_provenance="operator_checked_bithumb_trade_history",
+            fee_provenance="operator_checked_operation_trade_history",
         )
         conn.commit()
         fill_count = conn.execute(

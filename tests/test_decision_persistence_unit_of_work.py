@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime.decision_persistence import DecisionPersistenceUnitOfWork
+from operation.db_core import ensure_db
+from operation.runtime.decision_persistence import DecisionPersistenceUnitOfWork
 
 
 def _bundle() -> SimpleNamespace:
@@ -202,7 +202,7 @@ def test_decision_persistence_rolls_back_target_state_and_locks_on_late_failure(
     conn = ensure_db(str(tmp_path / "uow-late-fail.sqlite"))
 
     def failing_order_lock(conn, **kwargs):
-        from bithumb_bot.db_core import create_or_get_order_lock
+        from operation.db_core import create_or_get_order_lock
 
         create_or_get_order_lock(conn, **kwargs)
         raise RuntimeError("late")

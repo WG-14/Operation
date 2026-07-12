@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.runtime_strategy_decision import get_runtime_decision_adapter, legacy_db_strategy_fallback_allowed
-from bithumb_bot.runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
+from operation.config import settings
+from operation.runtime_strategy_decision import get_runtime_decision_adapter, legacy_db_strategy_fallback_allowed
+from operation.runtime_strategy_set import RuntimeDecisionRequestBuilder, RuntimeStrategySpec
 
 
 def test_live_rejects_strategy_parameters_json_fallback() -> None:
@@ -67,8 +67,8 @@ def test_live_multi_strategy_rejects_global_operation_approval_fallback() -> Non
 
 
 def test_promotion_adapter_with_db_bound_decide_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    from bithumb_bot import runtime_strategy_decision
-    from bithumb_bot.operation_strategy import registry as operation_registry
+    from operation import runtime_strategy_decision
+    from operation.operation_strategy import registry as operation_registry
 
     class _DbBoundAdapter:
         strategy_name = "db_bound_unit"

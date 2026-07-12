@@ -4,16 +4,16 @@ import inspect
 import sqlite3
 from types import SimpleNamespace
 
-from bithumb_bot.db_core import ensure_schema
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.data_cycle_preflight import RuntimeDataCyclePreflight
-from bithumb_bot.runtime_decision_contract import RuntimeStrategyPolicyHashes
-from bithumb_bot.runtime_strategy_set import (
+from operation.db_core import ensure_schema
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.data_cycle_preflight import RuntimeDataCyclePreflight
+from operation.runtime_decision_contract import RuntimeStrategyPolicyHashes
+from operation.runtime_strategy_set import (
     RuntimeStrategyDecisionCollector,
     RuntimeStrategySet,
     RuntimeStrategySpec,
 )
-from bithumb_bot.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
+from operation.strategy_policy_contract import PositionSnapshot, StrategyDecisionV2
 
 
 class _RuntimeResult:
@@ -122,7 +122,7 @@ def test_stale_candle_blocks_before_decision_gateway(monkeypatch) -> None:
         def evaluate(self, **_kwargs):
             return preflight
 
-    monkeypatch.setattr("bithumb_bot.runtime.cycle_pipeline.RuntimeDataCyclePreflightProvider", _Provider)
+    monkeypatch.setattr("operation.runtime.cycle_pipeline.RuntimeDataCyclePreflightProvider", _Provider)
 
     class _DecisionCoordinator:
         def decide_cycle(self, **_kwargs):

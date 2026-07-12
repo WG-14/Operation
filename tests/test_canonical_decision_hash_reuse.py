@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.canonical_decision import (
+from operation.canonical_decision import (
     export_research_decisions,
     normalize_canonical_decision,
     observe_canonical_decisions,

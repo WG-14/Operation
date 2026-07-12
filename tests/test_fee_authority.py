@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.broker import order_rules
-from bithumb_bot.config import settings
-from bithumb_bot.fee_authority import (
+from operation.broker import order_rules
+from operation.config import settings
+from operation.fee_authority import (
     FEE_AUTHORITY_LIVE_ENTRY_BLOCK_REASON,
     build_fee_authority_snapshot,
 )
-from bithumb_bot.order_sizing import build_buy_execution_sizing
-from bithumb_bot.compat.sma_legacy_adapter import _evaluate_entry_edge_filter
+from operation.order_sizing import build_buy_execution_sizing
+from operation.compat.sma_legacy_adapter import _evaluate_entry_edge_filter
 
 
 pytestmark = pytest.mark.fast_regression
@@ -197,7 +197,7 @@ def test_degraded_fee_authority_blocks_live_armed_buy_sizing(monkeypatch) -> Non
         snapshot_persisted=False,
         is_stale=lambda *, now_sec=None: False,
     )
-    monkeypatch.setattr("bithumb_bot.order_sizing.get_effective_order_rules", lambda _pair: fallback_resolution)
+    monkeypatch.setattr("operation.order_sizing.get_effective_order_rules", lambda _pair: fallback_resolution)
 
     plan = build_buy_execution_sizing(
         pair="KRW-BTC",
@@ -235,7 +235,7 @@ def test_decimal_boundary_sizing_uses_chance_fee_without_float_fee_budget_drift(
         snapshot_persisted=False,
         is_stale=lambda *, now_sec=None: False,
     )
-    monkeypatch.setattr("bithumb_bot.order_sizing.get_effective_order_rules", lambda _pair: resolution)
+    monkeypatch.setattr("operation.order_sizing.get_effective_order_rules", lambda _pair: resolution)
 
     plan = build_buy_execution_sizing(
         pair="KRW-BTC",

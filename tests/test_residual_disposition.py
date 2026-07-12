@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.residual_disposition import build_residual_disposition
+from operation.residual_disposition import build_residual_disposition
 
 
 def _position_state(*, executable: bool = False, sellable_lots: int = 0):

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
-from bithumb_bot.execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
-from bithumb_bot.runtime.execution_coordinator import ExecutionCoordinator
-from bithumb_bot.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec, normalized_runtime_strategy_set_manifest
+from operation.config import LiveModeValidationError, settings, validate_runtime_strategy_set_selection
+from operation.execution_plan_batch import ExecutionPlanBatch, PairExecutionPlan
+from operation.runtime.execution_coordinator import ExecutionCoordinator
+from operation.runtime_strategy_set import RuntimeStrategySet, RuntimeStrategySpec, normalized_runtime_strategy_set_manifest
 
 
 def test_multi_pair_runtime_strategy_set_fails_closed_before_decision() -> None:

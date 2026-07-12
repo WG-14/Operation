@@ -2,13 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO_ROOT="${BITHUMB_BOT_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd -P)}"
+REPO_ROOT="${OPERATION_BOT_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd -P)}"
 cd "${REPO_ROOT}"
 
-if [[ -n "${BITHUMB_ENV_FILE:-}" && -f "${BITHUMB_ENV_FILE}" ]]; then
+if [[ -n "${OPERATION_ENV_FILE:-}" && -f "${OPERATION_ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
-  source "${BITHUMB_ENV_FILE}"
+  source "${OPERATION_ENV_FILE}"
   set +a
 fi
 
@@ -34,7 +34,7 @@ validate_live_override_path() {
   PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}" python3 - "$REPO_ROOT" "$key" "$path" <<'PY'
 from pathlib import Path
 import sys
-from bithumb_bot.paths import PathManager, PathPolicyError
+from operation.paths import PathManager, PathPolicyError
 
 project_root = Path(sys.argv[1]).resolve()
 key = sys.argv[2]
@@ -75,34 +75,34 @@ echo "Collecting snapshot into ${OUT_DIR}"
 } > "${OUT_DIR}/00_meta.txt"
 
 {
-  echo "== bithumb-bot.service =="
-  sudo systemctl status bithumb-bot.service --no-pager || true
+  echo "== operation.service =="
+  sudo systemctl status operation.service --no-pager || true
   echo
-  echo "== bithumb-bot-healthcheck.timer =="
-  sudo systemctl status bithumb-bot-healthcheck.timer --no-pager || true
+  echo "== operation-healthcheck.timer =="
+  sudo systemctl status operation-healthcheck.timer --no-pager || true
   echo
-  echo "== bithumb-bot-backup.timer =="
-  sudo systemctl status bithumb-bot-backup.timer --no-pager || true
+  echo "== operation-backup.timer =="
+  sudo systemctl status operation-backup.timer --no-pager || true
 } > "${OUT_DIR}/10_systemd_status.txt"
 
 {
-  echo "== journal: bithumb-bot.service =="
-  sudo journalctl -u bithumb-bot.service -n 200 --no-pager || true
+  echo "== journal: operation.service =="
+  sudo journalctl -u operation.service -n 200 --no-pager || true
   echo
-  echo "== journal: bithumb-bot-healthcheck.service =="
-  sudo journalctl -u bithumb-bot-healthcheck.service -n 100 --no-pager || true
+  echo "== journal: operation-healthcheck.service =="
+  sudo journalctl -u operation-healthcheck.service -n 100 --no-pager || true
   echo
-  echo "== journal: bithumb-bot-backup.service =="
-  sudo journalctl -u bithumb-bot-backup.service -n 100 --no-pager || true
+  echo "== journal: operation-backup.service =="
+  sudo journalctl -u operation-backup.service -n 100 --no-pager || true
 } > "${OUT_DIR}/20_journal.txt"
 
 {
-  if [[ -n "${BITHUMB_ENV_FILE:-}" && -f "${BITHUMB_ENV_FILE}" ]]; then
-    echo "== env redacted (${BITHUMB_ENV_FILE}) =="
-    grep -E '^[A-Z0-9_]+=' "${BITHUMB_ENV_FILE}" | sed 's/=.*$/=REDACTED/' || true
+  if [[ -n "${OPERATION_ENV_FILE:-}" && -f "${OPERATION_ENV_FILE}" ]]; then
+    echo "== env redacted (${OPERATION_ENV_FILE}) =="
+    grep -E '^[A-Z0-9_]+=' "${OPERATION_ENV_FILE}" | sed 's/=.*$/=REDACTED/' || true
   else
     echo "== env redacted =="
-    echo "BITHUMB_ENV_FILE not set or missing; skipped"
+    echo "OPERATION_ENV_FILE not set or missing; skipped"
   fi
 } > "${OUT_DIR}/30_env_redacted.txt"
 

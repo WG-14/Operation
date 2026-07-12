@@ -4,16 +4,16 @@ from dataclasses import fields, replace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.decision_envelope import DecisionEnvelope
-from bithumb_bot.execution_service import (
+from operation.config import settings
+from operation.decision_envelope import DecisionEnvelope
+from operation.execution_service import (
     ExecutionReadinessPlanningInput,
     ExecutionTargetPlanningInput,
     TypedExecutionPlanningInput,
     build_typed_execution_decision_summary,
 )
-from bithumb_bot.portfolio_target import PortfolioTarget
-from bithumb_bot.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
+from operation.portfolio_target import PortfolioTarget
+from operation.strategy_policy_contract import EntryExecutionIntent, PositionSnapshot, StrategyDecisionV2
 
 
 @pytest.fixture(autouse=True)

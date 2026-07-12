@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db, get_portfolio, set_portfolio
-from bithumb_bot.broker import paper
-from bithumb_bot import runtime_state
-from bithumb_bot.execution_service import ExecutionSubmitPlan
-from bithumb_bot.public_api_orderbook import BestQuote
+from operation.config import settings
+from operation.db_core import ensure_db, get_portfolio, set_portfolio
+from operation.broker import paper
+from operation import runtime_state
+from operation.execution_service import ExecutionSubmitPlan
+from operation.public_api_orderbook import BestQuote
 
 
 def _set(attr: str, value):
@@ -34,7 +34,7 @@ def test_paper_execute_uses_orderbook_price_for_buy(tmp_path: Path, monkeypatch,
             "fetch_orderbook_top",
             lambda _pair: BestQuote(market="KRW-BTC", bid_price=104.0, ask_price=105.0),
         )
-        with caplog.at_level("INFO", logger="bithumb_bot.broker.paper"):
+        with caplog.at_level("INFO", logger="operation.broker.paper"):
             trade = paper.paper_execute("BUY", ts=1, price=999.0)
 
         assert trade is not None

@@ -9,7 +9,7 @@ cd "$PROJECT_ROOT"
 # generated stream names stay forbidden everywhere.
 static_fixture_jsonl_regex='^(tests/fixtures/[^/]+\.jsonl|examples/[^/]+\.jsonl|examples/research/[^/]+\.jsonl)$'
 generated_jsonl_regex='(^|/)(decisions|equity|executions|candidate_events)\.jsonl$'
-large_jsonl_bytes="${BITHUMB_REPO_ARTIFACT_JSONL_BYTES:-1048576}"
+large_jsonl_bytes="${OPERATION_REPO_ARTIFACT_JSONL_BYTES:-1048576}"
 
 candidates="$({
   git ls-files --cached -- '*.db' '*.sqlite' '*.sqlite3'
@@ -19,7 +19,7 @@ candidates="$({
   find . -path ./.git -prune -o \( \
     -path './.tmp/pytest' -o \
     -path './pytest-debug' -o \
-    -path './bithumb-pytest-workspace' -o \
+    -path './operation-pytest-workspace' -o \
     -path './derived/research' -o \
     -path './reports/research' -o \
     -path './data/paper/derived/research' -o \

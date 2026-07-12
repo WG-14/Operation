@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.market_catalog_snapshot import record_market_catalog_snapshot
-from bithumb_bot.markets import MarketInfo
-from bithumb_bot.paths import PathManager
+from operation.market_catalog_snapshot import record_market_catalog_snapshot
+from operation.markets import MarketInfo
+from operation.paths import PathManager
 
 
 def _manager_for_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mode: str) -> PathManager:
@@ -58,7 +58,7 @@ def test_market_catalog_diff_detects_warning_and_listing_changes(tmp_path: Path,
     manager = _manager_for_mode(tmp_path, monkeypatch, mode="paper")
 
     notified: list[str] = []
-    monkeypatch.setattr("bithumb_bot.market_catalog_snapshot.notify", lambda msg, **_kwargs: notified.append(msg))
+    monkeypatch.setattr("operation.market_catalog_snapshot.notify", lambda msg, **_kwargs: notified.append(msg))
 
     record_market_catalog_snapshot(
         path_manager=manager,

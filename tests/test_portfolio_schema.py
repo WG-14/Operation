@@ -4,10 +4,10 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot import db_schema
-from bithumb_bot.operator_commands import cmd_validate_db
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import (
+from operation import db_schema
+from operation.operator_commands import cmd_validate_db
+from operation.config import settings
+from operation.db_core import (
     ACCOUNTING_PROJECTION_MODEL,
     OPERATIONAL_SCHEMA_VERSION,
     SchemaValidationError,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 @contextmanager
 def _repo_artifact_check_lock():
-    lock_path = Path(os.environ.get("PYTEST_DEBUG_TEMPROOT", "/tmp")) / "bithumb-bot-repo-artifact-check.lock"
+    lock_path = Path(os.environ.get("PYTEST_DEBUG_TEMPROOT", "/tmp")) / "operation-repo-artifact-check.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)

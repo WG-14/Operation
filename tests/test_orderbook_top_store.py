@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.orderbook_top_store import (
+from operation.db_core import ensure_db
+from operation.orderbook_top_store import (
     build_orderbook_top_snapshot,
     compute_spread_bps,
     upsert_orderbook_top_snapshot,
 )
-from bithumb_bot.orderbook_depth_store import (
+from operation.orderbook_depth_store import (
     build_orderbook_depth_snapshot,
     depth_snapshot_from_orderbook_snapshot,
     has_orderbook_depth_evidence,
@@ -16,7 +16,7 @@ from bithumb_bot.orderbook_depth_store import (
     summarize_orderbook_depth_evidence,
     upsert_orderbook_depth_snapshot,
 )
-from bithumb_bot.public_api_orderbook import OrderbookSnapshot, OrderbookUnit
+from operation.public_api_orderbook import OrderbookSnapshot, OrderbookUnit
 
 
 def test_ensure_schema_creates_orderbook_top_snapshots(tmp_path) -> None:
@@ -51,7 +51,7 @@ def test_valid_orderbook_top_snapshot_insert_and_spread(tmp_path) -> None:
             pair="BTC_KRW",
             bid_price=99.0,
             ask_price=101.0,
-            source="bithumb_public_v1_orderbook",
+            source="operation_public_v1_orderbook",
             observed_at_epoch_sec=1_700_000_000.0,
         )
         assert snapshot.pair == "KRW-BTC"
@@ -64,7 +64,7 @@ def test_valid_orderbook_top_snapshot_insert_and_spread(tmp_path) -> None:
     finally:
         conn.close()
 
-    assert tuple(row) == (99.0, 101.0, 200.0, "bithumb_public_v1_orderbook")
+    assert tuple(row) == (99.0, 101.0, 200.0, "operation_public_v1_orderbook")
 
 
 def test_invalid_crossed_quote_fails_before_insert(tmp_path) -> None:
@@ -76,7 +76,7 @@ def test_invalid_crossed_quote_fails_before_insert(tmp_path) -> None:
                 pair="KRW-BTC",
                 bid_price=101.0,
                 ask_price=100.0,
-                source="bithumb_public_v1_orderbook",
+                source="operation_public_v1_orderbook",
             )
         count = conn.execute("SELECT COUNT(*) FROM orderbook_top_snapshots").fetchone()[0]
     finally:
@@ -94,7 +94,7 @@ def test_invalid_non_positive_quote_fails_before_insert(tmp_path) -> None:
                 pair="KRW-BTC",
                 bid_price=0.0,
                 ask_price=100.0,
-                source="bithumb_public_v1_orderbook",
+                source="operation_public_v1_orderbook",
             )
         count = conn.execute("SELECT COUNT(*) FROM orderbook_top_snapshots").fetchone()[0]
     finally:
@@ -115,14 +115,14 @@ def test_orderbook_top_upsert_is_deterministic(tmp_path) -> None:
             pair="KRW-BTC",
             bid_price=99.0,
             ask_price=101.0,
-            source="bithumb_public_v1_orderbook",
+            source="operation_public_v1_orderbook",
         )
         second = build_orderbook_top_snapshot(
             ts=1,
             pair="KRW-BTC",
             bid_price=98.0,
             ask_price=102.0,
-            source="bithumb_public_v1_orderbook",
+            source="operation_public_v1_orderbook",
         )
         upsert_orderbook_top_snapshot(conn, first)
         upsert_orderbook_top_snapshot(conn, second)
@@ -154,7 +154,7 @@ def test_valid_depth_snapshot_insert_and_load(tmp_path) -> None:
             pair="BTC_KRW",
             bid_levels=[(100.0, 2.0), (99.0, 3.0)],
             ask_levels=[(101.0, 1.5), (102.0, 4.0)],
-            source="bithumb_public_v1_orderbook",
+            source="operation_public_v1_orderbook",
             observed_at_epoch_sec=1_700_000_000.0,
         )
         assert snapshot.pair == "KRW-BTC"
@@ -212,7 +212,7 @@ def test_depth_summary_separates_rows_from_complete_snapshots(tmp_path) -> None:
                 pair="KRW-BTC",
                 bid_levels=[(100.0, 1.0)],
                 ask_levels=[(101.0, 2.0)],
-                source="bithumb_public_v1_orderbook",
+                source="operation_public_v1_orderbook",
             ),
         )
         conn.commit()
@@ -249,7 +249,7 @@ def test_invalid_depth_snapshot_fails_before_insert(tmp_path, kwargs, match) -> 
             build_orderbook_depth_snapshot(
                 ts=1,
                 pair="KRW-BTC",
-                source="bithumb_public_v1_orderbook",
+                source="operation_public_v1_orderbook",
                 **kwargs,
             )
         count = conn.execute("SELECT COUNT(*) FROM orderbook_depth_levels").fetchone()[0]

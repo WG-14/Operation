@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot.operation_approval import OperationApprovalError, validate_operation_approval
-from bithumb_bot.execution_authority import execution_authority_from_payload, require_authority_operation
-from bithumb_bot.storage_io import write_json_atomic
-from bithumb_bot.operator_smoke_authority import (
+from operation.operation_approval import OperationApprovalError, validate_operation_approval
+from operation.execution_authority import execution_authority_from_payload, require_authority_operation
+from operation.storage_io import write_json_atomic
+from operation.operator_smoke_authority import (
     OperatorSmokeAuthorityError,
     build_operator_smoke_authority_payload,
     load_operator_smoke_authority,

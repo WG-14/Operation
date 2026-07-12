@@ -17,17 +17,17 @@ if _SRC.is_dir():
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
 
-from bithumb_bot.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS
+from operation.config_spec import PYTEST_INHERITANCE_UNSAFE_ENV_KEYS
 
 for _unsafe_env_key in PYTEST_INHERITANCE_UNSAFE_ENV_KEYS:
     os.environ.pop(_unsafe_env_key, None)
 os.environ["NOTIFIER_ENABLED"] = "false"
 
-import bithumb_bot.config as _config_module
-import bithumb_bot.notifier as _notifier_module
-from bithumb_bot.config import settings
-from bithumb_bot.compat.sma_runtime_compat import legacy_default_strategy_name
-from bithumb_bot.paths import PathConfig, PathManager
+import operation.config as _config_module
+import operation.notifier as _notifier_module
+from operation.config import settings
+from operation.compat.sma_runtime_compat import legacy_default_strategy_name
+from operation.paths import PathConfig, PathManager
 from tests.support.test_workspace import (
     TestRunWorkspace,
     workspace_base_root,
@@ -67,7 +67,7 @@ def _sync_config_singletons(path_manager=None) -> None:
     _config_module.PATH_MANAGER = manager
     for module_name, module in tuple(sys.modules.items()):
         if (
-            module_name.startswith("bithumb_bot")
+            module_name.startswith("operation")
             and getattr(module, "settings", None) is not settings
             and hasattr(module, "settings")
         ):
@@ -182,12 +182,12 @@ def test_run_workspace(request: pytest.FixtureRequest) -> TestRunWorkspace:
         run_id=workspace_run_id(),
         suite_name=workspace_suite_name(),
         node_name=request.node.nodeid,
-        max_total_bytes=int(os.environ.get("BITHUMB_PYTEST_WORKSPACE_MAX_TOTAL_BYTES", str(256 * 1024 * 1024))),
-        max_single_file_bytes=int(os.environ.get("BITHUMB_PYTEST_WORKSPACE_MAX_SINGLE_FILE_BYTES", str(32 * 1024 * 1024))),
+        max_total_bytes=int(os.environ.get("OPERATION_PYTEST_WORKSPACE_MAX_TOTAL_BYTES", str(256 * 1024 * 1024))),
+        max_single_file_bytes=int(os.environ.get("OPERATION_PYTEST_WORKSPACE_MAX_SINGLE_FILE_BYTES", str(32 * 1024 * 1024))),
     )
     yield workspace
     failed = bool(getattr(request.node, "rep_call", None) and request.node.rep_call.failed)
-    keep_requested = os.environ.get("KEEP_BITHUMB_TEST_ARTIFACTS") == "1"
+    keep_requested = os.environ.get("KEEP_OPERATION_TEST_ARTIFACTS") == "1"
     status = workspace.budget_status()
     over_budget = not bool(status["ok"])
     if workspace.keep_on_failure and (failed or over_budget):
@@ -256,7 +256,7 @@ def relaxed_test_order_rules() -> None:
 @pytest.fixture(autouse=True)
 def _restore_global_settings_state():
     """Keep direct settings mutations from leaking across test modules."""
-    from bithumb_bot.broker import order_rules as _order_rules
+    from operation.broker import order_rules as _order_rules
 
     keys = [field.name for field in fields(type(settings))]
     test_path_manager = _path_manager_for_runtime_root((_BASE_RUNTIME_ROOT / "runtime-default").resolve())

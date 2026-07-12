@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.canonical_decision import canonical_payload_hash, observe_canonical_decisions
+from operation.canonical_decision import canonical_payload_hash, observe_canonical_decisions
 
 
 def test_canonical_payload_hash_records_call_count_and_bytes() -> None:

@@ -3,12 +3,12 @@ from __future__ import annotations
 import inspect
 from types import SimpleNamespace
 
-from bithumb_bot.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.decision_coordinator import DecisionCoordinator, DecisionCycleResult
-from bithumb_bot.runtime.execution_coordinator import ExecutionCycleResult
-from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
-from bithumb_bot.runtime.runner import Runner
+from operation.runtime.cycle_artifact_assembler import RuntimeCycleArtifactAssembler
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.decision_coordinator import DecisionCoordinator, DecisionCycleResult
+from operation.runtime.execution_coordinator import ExecutionCycleResult
+from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+from operation.runtime.runner import Runner
 
 
 def _decision_result() -> DecisionCycleResult:

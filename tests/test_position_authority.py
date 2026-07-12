@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.position_authority import (
+from operation.position_authority import (
     LOT_NATIVE_RESEARCH_POSITION_MODEL,
     research_lot_native_position_authority_snapshot,
     research_position_authority_snapshot,

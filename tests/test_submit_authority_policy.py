@@ -4,16 +4,16 @@ from dataclasses import fields, replace
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.execution_service import (
+from operation.config import settings
+from operation.execution_service import (
     ExecutionDecisionSummary,
     ExecutionObservabilityPayload,
     ExecutionSubmitPlan,
     LiveSignalExecutionService,
     TypedExecutionRequest,
 )
-from bithumb_bot.submit_authority_policy import evaluate_submit_authority_policy
-from bithumb_bot.submit_authority_policy import (
+from operation.submit_authority_policy import evaluate_submit_authority_policy
+from operation.submit_authority_policy import (
     is_pre_submit_risk_approved_for_plan,
     validate_pre_submit_risk_proof_integrity,
 )

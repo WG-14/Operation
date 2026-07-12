@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bithumb_bot.order_settlement import OrderSettlementCoordinator, SettlementBarrierConfig
+from operation.order_settlement import OrderSettlementCoordinator, SettlementBarrierConfig
 
 
 def _snapshot(*, fee_state: str, attempt: int):

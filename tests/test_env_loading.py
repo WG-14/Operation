@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from bithumb_bot import bootstrap
+from operation import bootstrap
 def test_does_not_auto_load_dotenv_without_explicit_env_file(monkeypatch):
     calls: list[dict[str, str | None]] = []
 
@@ -16,9 +16,9 @@ def test_does_not_auto_load_dotenv_without_explicit_env_file(monkeypatch):
         return True
 
     monkeypatch.setattr(bootstrap, "_load_dotenv", fake_load_dotenv)
-    monkeypatch.delenv("BITHUMB_ENV_FILE", raising=False)
-    monkeypatch.delenv("BITHUMB_ENV_FILE_LIVE", raising=False)
-    monkeypatch.delenv("BITHUMB_ENV_FILE_PAPER", raising=False)
+    monkeypatch.delenv("OPERATION_ENV_FILE", raising=False)
+    monkeypatch.delenv("OPERATION_ENV_FILE_LIVE", raising=False)
+    monkeypatch.delenv("OPERATION_ENV_FILE_PAPER", raising=False)
 
     bootstrap.load_explicit_env_file(mode=None)
 
@@ -33,7 +33,7 @@ def test_loads_explicit_env_file(monkeypatch):
         return True
 
     monkeypatch.setattr(bootstrap, "_load_dotenv", fake_load_dotenv)
-    monkeypatch.setenv("BITHUMB_ENV_FILE", "/tmp/runtime.env")
+    monkeypatch.setenv("OPERATION_ENV_FILE", "/tmp/runtime.env")
 
     bootstrap.load_explicit_env_file(mode=None)
 
@@ -48,9 +48,9 @@ def test_live_and_paper_env_files_are_mode_scoped(monkeypatch):
         return True
 
     monkeypatch.setattr(bootstrap, "_load_dotenv", fake_load_dotenv)
-    monkeypatch.delenv("BITHUMB_ENV_FILE", raising=False)
-    monkeypatch.setenv("BITHUMB_ENV_FILE_LIVE", "/tmp/live.env")
-    monkeypatch.setenv("BITHUMB_ENV_FILE_PAPER", "/tmp/paper.env")
+    monkeypatch.delenv("OPERATION_ENV_FILE", raising=False)
+    monkeypatch.setenv("OPERATION_ENV_FILE_LIVE", "/tmp/live.env")
+    monkeypatch.setenv("OPERATION_ENV_FILE_PAPER", "/tmp/paper.env")
 
     bootstrap.load_explicit_env_file(mode="live")
     bootstrap.load_explicit_env_file(mode="paper")
@@ -77,11 +77,11 @@ def test_bootstrap_is_consistent_across_all_entrypoints(tmp_path, monkeypatch):
             os.environ[k] = v
 
     def _run_and_capture(command: str):
-        monkeypatch.setenv("BITHUMB_ENV_FILE", str(env_file))
+        monkeypatch.setenv("OPERATION_ENV_FILE", str(env_file))
         monkeypatch.delenv("BOOTSTRAP_SHARED", raising=False)
-        cli_main_module = importlib.import_module("bithumb_bot.cli.main")
+        cli_main_module = importlib.import_module("operation.cli.main")
         monkeypatch.setattr(cli_main_module, "main", lambda argv=None: 0)
-        monkeypatch.setattr("bithumb_bot.bootstrap._load_dotenv", fake_load_dotenv)
+        monkeypatch.setattr("operation.bootstrap._load_dotenv", fake_load_dotenv)
 
         with pytest.raises(SystemExit) as exc:
             if command == "bot.py":
@@ -89,7 +89,7 @@ def test_bootstrap_is_consistent_across_all_entrypoints(tmp_path, monkeypatch):
             elif command == "main.py":
                 runpy.run_path(str(main_entry), run_name="__main__")
             else:
-                runpy.run_module("bithumb_bot", run_name="__main__")
+                runpy.run_module("operation", run_name="__main__")
 
         assert exc.value.code == 0
         return os.environ.get("BOOTSTRAP_SHARED")
@@ -103,7 +103,7 @@ def test_live_fill_fee_strict_env_is_loaded(monkeypatch):
     monkeypatch.setenv("LIVE_FILL_FEE_STRICT_MODE", "true")
     monkeypatch.setenv("LIVE_FILL_FEE_STRICT_MIN_NOTIONAL_KRW", "250000")
 
-    import bithumb_bot.config as config_module
+    import operation.config as config_module
 
     reloaded = importlib.reload(config_module)
     try:
@@ -117,7 +117,7 @@ def test_fee_rate_defaults_and_fallbacks_use_realistic_base_fee(monkeypatch):
     for key in ("FEE_RATE", "LIVE_FEE_RATE_ESTIMATE", "PAPER_FEE_RATE", "PAPER_FEE_RATE_ESTIMATE"):
         monkeypatch.delenv(key, raising=False)
 
-    import bithumb_bot.config as config_module
+    import operation.config as config_module
 
     reloaded = importlib.reload(config_module)
     try:
@@ -130,11 +130,11 @@ def test_fee_rate_defaults_and_fallbacks_use_realistic_base_fee(monkeypatch):
 
 
 def test_describe_explicit_env_file_reports_source_key(monkeypatch):
-    monkeypatch.delenv("BITHUMB_ENV_FILE", raising=False)
-    monkeypatch.setenv("BITHUMB_ENV_FILE_LIVE", "/tmp/live.env")
+    monkeypatch.delenv("OPERATION_ENV_FILE", raising=False)
+    monkeypatch.setenv("OPERATION_ENV_FILE_LIVE", "/tmp/live.env")
 
     summary = bootstrap.describe_explicit_env_file("live")
 
     assert summary.env_file == "/tmp/live.env"
-    assert summary.source_key == "BITHUMB_ENV_FILE_LIVE"
+    assert summary.source_key == "OPERATION_ENV_FILE_LIVE"
     assert summary.loaded is False

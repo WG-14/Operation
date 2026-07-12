@@ -147,21 +147,21 @@ class TestRunWorkspace:
 
 
 def workspace_base_root() -> Path:
-    configured = os.environ.get("BITHUMB_PYTEST_WORKSPACE_ROOT")
+    configured = os.environ.get("OPERATION_PYTEST_WORKSPACE_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
     debug_root = os.environ.get("PYTEST_DEBUG_TEMPROOT")
     if debug_root:
         return Path(debug_root).expanduser().resolve() / "managed"
-    return Path(f"/tmp/bithumb-bot-pytest-{os.environ.get('USER') or 'user'}").resolve() / "managed"
+    return Path(f"/tmp/operation-bot-pytest-{os.environ.get('USER') or 'user'}").resolve() / "managed"
 
 
 def workspace_run_id() -> str:
-    return os.environ.get("BITHUMB_PYTEST_RUN_ID") or f"pytest-{os.getpid()}"
+    return os.environ.get("OPERATION_PYTEST_RUN_ID") or f"pytest-{os.getpid()}"
 
 
 def workspace_suite_name() -> str:
-    return os.environ.get("BITHUMB_TEST_TIER") or "focused"
+    return os.environ.get("OPERATION_TEST_TIER") or "focused"
 
 
 def _safe_segment(value: str) -> str:

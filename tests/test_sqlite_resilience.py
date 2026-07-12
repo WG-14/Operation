@@ -4,9 +4,9 @@ import sqlite3
 
 import pytest
 
-from bithumb_bot.config import settings
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.sqlite_resilience import is_lock_error, run_with_locked_db_retry
+from operation.config import settings
+from operation.db_core import ensure_db
+from operation.sqlite_resilience import is_lock_error, run_with_locked_db_retry
 
 
 def test_is_lock_error_matches_sqlite_locked_message() -> None:
@@ -24,7 +24,7 @@ def test_run_with_locked_db_retry_retries_then_succeeds(monkeypatch: pytest.Monk
             raise sqlite3.OperationalError("database is locked")
         return "ok"
 
-    monkeypatch.setattr("bithumb_bot.sqlite_resilience.time.sleep", lambda _: None)
+    monkeypatch.setattr("operation.sqlite_resilience.time.sleep", lambda _: None)
     result = run_with_locked_db_retry(_fn, retries=2, backoff_ms=1)
 
     assert result == "ok"
@@ -38,7 +38,7 @@ def test_run_with_locked_db_retry_raises_after_exhaustion(monkeypatch: pytest.Mo
         calls["count"] += 1
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr("bithumb_bot.sqlite_resilience.time.sleep", lambda _: None)
+    monkeypatch.setattr("operation.sqlite_resilience.time.sleep", lambda _: None)
 
     with pytest.raises(sqlite3.OperationalError, match="database is locked"):
         run_with_locked_db_retry(_fn, retries=1, backoff_ms=1)

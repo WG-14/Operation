@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This file is generated from `src/bithumb_bot/config_spec.py`.
+This file is generated from `src/operation/config_spec.py`.
 Schema version: `config_spec_v1`
 Spec hash: `sha256:1c7ea30d6cf4573d37974771ed7658cb32659b6b1ef66a1898ca29a01fcaa817`
 
@@ -12,33 +12,22 @@ Spec hash: `sha256:1c7ea30d6cf4573d37974771ed7658cb32659b6b1ef66a1898ca29a01fcaa
 | `BACKUP_RETENTION_COUNT` | number | common |  | no | no | no | P1 |  | BACKUP_RETENTION_COUNT runtime configuration. |
 | `BACKUP_RETENTION_DAYS` | string | common |  | no | no | no | P1 |  | BACKUP_RETENTION_DAYS runtime configuration. |
 | `BACKUP_ROOT` | string | live | `<PathManager>` | yes | no | no | P0 |  | BACKUP_ROOT runtime configuration. |
-| `BITHUMB_API_BASE` | string | common |  | no | no | no | P0 |  | BITHUMB_API_BASE runtime configuration. |
-| `BITHUMB_API_KEY` | string | live |  | yes | yes | no | P0 |  | BITHUMB_API_KEY runtime configuration. |
-| `BITHUMB_API_SECRET` | string | live |  | yes | yes | no | P0 | jwt_hs256_secret, min_live_bytes=32 | BITHUMB_API_SECRET runtime configuration. |
-| `BITHUMB_AUTH_DIAGNOSTICS` | string | common |  | no | no | no | P1 |  | BITHUMB_AUTH_DIAGNOSTICS runtime configuration. |
-| `BITHUMB_BATCH_CHILD_WORKER_BUDGET` | number | internal |  | no | no | no | internal |  | BITHUMB_BATCH_CHILD_WORKER_BUDGET runtime configuration. |
-| `BITHUMB_CANCEL_RETRY_ATTEMPTS` | string | common |  | no | no | no | P1 |  | BITHUMB_CANCEL_RETRY_ATTEMPTS runtime configuration. |
-| `BITHUMB_CANCEL_RETRY_BACKOFF_SEC` | number | common |  | no | no | no | P1 |  | BITHUMB_CANCEL_RETRY_BACKOFF_SEC runtime configuration. |
-| `BITHUMB_DEPLOY_COMMIT_SHA` | string | internal |  | no | no | no | internal |  | BITHUMB_DEPLOY_COMMIT_SHA runtime configuration. |
-| `BITHUMB_DEPLOY_DIRTY` | string | internal |  | no | no | no | internal |  | BITHUMB_DEPLOY_DIRTY runtime configuration. |
-| `BITHUMB_ENV_FILE` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE runtime configuration. |
-| `BITHUMB_ENV_FILE_LIVE` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE_LIVE runtime configuration. |
-| `BITHUMB_ENV_FILE_PAPER` | string | bootstrap |  | no | no | no | P1 |  | BITHUMB_ENV_FILE_PAPER runtime configuration. |
-| `BITHUMB_OPERATOR_DIRTY_RUNTIME_ACK` | string | internal |  | no | no | no | internal |  | BITHUMB_OPERATOR_DIRTY_RUNTIME_ACK runtime configuration. |
-| `BITHUMB_ORDER_RPS_LIMIT` | string | common |  | no | no | no | P1 |  | BITHUMB_ORDER_RPS_LIMIT runtime configuration. |
-| `BITHUMB_PRIVATE_RPS_LIMIT` | string | common |  | no | no | no | P1 |  | BITHUMB_PRIVATE_RPS_LIMIT runtime configuration. |
-| `BITHUMB_PYTEST_RUN_ID` | string | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_RUN_ID runtime configuration. |
-| `BITHUMB_PYTEST_STARTED` | bool | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_STARTED runtime configuration. |
-| `BITHUMB_PYTEST_SUITE` | string | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_SUITE runtime configuration. |
-| `BITHUMB_PYTEST_SUMMARY_ON_SUCCESS` | bool | internal |  | no | no | no | internal |  | BITHUMB_PYTEST_SUMMARY_ON_SUCCESS runtime configuration. |
-| `BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_ARTIFACT_PATH runtime configuration. |
-| `BITHUMB_RUNTIME_GIT_DIFF_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_RUNTIME_GIT_DIFF_HASH runtime configuration. |
-| `BITHUMB_SOURCE_ARCHIVE_HASH` | string | internal |  | no | no | no | internal |  | BITHUMB_SOURCE_ARCHIVE_HASH runtime configuration. |
-| `BITHUMB_TOTAL_PROCESS_BUDGET` | number | internal |  | no | no | no | internal |  | BITHUMB_TOTAL_PROCESS_BUDGET runtime configuration. |
-| `BITHUMB_WS_MYASSET_ENABLED` | bool | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_ENABLED runtime configuration. |
-| `BITHUMB_WS_MYASSET_RECV_TIMEOUT_SEC` | number | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_RECV_TIMEOUT_SEC runtime configuration. |
-| `BITHUMB_WS_MYASSET_STALE_AFTER_MS` | number | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_STALE_AFTER_MS runtime configuration. |
-| `BITHUMB_WS_MYASSET_SUBSCRIBE_TICKET` | string | common |  | no | no | no | P1 |  | BITHUMB_WS_MYASSET_SUBSCRIBE_TICKET runtime configuration. |
+| `OPERATION_AUTH_DIAGNOSTICS` | string | common |  | no | no | no | P1 |  | OPERATION_AUTH_DIAGNOSTICS runtime configuration. |
+| `OPERATION_BATCH_CHILD_WORKER_BUDGET` | number | internal |  | no | no | no | internal |  | OPERATION_BATCH_CHILD_WORKER_BUDGET runtime configuration. |
+| `OPERATION_DEPLOY_COMMIT_SHA` | string | internal |  | no | no | no | internal |  | OPERATION_DEPLOY_COMMIT_SHA runtime configuration. |
+| `OPERATION_DEPLOY_DIRTY` | string | internal |  | no | no | no | internal |  | OPERATION_DEPLOY_DIRTY runtime configuration. |
+| `OPERATION_ENV_FILE` | string | bootstrap |  | no | no | no | P1 |  | OPERATION_ENV_FILE runtime configuration. |
+| `OPERATION_ENV_FILE_LIVE` | string | bootstrap |  | no | no | no | P1 |  | OPERATION_ENV_FILE_LIVE runtime configuration. |
+| `OPERATION_ENV_FILE_PAPER` | string | bootstrap |  | no | no | no | P1 |  | OPERATION_ENV_FILE_PAPER runtime configuration. |
+| `OPERATION_OPERATOR_DIRTY_RUNTIME_ACK` | string | internal |  | no | no | no | internal |  | OPERATION_OPERATOR_DIRTY_RUNTIME_ACK runtime configuration. |
+| `OPERATION_PYTEST_RUN_ID` | string | internal |  | no | no | no | internal |  | OPERATION_PYTEST_RUN_ID runtime configuration. |
+| `OPERATION_PYTEST_STARTED` | bool | internal |  | no | no | no | internal |  | OPERATION_PYTEST_STARTED runtime configuration. |
+| `OPERATION_PYTEST_SUITE` | string | internal |  | no | no | no | internal |  | OPERATION_PYTEST_SUITE runtime configuration. |
+| `OPERATION_PYTEST_SUMMARY_ON_SUCCESS` | bool | internal |  | no | no | no | internal |  | OPERATION_PYTEST_SUMMARY_ON_SUCCESS runtime configuration. |
+| `OPERATION_RUNTIME_GIT_DIFF_ARTIFACT_PATH` | string | internal |  | no | no | no | internal |  | OPERATION_RUNTIME_GIT_DIFF_ARTIFACT_PATH runtime configuration. |
+| `OPERATION_RUNTIME_GIT_DIFF_HASH` | string | internal |  | no | no | no | internal |  | OPERATION_RUNTIME_GIT_DIFF_HASH runtime configuration. |
+| `OPERATION_SOURCE_ARCHIVE_HASH` | string | internal |  | no | no | no | internal |  | OPERATION_SOURCE_ARCHIVE_HASH runtime configuration. |
+| `OPERATION_TOTAL_PROCESS_BUDGET` | number | internal |  | no | no | no | internal |  | OPERATION_TOTAL_PROCESS_BUDGET runtime configuration. |
 | `BLOCK_ON_OPEN_ORDER` | string | common |  | no | no | no | P1 |  | BLOCK_ON_OPEN_ORDER runtime configuration. |
 | `BLOCK_ON_SUBMIT_UNKNOWN` | string | common |  | no | no | no | P1 |  | BLOCK_ON_SUBMIT_UNKNOWN runtime configuration. |
 | `BUY_FRACTION` | string | paper |  | no | no | no | P1 |  | BUY_FRACTION runtime configuration. |

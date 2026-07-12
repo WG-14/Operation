@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bithumb_bot.db_core import ensure_db
-from bithumb_bot.runtime import cycle_pipeline
-from bithumb_bot.runtime.cycle_pipeline import RuntimeCyclePipeline
-from bithumb_bot.runtime.decision_coordinator import DecisionCycleResult
-from bithumb_bot.runtime.lifecycle_artifacts import RuntimeCycleArtifact
-import bithumb_bot.db_core as db_core
+from operation.db_core import ensure_db
+from operation.runtime import cycle_pipeline
+from operation.runtime.cycle_pipeline import RuntimeCyclePipeline
+from operation.runtime.decision_coordinator import DecisionCycleResult
+from operation.runtime.lifecycle_artifacts import RuntimeCycleArtifact
+import operation.db_core as db_core
 
 
 class _PreflightProvider:
