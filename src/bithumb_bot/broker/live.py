@@ -2419,23 +2419,13 @@ def _copy_pre_submit_authority_fields(
         "position_mode",
         "hold_policy",
         "authority_hash",
-        "h74_source_authority_hash",
         "strategy_instance_id",
         "residual_inventory_mode",
         "partial_fill_policy",
         "cycle_id",
-        "h74_cycle_id",
-        "h74_fixed_position_contract_active",
         "probe_run_id",
-        "h74_execution_path_probe_run_id",
-        "h74_entry_plan_client_order_id",
-        "h74_position_ownership_contract_hash",
-        "h74_position_ownership_contract",
         "remaining_cycle_qty",
-        "h74_remaining_cycle_qty",
         "locked_exit_qty",
-        "h74_startup_gate_status",
-        "h74_startup_gate_reason_code",
         "startup_gate_hash",
     ):
         value = execution_submit_plan.get(field)
@@ -2482,12 +2472,11 @@ def _target_delta_submit_plan(
         return None
     if not _broker_submit_authority_allowed(execution_submit_plan, plan_kind="target"):
         return None
-    if str(execution_submit_plan.get("source") or "") not in {"target_delta", "h74_source_observation"}:
+    if str(execution_submit_plan.get("source") or "") != "target_delta":
         return None
     if str(execution_submit_plan.get("authority") or "") not in {
         "canonical_target_delta_sizing",
         "target_position_delta",
-        "h74_fixed_fill_quote_notional_buy",
     }:
         return None
     target_side = str(execution_submit_plan.get("side") or "").upper()
@@ -2520,7 +2509,6 @@ def _is_operator_live_pipeline_smoke_submit(
         and target_plan.get("operator_live_pipeline_smoke") is True
         and target_plan.get("operator_authorization") == "live_pipeline_smoke_authority"
         and target_plan.get("execution_mode") == "live_pipeline_smoke"
-        and target_plan.get("normal_h74_strategy_performance_authority") is False
         and target_plan.get("normal_strategy_gate_modified") is False
         and target_plan.get("source") == "target_delta"
         and target_plan.get("authority") == "canonical_target_delta_sizing"
@@ -2694,11 +2682,7 @@ def _determine_live_execution_intent(
             min_notional_krw=float(position_state.effective_rules.min_notional_krw),
             non_executable_reason="executable",
         )
-        target_submit_qty_source = (
-            str(target_plan.get("authority") or "canonical_target_delta_sizing")
-            if str(target_plan.get("source") or "") == "h74_source_observation"
-            else "canonical_target_delta_sizing"
-        )
+        target_submit_qty_source = "canonical_target_delta_sizing"
         target_observability = {
             "execution_engine": "target_delta",
             "execution_submit_plan_source": str(target_plan.get("source") or "target_delta"),
@@ -2752,7 +2736,6 @@ def _determine_live_execution_intent(
             "exchange_submit_field": target_plan.get("exchange_submit_field"),
             "exchange_submit_notional_krw": target_plan.get("exchange_submit_notional_krw"),
             "exchange_submit_qty": target_plan.get("exchange_submit_qty"),
-            "h74_execution_path_probe_run_id": target_plan.get("h74_execution_path_probe_run_id"),
         }
         _copy_pre_submit_authority_fields(target_observability, target_plan)
         position_state.decision_observability.update(target_observability)
@@ -2953,7 +2936,6 @@ def _determine_live_execution_intent(
                     "buy_submit_plan_notional_krw": plan_notional,
                     "buy_submit_plan_qty": plan_qty,
                     "buy_submit_plan_delta_krw": buy_plan.get("delta_krw"),
-                    "h74_execution_path_probe_run_id": buy_plan.get("h74_execution_path_probe_run_id"),
                 }
             )
             return _LiveExecutionIntent(

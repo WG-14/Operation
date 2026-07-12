@@ -90,76 +90,6 @@ def _live_pipeline_smoke_authority(args: argparse.Namespace, _context) -> None:
     )
 
 
-def _h74_live_rehearsal(args: argparse.Namespace, _context) -> None:
-    from bithumb_bot.h74_live_rehearsal import H74LiveRehearsalConfig, run_h74_live_rehearsal
-
-    payload = run_h74_live_rehearsal(
-        H74LiveRehearsalConfig(
-            kst_time=str(args.kst_time),
-            no_submit=bool(args.no_submit),
-            source_artifact_path=args.source_artifact,
-        )
-    )
-    if bool(args.json):
-        print(json.dumps(payload, sort_keys=True))
-        return
-    print(payload["rehearsal_hash"])
-
-
-def _h74_readiness_certificate(args: argparse.Namespace, _context) -> None:
-    from bithumb_bot.h74_live_rehearsal import H74LiveRehearsalConfig, run_h74_live_rehearsal
-    from bithumb_bot.h74_readiness_certificate import (
-        build_h74_readiness_certificate,
-        validate_h74_readiness_certificate,
-    )
-
-    rehearsal = run_h74_live_rehearsal(
-        H74LiveRehearsalConfig(
-            kst_time=str(args.kst_time),
-            no_submit=bool(args.no_submit),
-            source_artifact_path=args.source_artifact,
-        )
-    )
-    payload = build_h74_readiness_certificate(
-        rehearsal,
-        env_file=os.getenv("BITHUMB_ENV_FILE"),
-    )
-    validation = validate_h74_readiness_certificate(
-        payload,
-        env_file=os.getenv("BITHUMB_ENV_FILE"),
-        broker_balance_snapshot_hash=str(payload.get("broker_balance_snapshot_hash") or ""),
-        current_commit_sha=str(payload.get("commit_sha") or ""),
-        current_db_schema_hash=str(payload.get("db_schema_hash") or ""),
-        current_order_rule_fee_authority_hash=str(payload.get("order_rule_fee_authority_hash") or ""),
-        current_gate_trace_hash=str(payload.get("gate_trace_hash") or ""),
-        current_would_submit_plan_hash=str(payload.get("would_submit_plan_hash") or ""),
-        strict=True,
-    )
-    if not bool(validation.get("valid")):
-        raise SystemExit("h74_readiness_certificate_invalid:" + ",".join(validation.get("reasons") or []))
-    if bool(args.json):
-        print(json.dumps(payload, sort_keys=True))
-        return
-    print(payload["certificate_hash"])
-
-
-def _h74_long_run_preflight(args: argparse.Namespace, _context) -> int:
-    from bithumb_bot.h74_readiness_certificate import validate_h74_long_run_preflight
-
-    with Path(str(args.certificate)).expanduser().open("r", encoding="utf-8") as handle:
-        certificate = json.load(handle)
-    if not isinstance(certificate, dict):
-        raise SystemExit("h74_long_run_preflight_certificate_not_object")
-    payload = validate_h74_long_run_preflight(certificate)
-    if bool(args.json):
-        print(json.dumps(payload, sort_keys=True))
-    elif bool(payload.get("valid")):
-        print("h74_long_run_preflight pass")
-    else:
-        print("h74_long_run_preflight blocked:" + ",".join(payload.get("reasons") or []))
-    return 0 if bool(payload.get("valid")) else 2
-
-
 def _exchange_submit_diagnose(args: argparse.Namespace, _context) -> None:
     from bithumb_bot.config import settings
     from bithumb_bot.exchange_submit_diagnostics import diagnose_exchange_submit_reachability
@@ -340,59 +270,6 @@ def command_specs() -> list[CommandSpec]:
             requires_live=True,
             guard_policy="operator_live_pipeline_smoke_authority",
             produces_artifact=True,
-        ),
-        make_spec(
-            "h74-live-rehearsal",
-            domain="live_ops",
-            handler=_h74_live_rehearsal,
-            help="rehearse normal h74 live-real path to the broker submit boundary",
-            description="Run the normal h74 rehearsal with broker submit suppressed.",
-            build=lambda p: (
-                p.add_argument("--kst-time", default="10:00"),
-                p.add_argument("--no-submit", action="store_true", default=True),
-                p.add_argument("--source-artifact"),
-                p.add_argument("--json", action="store_true"),
-            ),
-            read_only=True,
-            requires_live=True,
-            uses_broker=False,
-            json_output_supported=True,
-        ),
-        make_spec(
-            "h74-readiness-certificate",
-            domain="live_ops",
-            handler=_h74_readiness_certificate,
-            help="issue an h74 readiness certificate from normal h74 rehearsal",
-            description="Issue a hash-bound h74 readiness certificate from h74-live-rehearsal.",
-            build=lambda p: (
-                p.add_argument("--kst-time", default="10:00"),
-                p.add_argument("--no-submit", action="store_true", default=True),
-                p.add_argument("--source-artifact"),
-                p.add_argument("--json", action="store_true"),
-            ),
-            read_only=True,
-            requires_live=True,
-            uses_broker=False,
-            produces_artifact=True,
-            json_output_supported=True,
-        ),
-        make_spec(
-            "h74-long-run-preflight",
-            domain="live_ops",
-            handler=_h74_long_run_preflight,
-            help="validate h74 one-week live preflight certificate",
-            description=(
-                "Read an h74 readiness certificate and block long-running operation unless "
-                "KST10 positive and KST18 negative entry-gate coverage pass."
-            ),
-            build=lambda p: (
-                p.add_argument("--certificate", required=True),
-                p.add_argument("--json", action="store_true"),
-            ),
-            read_only=True,
-            requires_live=True,
-            uses_broker=False,
-            json_output_supported=True,
         ),
         make_spec(
             "exchange-submit-diagnose",

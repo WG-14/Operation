@@ -657,14 +657,6 @@ class StrategyRiskStateProvider:
         )
         declared_capital_krw = None
         declared_capital_basis = ""
-        if policy is not None and str(policy.source) == "h74_source_live_observation_authority":
-            from .h74_observation import (
-                H74_SOURCE_OBSERVATION_RISK_CAPITAL_BASIS,
-                H74_SOURCE_OBSERVATION_RISK_CAPITAL_KRW,
-            )
-
-            declared_capital_krw = float(H74_SOURCE_OBSERVATION_RISK_CAPITAL_KRW)
-            declared_capital_basis = H74_SOURCE_OBSERVATION_RISK_CAPITAL_BASIS
         current_drawdown_metric = _current_drawdown_metric_for_scope(
             self.conn,
             int(as_of_ts_ms),

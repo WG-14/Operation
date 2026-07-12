@@ -6,10 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .h74_observation import (
-    H74_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
-    H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE,
-)
 from .operator_smoke_authority import OPERATOR_SMOKE_AUTHORITY_ARTIFACT_TYPE
 
 
@@ -57,35 +53,6 @@ def execution_authority_from_payload(payload: Mapping[str, Any]) -> ExecutionAut
             exit_policy_authority=False,
             risk_authority=False,
             evidence_classification="operator_smoke_only",
-            identity_hash=_identity_hash(payload),
-        )
-    if artifact_type == H74_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
-        bound = payload.get("hash_bound_parameters") if isinstance(payload.get("hash_bound_parameters"), Mapping) else {}
-        risk_authority = bool(payload.get("risk_authority")) and bool(payload.get("risk_policy_hash"))
-        return ExecutionAuthority(
-            authority_type=LIVE_OBSERVATION_AUTHORITY_TYPE,
-            allowed_operations=("h74_live_observation_50k",),
-            market_scope=(str(bound.get("market") or "KRW-BTC").strip().upper(),),
-            notional_cap=float(bound.get("max_notional_krw") or 0.0),
-            expires_at=str(bound.get("expires_at") or "") or None,
-            parameter_authority=bool(bound),
-            exit_policy_authority=bool(payload.get("exit_policy_authority")) and bool(payload.get("exit_policy_hash")),
-            risk_authority=risk_authority,
-            evidence_classification="live_observation_non_substitutive",
-            identity_hash=_identity_hash(payload),
-        )
-    if artifact_type == H74_SOURCE_OBSERVATION_AUTHORITY_ARTIFACT_TYPE:
-        bound = payload.get("hash_bound_parameters") if isinstance(payload.get("hash_bound_parameters"), Mapping) else {}
-        return ExecutionAuthority(
-            authority_type=LIVE_OBSERVATION_AUTHORITY_TYPE,
-            allowed_operations=("h74_source_live_observation",),
-            market_scope=(str(bound.get("market") or "KRW-BTC").strip().upper(),),
-            notional_cap=float(bound.get("max_entry_notional_krw") or 0.0),
-            expires_at=str(bound.get("expires_at") or "") or None,
-            parameter_authority=bool(bound),
-            exit_policy_authority=True,
-            risk_authority=False,
-            evidence_classification="h74_source_live_observation_only",
             identity_hash=_identity_hash(payload),
         )
     if artifact_type in {"approved_profile", APPROVED_PROFILE_AUTHORITY_TYPE} or payload.get("profile_content_hash"):
@@ -144,10 +111,6 @@ def resolve_execution_authority(
     operation = {
         "smoke-buy": "operator_smoke_buy",
         "operator_smoke_buy": "operator_smoke_buy",
-        "h74-observation": "h74_live_observation_50k",
-        "h74_live_observation_50k": "h74_live_observation_50k",
-        "h74-source-observation": "h74_source_live_observation",
-        "h74_source_live_observation": "h74_source_live_observation",
         "strategy-run": "strategy_run",
         "strategy_run": "strategy_run",
     }.get(intent, intent)

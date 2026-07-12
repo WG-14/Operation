@@ -103,68 +103,6 @@ def runtime_authority_scope_from_settings(settings_obj: object = settings) -> Ru
     return "paper_legacy"
 
 
-def h74_runtime_adapter_materialized_values_from_settings(settings_obj: object) -> dict[str, object]:
-    from .h74_observation import H74_STRATEGY_NAME
-
-    raw_strategy_set_json = str(
-        getattr(settings_obj, "RUNTIME_STRATEGY_SET_JSON", "")
-        or os.getenv("RUNTIME_STRATEGY_SET_JSON", "")
-        or ""
-    ).strip()
-    if raw_strategy_set_json:
-        try:
-            payload = json.loads(raw_strategy_set_json)
-        except json.JSONDecodeError:
-            payload = None
-        strategies_payload = None
-        if isinstance(payload, Mapping):
-            strategies_payload = payload.get("strategies")
-        elif isinstance(payload, list):
-            strategies_payload = payload
-        if isinstance(strategies_payload, list):
-            matches: list[Mapping[str, object]] = []
-            for item in strategies_payload:
-                if not isinstance(item, Mapping):
-                    continue
-                enabled = item.get("enabled", True)
-                if isinstance(enabled, str):
-                    enabled_ok = enabled.strip().lower() not in {"0", "false", "no", "off"}
-                else:
-                    enabled_ok = bool(enabled)
-                if not enabled_ok:
-                    continue
-                if str(item.get("strategy_name") or "").strip().lower() != H74_STRATEGY_NAME:
-                    continue
-                if isinstance(item.get("parameters"), Mapping):
-                    matches.append(item)
-            if len(matches) > 1:
-                raise RuntimeError("h74_runtime_strategy_set_ambiguous")
-            if len(matches) == 1:
-                raw_parameters = dict(matches[0].get("parameters") or {})
-                return materialize_strategy_parameters(
-                    H74_STRATEGY_NAME,
-                    raw_parameters,
-                    fee_rate=_optional_float(
-                        raw_parameters.get("LIVE_FEE_RATE_ESTIMATE", getattr(settings_obj, "LIVE_FEE_RATE_ESTIMATE", None))
-                    ),
-                    slippage_bps=_optional_float(
-                        raw_parameters.get("STRATEGY_ENTRY_SLIPPAGE_BPS", getattr(settings_obj, "STRATEGY_ENTRY_SLIPPAGE_BPS", None))
-                    ),
-                )
-
-    plugin = _resolve_plugin_or_none(H74_STRATEGY_NAME)
-    adapter = getattr(plugin, "runtime_parameter_adapter", None)
-    if adapter is None:
-        raise RuntimeError("h74_runtime_parameter_adapter_missing")
-    raw_parameters = dict(adapter.from_settings(settings_obj))
-    return materialize_strategy_parameters(
-        H74_STRATEGY_NAME,
-        raw_parameters,
-        fee_rate=_optional_float(getattr(settings_obj, "LIVE_FEE_RATE_ESTIMATE", None)),
-        slippage_bps=_optional_float(getattr(settings_obj, "STRATEGY_ENTRY_SLIPPAGE_BPS", None)),
-    )
-
-
 def _optional_float(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -191,23 +129,6 @@ def _plugin_accepts_empty_runtime_parameters(plugin: object | None) -> bool:
         and not bool(getattr(capabilities, "live_real_order_allowed", False))
         and getattr(plugin, "runtime_parameter_adapter", None) is not None
         and not tuple(getattr(spec, "accepted_parameter_names", ()) or ())
-    )
-
-
-def _h74_source_observation_profile_payload(
-    *,
-    settings_obj: object,
-    strategy_name: str,
-    approved_profile_path: str | None,
-    live_like: bool,
-) -> Mapping[str, object] | None:
-    from .h74_observation import h74_source_observation_risk_profile_payload_for_runtime_strategy
-
-    return h74_source_observation_risk_profile_payload_for_runtime_strategy(
-        settings_obj=settings_obj,
-        strategy_name=strategy_name,
-        approved_profile_path=approved_profile_path,
-        live_like=live_like,
     )
 
 
@@ -267,20 +188,6 @@ def _settings_for_authority_context(
         updates["LIVE_DRY_RUN"] = bool(authority_context.live_dry_run)
     if authority_context.live_real_order_armed is not None:
         updates["LIVE_REAL_ORDER_ARMED"] = bool(authority_context.live_real_order_armed)
-    if authority_context.h74_live_rehearsal_no_submit_boundary is not None:
-        updates["H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY"] = bool(
-            authority_context.h74_live_rehearsal_no_submit_boundary
-        )
-    if authority_context.h74_source_observation_authority_path:
-        updates["H74_SOURCE_OBSERVATION_AUTHORITY_PATH"] = authority_context.h74_source_observation_authority_path
-        if authority_context.h74_execution_path_probe_run_id:
-            updates["H74_EXECUTION_PATH_PROBE_RUN_ID"] = authority_context.h74_execution_path_probe_run_id
-        from .h74_observation import H74_SOURCE_OBSERVATION_PARAMETERS, H74_STRATEGY_NAME
-
-        updates["STRATEGY_NAME"] = H74_STRATEGY_NAME
-        for key, value in H74_SOURCE_OBSERVATION_PARAMETERS.items():
-            if str(key).isupper():
-                updates[str(key)] = value
     if not updates:
         return fallback
     try:
@@ -846,9 +753,6 @@ class ProfileAuthorityContext:
     live_dry_run: bool | None = None
     live_real_order_armed: bool | None = None
     authority_scope: RuntimeAuthorityScope = "paper_legacy"
-    h74_source_observation_authority_path: str | None = None
-    h74_execution_path_probe_run_id: str | None = None
-    h74_live_rehearsal_no_submit_boundary: bool | None = None
 
     def __post_init__(self) -> None:
         selection_kind = str(self.selection_kind or "").strip()
@@ -867,18 +771,6 @@ class ProfileAuthorityContext:
         object.__setattr__(self, "expected_profile_modes", modes)
         if self.runtime_mode is not None:
             object.__setattr__(self, "runtime_mode", str(self.runtime_mode).strip().lower() or None)
-        if self.h74_source_observation_authority_path is not None:
-            object.__setattr__(
-                self,
-                "h74_source_observation_authority_path",
-                str(self.h74_source_observation_authority_path).strip() or None,
-            )
-        if self.h74_execution_path_probe_run_id is not None:
-            object.__setattr__(
-                self,
-                "h74_execution_path_probe_run_id",
-                str(self.h74_execution_path_probe_run_id).strip() or None,
-            )
         object.__setattr__(self, "authority_scope", normalize_runtime_authority_scope(self.authority_scope))
 
     @classmethod
@@ -905,17 +797,6 @@ class ProfileAuthorityContext:
             live_dry_run=bool(getattr(settings_obj, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings_obj, "LIVE_REAL_ORDER_ARMED", False)),
             authority_scope=runtime_authority_scope_from_settings(settings_obj),
-            h74_source_observation_authority_path=(
-                str(getattr(settings_obj, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-                or None
-            ),
-            h74_execution_path_probe_run_id=(
-                str(getattr(settings_obj, "H74_EXECUTION_PATH_PROBE_RUN_ID", "") or "").strip()
-                or None
-            ),
-            h74_live_rehearsal_no_submit_boundary=bool(
-                getattr(settings_obj, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False)
-            ),
         )
 
     @classmethod
@@ -942,17 +823,6 @@ class ProfileAuthorityContext:
                 bool(payload["live_real_order_armed"]) if "live_real_order_armed" in payload else None
             ),
             authority_scope=str(payload.get("authority_scope") or "paper_legacy"),  # type: ignore[arg-type]
-            h74_source_observation_authority_path=(
-                str(payload.get("h74_source_observation_authority_path") or "").strip() or None
-            ),
-            h74_execution_path_probe_run_id=(
-                str(payload.get("h74_execution_path_probe_run_id") or "").strip() or None
-            ),
-            h74_live_rehearsal_no_submit_boundary=(
-                bool(payload["h74_live_rehearsal_no_submit_boundary"])
-                if "h74_live_rehearsal_no_submit_boundary" in payload
-                else None
-            ),
         )
 
     @classmethod
@@ -966,17 +836,6 @@ class ProfileAuthorityContext:
             live_dry_run=bool(getattr(settings, "LIVE_DRY_RUN", False)),
             live_real_order_armed=bool(getattr(settings, "LIVE_REAL_ORDER_ARMED", False)),
             authority_scope=runtime_authority_scope_from_settings(settings),
-            h74_source_observation_authority_path=(
-                str(getattr(settings, "H74_SOURCE_OBSERVATION_AUTHORITY_PATH", "") or "").strip()
-                or None
-            ),
-            h74_execution_path_probe_run_id=(
-                str(getattr(settings, "H74_EXECUTION_PATH_PROBE_RUN_ID", "") or "").strip()
-                or None
-            ),
-            h74_live_rehearsal_no_submit_boundary=bool(
-                getattr(settings, "H74_LIVE_REHEARSAL_NO_SUBMIT_BOUNDARY", False)
-            ),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -993,9 +852,6 @@ class ProfileAuthorityContext:
             "live_dry_run": self.live_dry_run,
             "live_real_order_armed": self.live_real_order_armed,
             "authority_scope": self.authority_scope,
-            "h74_source_observation_authority_path": self.h74_source_observation_authority_path,
-            "h74_execution_path_probe_run_id": self.h74_execution_path_probe_run_id,
-            "h74_live_rehearsal_no_submit_boundary": self.h74_live_rehearsal_no_submit_boundary,
             "profile_binding_kind": (
                 "spec_bound_approved_profiles"
                 if self.require_spec_bound_profile
@@ -1595,19 +1451,13 @@ class RuntimeDecisionRequestBuilder:
         if live_like and spec.risk_snapshot is not None:
             raise RuntimeError(f"static_risk_snapshot_rejected_for_live_authority:{spec.strategy_name}")
         spec_profile_path = str(spec.approved_profile_path or "").strip()
-        h74_observation_profile_payload = _h74_source_observation_profile_payload(
-            settings_obj=self.settings_obj,
-            strategy_name=spec.strategy_name,
-            approved_profile_path=spec_profile_path,
-            live_like=live_like,
-        )
         spec_profile_hash = str(spec.approved_profile_hash or "").strip()
         if authority_context.require_spec_bound_profile:
-            if not spec_profile_path and h74_observation_profile_payload is None:
+            if not spec_profile_path:
                 raise RuntimeError(
                     f"spec_bound_approved_profile_path_missing_for_runtime_strategy:{spec.strategy_name}"
                 )
-            if not spec_profile_hash and h74_observation_profile_payload is None:
+            if not spec_profile_hash:
                 raise RuntimeError(
                     f"spec_bound_approved_profile_hash_missing_for_runtime_strategy:{spec.strategy_name}"
                 )
@@ -1727,24 +1577,11 @@ class RuntimeDecisionRequestBuilder:
             strategy_name=spec.strategy_name,
             pair=str(spec.pair),
             interval=str(spec.interval),
-            profile_payload=profile or h74_observation_profile_payload,
+            profile_payload=profile,
             approved_runtime_profile_path=approved_profile_path,
             approved_runtime_profile_hash=approved_profile_hash,
             inline_risk_policy=spec.risk_policy,
             declared_risk_policy_hash=spec.risk_policy_hash,
-            risk_profile_source=(
-                None
-                if h74_observation_profile_payload is None
-                else "h74_source_live_observation_authority"
-            ),
-            enforcement_mode=(
-                None if h74_observation_profile_payload is None else "enforced"
-            ),
-            missing_policy_behavior=(
-                None
-                if h74_observation_profile_payload is None
-                else "fail_closed_for_live"
-            ),
             live_like=live_like,
             live_real_order=live_real_order,
         )

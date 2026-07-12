@@ -19,7 +19,7 @@ def _insert_backfill_fixture(conn: sqlite3.Connection) -> None:
             "fixture",
             json.dumps(
                 {
-                    "strategy_instance_id": "h74-source-observation",
+                    "strategy_instance_id": "daily-participation-runtime",
                     "runtime_strategy_set_manifest_hash": "sha256:manifest",
                 }
             ),
@@ -80,7 +80,7 @@ def test_trade_lifecycle_strategy_scope_backfill_accepts_tuple_rows() -> None:
     finally:
         conn.close()
 
-    assert row[0] == "h74-source-observation"
+    assert row[0] == "daily-participation-runtime"
     assert row[1] == "sha256:manifest"
 
 

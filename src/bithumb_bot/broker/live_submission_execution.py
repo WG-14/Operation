@@ -19,7 +19,6 @@ from ..execution import (
 )
 from ..fee_observation import fee_accounting_status
 from ..fill_reading import FillReadPolicy, get_broker_fills
-from ..h74_submit_identity import H74SubmitIdentity
 from ..notifier import format_event, notify
 from ..observability import format_log_kv, safety_event
 from ..oms import (
@@ -69,40 +68,6 @@ class ConfirmedLiveSubmission:
     response_ts_ms: int
     submit_elapsed_ms: int
 
-
-def resolve_h74_submit_identity(decision_observability: dict[str, object]) -> H74SubmitIdentity | None:
-    h74_keys = (
-        "cycle_id",
-        "h74_cycle_id",
-        "strategy_instance_id",
-        "authority_hash",
-        "probe_run_id",
-        "h74_execution_path_probe_run_id",
-        "h74_entry_plan_client_order_id",
-        "h74_position_ownership_contract_hash",
-        "h74_position_ownership_contract",
-    )
-    if not bool(decision_observability.get("h74_fixed_position_contract_active")) and not any(
-        str(decision_observability.get(key) or "").strip() for key in h74_keys if key != "h74_position_ownership_contract"
-    ):
-        return None
-    payload = dict(decision_observability)
-    if not payload.get("probe_run_id"):
-        payload["probe_run_id"] = payload.get("h74_execution_path_probe_run_id")
-    return H74SubmitIdentity.from_mapping(payload)
-
-
-def _merge_h74_submit_identity(
-    *,
-    submit_observability_fields: dict[str, object],
-    decision_observability: dict[str, object],
-) -> tuple[dict[str, object], H74SubmitIdentity | None]:
-    identity = resolve_h74_submit_identity(decision_observability)
-    if identity is None:
-        return submit_observability_fields, None
-    merged = dict(submit_observability_fields)
-    merged.update(identity.as_evidence_dict())
-    return merged, identity
 
 
 def _emit_notification(message: str) -> None:
@@ -1115,11 +1080,10 @@ def execute_live_submission_and_application(
             "pre_submit_risk_evidence_hash_truth_source": "RiskDecision.identity_fields",
         }
     )
-    submit_observability_fields, h74_submit_identity = _merge_h74_submit_identity(
-        submit_observability_fields=submit_observability_fields,
-        decision_observability=decision_observability,
-    )
-    h74_order_metadata = h74_submit_identity.as_order_metadata() if h74_submit_identity is not None else {}
+    strategy_instance_id = str(decision_observability.get("strategy_instance_id") or "") or None
+    cycle_id = str(decision_observability.get("cycle_id") or "") or None
+    authority_hash = str(decision_observability.get("authority_hash") or "") or None
+    probe_run_id = str(decision_observability.get("probe_run_id") or "") or None
 
     planning_payload_hash = payload_fingerprint(
         {
@@ -1169,15 +1133,10 @@ def execute_live_submission_and_application(
         submit_truth_source_fields=submit_truth_source_fields,
         submit_observability_fields=submit_observability_fields,
         sell_observability=sell_observability,
-        strategy_instance_id=h74_order_metadata.get("strategy_instance_id") or str(decision_observability.get("strategy_instance_id") or "") or None,
-        cycle_id=h74_order_metadata.get("cycle_id"),
-        authority_hash=h74_order_metadata.get("authority_hash") or str(decision_observability.get("authority_hash") or "") or None,
-        probe_run_id=h74_order_metadata.get("probe_run_id"),
-        h74_cycle_id=h74_order_metadata.get("h74_cycle_id"),
-        h74_entry_plan_client_order_id=h74_order_metadata.get("h74_entry_plan_client_order_id"),
-        h74_position_ownership_contract_hash=h74_order_metadata.get("h74_position_ownership_contract_hash"),
-        h74_position_ownership_contract=h74_order_metadata.get("h74_position_ownership_contract"),
-        h74_submit_identity=h74_submit_identity,
+        strategy_instance_id=strategy_instance_id,
+        cycle_id=cycle_id,
+        authority_hash=authority_hash,
+        probe_run_id=probe_run_id,
     )
     try:
         submit_plan = build_live_submit_plan(
@@ -1322,15 +1281,10 @@ def execute_live_submission_and_application(
             submit_truth_source_fields=submit_truth_source_fields,
             submit_observability_fields=submit_observability_fields,
             sell_observability=sell_observability,
-            strategy_instance_id=h74_order_metadata.get("strategy_instance_id") or str(decision_observability.get("strategy_instance_id") or "") or None,
-            cycle_id=h74_order_metadata.get("cycle_id"),
-            authority_hash=h74_order_metadata.get("authority_hash") or str(decision_observability.get("authority_hash") or "") or None,
-            probe_run_id=h74_order_metadata.get("probe_run_id"),
-            h74_cycle_id=h74_order_metadata.get("h74_cycle_id"),
-            h74_entry_plan_client_order_id=h74_order_metadata.get("h74_entry_plan_client_order_id"),
-            h74_position_ownership_contract_hash=h74_order_metadata.get("h74_position_ownership_contract_hash"),
-            h74_position_ownership_contract=h74_order_metadata.get("h74_position_ownership_contract"),
-            h74_submit_identity=h74_submit_identity,
+            strategy_instance_id=strategy_instance_id,
+            cycle_id=cycle_id,
+            authority_hash=authority_hash,
+            probe_run_id=probe_run_id,
         ),
         intent_key=intent_key,
         strategy_name=(strategy_name or settings.STRATEGY_NAME),

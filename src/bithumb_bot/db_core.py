@@ -555,9 +555,6 @@ def ensure_db(db_path: str | None = None, *, ensure_schema_ready: bool = True) -
 
     if ensure_schema_ready:
         ensure_schema(conn)
-        from .h74_cycle_state import ensure_h74_cycle_schema
-
-        ensure_h74_cycle_schema(conn)
     return conn
 
 
@@ -884,7 +881,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 def _probe_run_id_from_mapping(value: Mapping[str, Any] | None) -> str | None:
     if not isinstance(value, Mapping):
         return None
-    for key in ("probe_run_id", "h74_execution_path_probe_run_id"):
+    for key in ("probe_run_id",):
         candidate = str(value.get(key) or "").strip()
         if candidate:
             return candidate
@@ -2606,9 +2603,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             strategy_instance_id TEXT,
             cycle_id TEXT,
             authority_hash TEXT,
-            h74_entry_plan_client_order_id TEXT,
-            h74_position_ownership_contract_hash TEXT,
-            h74_position_ownership_contract TEXT,
             entry_decision_id INTEGER,
             exit_decision_id INTEGER,
             decision_reason TEXT,
@@ -2648,24 +2642,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "orders", "strategy_instance_id", "strategy_instance_id TEXT")
     _ensure_column(conn, "orders", "cycle_id", "cycle_id TEXT")
     _ensure_column(conn, "orders", "authority_hash", "authority_hash TEXT")
-    _ensure_column(
-        conn,
-        "orders",
-        "h74_entry_plan_client_order_id",
-        "h74_entry_plan_client_order_id TEXT",
-    )
-    _ensure_column(
-        conn,
-        "orders",
-        "h74_position_ownership_contract_hash",
-        "h74_position_ownership_contract_hash TEXT",
-    )
-    _ensure_column(
-        conn,
-        "orders",
-        "h74_position_ownership_contract",
-        "h74_position_ownership_contract TEXT",
-    )
     _ensure_column(conn, "orders", "entry_decision_id", "entry_decision_id INTEGER")
     _ensure_column(conn, "orders", "exit_decision_id", "exit_decision_id INTEGER")
     _ensure_column(conn, "orders", "decision_reason", "decision_reason TEXT")
