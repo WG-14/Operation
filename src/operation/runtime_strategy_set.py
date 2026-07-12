@@ -1966,14 +1966,14 @@ class RuntimeStrategyDecisionCollector:
             request = request_builder.build_for_spec(spec, through_ts_ms=through_ts_ms)
             if not promotion_adapter_supports_feature_snapshot(adapter):
                 raise RuntimeError(f"runtime_decision_feature_snapshot_required:{spec.strategy_name}")
+            # Keep the declared spec as the source for a later provenance
+            # replay.  Replacing it with materialized parameters changes the
+            # paper compatibility parameter source and consequently the
+            # request hash.  The derived instance id is the only addition the
+            # planner needs to join this declaration to the typed result.
             materialized_spec = replace(
                 spec,
-                parameters=dict(request.parameters),
-                parameter_source=request.parameter_source,
-                approved_profile_path=request.approved_profile_path,
-                approved_profile_hash=request.approved_profile_hash,
-                runtime_contract_hash=request.runtime_contract_hash,
-                strategy_version=request.strategy_version,
+                strategy_instance_id=request.strategy_instance_id,
             )
             materialized_specs.append(materialized_spec)
             prepared.append((materialized_spec, adapter, request))
@@ -2032,7 +2032,7 @@ class RuntimeStrategyDecisionCollector:
             validate_runtime_decision_result_provenance(result, request)
             results.append(result)
         return RuntimeStrategyDecisionResultBundle(
-            strategy_set=strategy_set,
+            strategy_set=materialized_strategy_set,
             results=tuple(results),
             data_availability_report=data_availability_report,
             runtime_data_cycle_preflight_hash=runtime_data_cycle_preflight_hash,

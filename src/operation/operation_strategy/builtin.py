@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from operation.runtime_adapters.safe_hold import SafeHoldRuntimeDecisionAdapter
-from operation.runtime_adapters.sma_with_filter import SmaWithFilterRuntimeDecisionAdapter
+from operation.runtime_adapters.sma_with_filter import (
+    SmaWithFilterRuntimeDecisionAdapter,
+    build_sma_with_filter_runtime_feature_snapshot,
+)
 from operation.runtime_sma_snapshot import decide_sma_with_filter_runtime_snapshot_from_db
 from operation.strategy_evidence_contract import DecisionEvidenceContract, GENERIC_DECISION_EVIDENCE_CONTRACT
 from operation.strategy_plugins.sma_with_filter_assembly import MaterializationMode, SmaWithFilterPolicyAssembly
@@ -78,7 +81,8 @@ BUILTIN_OPERATION_STRATEGY_PLUGINS = (
         runtime_capabilities=StrategyRuntimeCapabilities(True, True, live_dry_run_allowed=True, live_real_order_allowed=True, fail_closed_reason="sma_runtime_contract_missing"),
         runtime_parameter_adapter=RuntimeParameterAdapter(_sma_params_from_env, _sma_params_from_settings, env_keys=tuple(SMA_WITH_FILTER_SPEC.accepted_parameter_names)),
         runtime_decision_adapter_factory=SmaWithFilterRuntimeDecisionAdapter,
-        runtime_feature_snapshot_builder=None, runtime_data_requirement_builder=_sma_requirements,
+        runtime_feature_snapshot_builder=build_sma_with_filter_runtime_feature_snapshot,
+        runtime_data_requirement_builder=_sma_requirements,
         runtime_replay_builder=_sma_replay, policy_assembly_factory=SmaWithFilterPolicyAssembly,
         exit_policy_materializer=_sma_exit_policy, decision_evidence_contract=SMA_DECISION_EVIDENCE_CONTRACT,
         decision_contract_version=SMA_WITH_FILTER_SPEC.decision_contract_version, diagnostics_namespace="sma_with_filter",

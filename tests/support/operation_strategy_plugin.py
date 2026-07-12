@@ -72,6 +72,7 @@ def register_test_only_operation_strategy_plugin() -> None:
                 ),
                 required_data=(),
                 optional_data=(),
+                runtime_feature_snapshot_builder=None,
                 runtime_data_requirement_builder=None,
                 runtime_decision_adapter_factory=_TestOnlyOperationRuntimeAdapter,
                 exit_policy_materializer=None,

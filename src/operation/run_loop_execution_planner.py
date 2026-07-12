@@ -1120,6 +1120,11 @@ class ExecutionPlanner:
         context = self._planning_context_from_envelope_input(planning_input)
         try:
             strategy_set = None if runtime_result_bundle is None else runtime_result_bundle.strategy_set
+            if (
+                runtime_result_bundle is not None
+                and runtime_result_bundle.strategy_set.multi_strategy_enabled
+            ):
+                raise RuntimeError("multi_strategy_execution_planning_recovery_required")
             runtime_pair = _runtime_pair_for_planning(strategy_set, settings_obj=self.settings_obj)
             context.update(_runtime_strategy_set_context_fields(strategy_set))
             context.update(_runtime_result_bundle_context_fields(runtime_result_bundle))
@@ -1271,16 +1276,59 @@ class ExecutionPlanner:
                         result_metadata.update(
                             {
                                 key: result_context.get(key)
-                    for key in (
-                        "position_mode",
-                        "hold_policy",
-                        "authority_hash",
-                        "strategy_instance_id",
-                        "contract_hash",
+                                for key in (
+                                    "runtime_scope_key",
+                                    "scope_key_hash",
+                                    "runtime_decision_request_hash",
+                                    "strategy_parameters_hash",
+                                    "approved_profile_hash",
+                                    "runtime_contract_hash",
+                                    "plugin_contract_hash",
+                                )
+                                if key in result_context
+                            }
+                        )
+                    runtime_result_contexts.append(result_metadata)
+                    preference_list.append(
+                        strategy_decision_to_preference(
+                            result.decision,
+                            pair=runtime_pair,
+                            strategy_instance_id=strategy_instance_id,
+                            desired_exposure_krw=spec.desired_exposure_krw,
+                            desired_weight=spec.weight,
+                            risk_budget_krw=spec.risk_budget_krw,
+                            max_target_exposure_krw=spec.max_target_exposure_krw,
+                            risk_policy=spec.risk_policy,
+                            risk_snapshot=spec.risk_snapshot,
+                            metadata=result_metadata,
+                        )
                     )
-                    if key in readiness_payload
-                }
+                preferences = tuple(preference_list)
+                context["runtime_strategy_result_contexts"] = runtime_result_contexts
+
+            allocation_input = PortfolioAllocationInput(
+                preference_set=SignalAggregator().aggregate(preferences),
+                allocator_config=allocation_config,
+                previous_target_exposure_krw=previous_target_exposure_krw,
+                reference_price=None if reference_price is None else float(reference_price),
+                previous_target_exposure_by_pair=previous_target_exposure_by_pair,
+                reference_price_by_pair=reference_price_by_pair,
             )
+            allocation_decision = PortfolioAllocator(allocation_config).allocate(allocation_input)
+            allocation_invariant_error = _allocation_single_pair_invariant_error(
+                allocation_decision,
+                runtime_pair=runtime_pair,
+            )
+            context.update(
+                _allocation_single_pair_invariant_context(
+                    allocation_decision,
+                    runtime_pair=runtime_pair,
+                )
+            )
+            if allocation_invariant_error is not None:
+                raise ValueError(allocation_invariant_error)
+            portfolio_target = allocation_decision.target_for_pair(runtime_pair)
+            context.update(_allocation_context_fields(allocation_decision, runtime_pair=runtime_pair))
             context["planner_subphase"] = "execution_plan_batch_build"
             authority = ExecutionAuthorityEnvelope(
                 planning_input=planning_input,
