@@ -36,6 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     backup = subcommands.add_parser("verify-backup", add_help=False)
     backup.add_argument("--plan", type=Path, required=True)
     backup.add_argument("--backup", type=Path, required=True)
+    backup.add_argument("--expected-sha256", required=True)
     return parser
 
 
@@ -49,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "apply":
             payload = apply_plan(plan_path=args.plan, expected_plan_hash=args.plan_hash, confirmation=args.confirm, broker_local_converged=args.broker_local_converged)
         else:
-            payload = verify_backup(plan=load_plan(args.plan), backup_path=args.backup)
+            payload = verify_backup(plan=load_plan(args.plan), backup_path=args.backup, expected_sha256=args.expected_sha256)
     except (SafetyCheckError, sqlite3.Error, OSError) as exc:
         code, _, details = str(exc).partition(":")
         payload = {"status": "refused", "reason_code": code, "database_modified": False, "backup_created": False}

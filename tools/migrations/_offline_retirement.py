@@ -150,6 +150,16 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
     return {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _user_table_names(conn: sqlite3.Connection) -> tuple[str, ...]:
+    return tuple(
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    )
+
+
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote(table)})")]
 
@@ -220,6 +230,34 @@ def _require_integrity(conn: sqlite3.Connection, source: str) -> None:
         raise SafetyCheckError(f"{source}_integrity_check_failed")
     if conn.execute("PRAGMA foreign_key_check").fetchall():
         raise SafetyCheckError(f"{source}_foreign_key_check_failed")
+
+
+def _foreign_key_rows(conn: sqlite3.Connection, table: str) -> tuple[dict[str, object], ...]:
+    rows = [
+        {
+            "child_table": table,
+            "foreign_key_id": int(row[0]),
+            "sequence": int(row[1]),
+            "from_column": str(row[3]),
+            "parent_table": str(row[2]),
+            "to_column": str(row[4]),
+            "on_update": str(row[5]),
+            "on_delete": str(row[6]),
+            "match": str(row[7]),
+        }
+        for row in conn.execute(f"PRAGMA foreign_key_list({_quote(table)})")
+    ]
+    return tuple(sorted(rows, key=lambda item: (str(item["child_table"]), int(item["foreign_key_id"]), int(item["sequence"]))))
+
+
+def orders_foreign_key_inventory(conn: sqlite3.Connection) -> tuple[dict[str, object], ...]:
+    """Return every user-table FK relationship that references ``orders``."""
+    return tuple(
+        item
+        for table in _user_table_names(conn)
+        for item in _foreign_key_rows(conn, table)
+        if item["parent_table"] == "orders"
+    )
 
 
 def _holders(db_path: Path) -> list[int]:
@@ -387,13 +425,16 @@ def _protected_inventory(conn: sqlite3.Connection, retained_orders_columns: list
     missing = sorted(set(PROTECTED_TABLES) - _table_names(conn))
     if missing:
         raise SafetyCheckError("protected_table_missing:" + ",".join(missing))
+    orders_dependents = orders_foreign_key_inventory(conn)
+    protected_tables = tuple(sorted(set(PROTECTED_TABLES) | {str(item["child_table"]) for item in orders_dependents}))
     return {
         table: {
             "columns": (retained_orders_columns if table == "orders" else _columns(conn, table)),
             "row_count": _count(conn, f"SELECT COUNT(*) FROM {_quote(table)}"),
             "row_hash": table_row_hash(conn, table, columns=(retained_orders_columns if table == "orders" else None)),
+            "foreign_keys": [dict(item) for item in _foreign_key_rows(conn, table)],
         }
-        for table in PROTECTED_TABLES
+        for table in protected_tables
     }
 
 
@@ -486,6 +527,7 @@ def build_plan(
     db_path, backup_path, manager = validate_paths(mode=mode, db_path=db_path, backup_path=backup_path)
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
+        conn.execute("PRAGMA foreign_keys=ON")
         _require_integrity(conn, "source_database")
         orders = _orders_contract(conn)
         retired_tables = _retired_tables_contract(conn)
@@ -497,6 +539,7 @@ def build_plan(
         protected = _protected_inventory(conn, list(orders["retained_columns"]))
         schema_inventory = {
             "orders": orders,
+            "orders_foreign_key_dependents": [dict(item) for item in orders_foreign_key_inventory(conn)],
             "retired_tables": {table: {"columns": _columns(conn, table), "row_count": _count(conn, f"SELECT COUNT(*) FROM {_quote(table)}")} for table in retired_tables},
         }
         needs_work = bool(retired_columns or retired_tables or virtual or (target_hash is not None and action == "clear"))
@@ -610,8 +653,15 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
                     source.backup(backup)
                 backup_sha = sha256_file(backup_path)
                 verify_backup(plan=plan, backup_path=backup_path, expected_sha256=backup_sha)
-                source.execute("BEGIN IMMEDIATE")
+                if source.in_transaction:
+                    raise SafetyCheckError("unexpected_active_transaction_before_rebuild")
+                foreign_keys_disabled = False
                 try:
+                    source.execute("PRAGMA foreign_keys=OFF")
+                    if source.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+                        raise SafetyCheckError("foreign_keys_disable_failed")
+                    foreign_keys_disabled = True
+                    source.execute("BEGIN IMMEDIATE")
                     _verify_virtual_rows(source, plan)
                     source.execute("DELETE FROM strategy_virtual_target_state WHERE pair=? AND (strategy_name='daily_participation_sma' OR strategy_instance_id LIKE 'daily_participation_sma:%' OR strategy_instance_id LIKE 'h74%')", (plan.pair,))
                     if plan.target_state_action == "clear" and plan.pair_target_state_present:
@@ -622,11 +672,19 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
                     canonical_columns = _canonical_orders_columns()
                     if _protected_inventory(source, canonical_columns) != plan.protected_inventory:
                         raise SafetyCheckError("protected_ledger_contract_mismatch")
-                    _require_integrity(source, "post_migration")
+                    if source.execute("PRAGMA foreign_key_check").fetchall():
+                        raise SafetyCheckError("post_rebuild_foreign_key_check_failed")
+                    if source.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                        raise SafetyCheckError("post_rebuild_integrity_check_failed")
                     source.commit()
-                except Exception:
-                    source.rollback()
-                    raise
+                finally:
+                    if source.in_transaction:
+                        source.rollback()
+                    if foreign_keys_disabled:
+                        source.execute("PRAGMA foreign_keys=ON")
+                        if source.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                            raise SafetyCheckError("foreign_keys_reenable_failed")
+                _require_integrity(source, "post_migration")
             finally:
                 source.close()
     except RunLockError as exc:
@@ -641,15 +699,17 @@ def apply_plan(*, plan_path: Path, expected_plan_hash: str, confirmation: str, b
     return {"status": status, "plan_hash": plan.plan_hash, "backup_sha256": backup_sha, "database_modified": database_modified, "backup_created": True, "pair_target_state_action": plan.target_state_action, "pair_target_state_retained_by_operator_decision": plan.pair_target_state_present and plan.target_state_action == "retain"}
 
 
-def verify_backup(*, plan: RetirementPlan, backup_path: Path, expected_sha256: str | None = None) -> dict[str, object]:
+def verify_backup(*, plan: RetirementPlan, backup_path: Path, expected_sha256: str) -> dict[str, object]:
     backup_path = backup_path.expanduser().resolve()
     if backup_path != Path(plan.backup_path).expanduser().resolve():
         raise SafetyCheckError("backup_path_plan_mismatch")
     validate_paths(mode=plan.mode, db_path=Path(plan.db_path), backup_path=backup_path)
     if not backup_path.is_file() or backup_path.stat().st_size <= 0:
         raise SafetyCheckError("backup_missing_or_empty")
+    if not expected_sha256:
+        raise SafetyCheckError("backup_expected_sha256_required")
     digest = sha256_file(backup_path)
-    if expected_sha256 is not None and digest != expected_sha256:
+    if digest != expected_sha256:
         raise SafetyCheckError("backup_sha256_mismatch")
     conn = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
     try:

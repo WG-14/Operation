@@ -40,8 +40,18 @@ OR strategy_instance_id LIKE 'h74%'
 
 Other pairs and strategies are preserved. The protected ledger tables are
 `orders`, `fills`, `trades`, `trade_lifecycles`, `order_events`,
-`broker_fill_observations`, and `execution_quality_events`. Their typed,
-canonical row inventories are checked before backup and before commit.
+`broker_fill_observations`, and `execution_quality_events`, together with every
+user table that has a foreign key to `orders`. Their typed, canonical row
+inventories, columns, and foreign-key definitions are checked before backup and
+before commit. This preserves `fills` and `order_events` (and any future
+`orders` FK child) during the `orders` rebuild.
+
+Foreign-key enforcement remains enabled for source and backup validation. Only
+after the backup has been created and verified, and immediately before the
+single rebuild transaction, the tool disables it. It performs foreign-key and
+integrity checks before commit, re-enables enforcement after commit, and repeats
+both checks. A failed rebuild rolls back the complete transaction and leaves
+the backup as the pre-change recovery point.
 
 ## Operator procedure
 
@@ -56,9 +66,10 @@ canonical row inventories are checked before backup and before commit.
    A `clear` plan additionally requires a flat portfolio and zero executable
    open lots for the pair.
 5. Preserve the reviewed plan JSON and hash, then apply that exact plan.
-6. Preserve the result and backup SHA-256. Verify the backup, run DB integrity
-   checks, then perform live dry-run, a HOLD cycle, reconciliation, restart,
-   and only then re-arm real orders.
+6. Preserve the result's `backup_sha256`, then verify that exact hash. Validate
+   a staging DB copy containing real `fills` and `order_events`, compare those
+   rows and FK definitions, then perform live dry-run, a HOLD cycle,
+   reconciliation, restart, and only then re-arm real orders.
 
 ```bash
 uv run python tools/migrations/retire_removed_strategy.py plan \
@@ -76,7 +87,8 @@ uv run python tools/migrations/retire_removed_strategy.py apply \
 
 uv run python tools/migrations/retire_removed_strategy.py verify-backup \
   --plan /var/lib/bithumb-bot/data/live/reports/retirement-plan.json \
-  --backup /var/backups/bithumb-bot/live/db/live.before-retirement.20260712T120000Z.sqlite
+  --backup /var/backups/bithumb-bot/live/db/live.before-retirement.20260712T120000Z.sqlite \
+  --expected-sha256 <apply-result-backup-sha256>
 ```
 
 `plan` is read-only: it does not create a backup or modify the DB. `apply`
@@ -90,6 +102,12 @@ retained target row returns `applied_with_retained_target_state`; it is never
 described as `already_clean`. `clear` requires the reviewed plan hash, explicit
 confirmation, broker/local convergence attestation, a verified backup, an exact
 pair match, a flat portfolio, zero open executable lots, and no risky orders.
+
+The required sequence is: plan, plan review, apply, preserve the apply JSON's
+`backup_sha256`, verify-backup with `--expected-sha256`, staging comparison of
+`fills`/`order_events`, live dry-run, reconcile, restart, and real-order
+re-arming. `verify-backup` intentionally refuses to report success without the
+recorded apply-result hash.
 
 All command stdout is canonical JSON. Safety refusals return exit code 2;
 successful plan, apply, and backup verification return exit code 0. The plan
