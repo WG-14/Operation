@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 
 from bithumb_bot.db_core import ensure_schema
+from bithumb_bot.run_lock import acquire_run_lock
 from bithumb_bot.operation_strategy.registry import (
     OperationStrategyRegistryError,
     resolve_operation_strategy_plugin,
@@ -105,15 +106,54 @@ def _create_legacy_database(module, db_path: Path, *, status: str = "FILLED") ->
                 (value,),
             )
         conn.execute(
-            "CREATE TABLE h74_position_ownership_state(id INTEGER PRIMARY KEY, contract_hash TEXT)"
+            """
+            CREATE TABLE h74_cycle_state (
+                cycle_id TEXT PRIMARY KEY, authority_hash TEXT NOT NULL,
+                strategy_instance_id TEXT NOT NULL, pair TEXT NOT NULL DEFAULT 'KRW-BTC',
+                state TEXT NOT NULL DEFAULT 'HOLDING', entry_client_order_id TEXT,
+                h74_entry_plan_client_order_id TEXT, exit_client_order_id TEXT,
+                entry_filled_ts INTEGER, scheduled_exit_ts INTEGER,
+                acquired_qty REAL NOT NULL DEFAULT 0, sold_qty REAL NOT NULL DEFAULT 0,
+                locked_exit_qty REAL NOT NULL DEFAULT 0, contract_hash TEXT,
+                unauthorized_intermediate_order_count INTEGER NOT NULL DEFAULT 0,
+                updated_ts INTEGER NOT NULL DEFAULT 0
+            )
+            """
         )
         conn.execute(
-            "INSERT INTO h74_position_ownership_state(contract_hash) VALUES ('sha256:legacy-ownership-7')"
+            """
+            INSERT INTO h74_cycle_state(
+                cycle_id, authority_hash, strategy_instance_id, pair, state,
+                entry_client_order_id, exit_client_order_id, entry_filled_ts,
+                scheduled_exit_ts, acquired_qty, sold_qty, locked_exit_qty,
+                unauthorized_intermediate_order_count, updated_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "h74-legacy-cycle-1", "sha256:legacy-authority", "h74-source-observation",
+                "KRW-BTC", "CLOSED", "legacy-entry-1", "legacy-exit-1", 100,
+                200, 0.001, 0.001, 0.0, 0, 300,
+            ),
         )
         conn.execute(
-            "CREATE TABLE daily_participation_claims(id INTEGER PRIMARY KEY, client_order_id TEXT)"
+            """
+            CREATE TABLE daily_participation_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, strategy_instance_id TEXT NOT NULL,
+                pair TEXT NOT NULL, kst_day TEXT NOT NULL, participation_policy_hash TEXT NOT NULL,
+                daily_count_snapshot_hash TEXT, participation_decision_hash TEXT, fallback_mode TEXT,
+                client_order_id TEXT, status TEXT NOT NULL, retry_allowed INTEGER NOT NULL DEFAULT 0,
+                created_ts INTEGER NOT NULL, updated_ts INTEGER NOT NULL,
+                UNIQUE(strategy_instance_id, pair, kst_day, participation_policy_hash)
+            )
+            """
         )
-        conn.execute("INSERT INTO daily_participation_claims(client_order_id) VALUES ('filled-order')")
+        conn.execute(
+            """INSERT INTO daily_participation_claims(
+                strategy_instance_id, pair, kst_day, participation_policy_hash, client_order_id,
+                status, created_ts, updated_ts
+            ) VALUES ('daily_participation_sma:legacy', 'KRW-BTC', '2026-01-01', 'policy-1',
+                      'filled-order', 'fulfilled', 100, 101)"""
+        )
         conn.commit()
         return values
     finally:
@@ -351,7 +391,7 @@ def test_first_migration_preserves_all_retained_orders_data(
         assert "daily_participation_claims" not in {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert "h74_position_ownership_state" not in {
+        assert "h74_cycle_state" not in {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         row = conn.execute(
@@ -554,7 +594,7 @@ def test_migration_refuses_unknown_source_only_orders_columns_before_backup_or_m
         assert set(unknown_columns).issubset(columns)
         assert module.RETIRED_ORDER_COLUMNS.issubset(columns)
         assert "daily_participation_claims" in tables
-        assert "h74_position_ownership_state" in tables
+        assert "h74_cycle_state" in tables
         assert "orders__retired_schema_tmp" not in tables
         for column in unknown_columns:
             assert conn.execute(
@@ -722,3 +762,91 @@ def test_migration_rejects_db_path_override_that_differs_from_db_argument(
             confirmation="",
             broker_local_converged=False,
         )
+
+
+def test_migration_refuses_unknown_h74_table_before_backup_or_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _migration_module()
+    db_path, backup_path = _managed_paths(monkeypatch, tmp_path)
+    _create_legacy_database(module, db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE h74_operator_notes(id INTEGER PRIMARY KEY, note TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+    before = module._sha256(db_path)
+
+    with pytest.raises(module.SafetyCheckError, match="unexpected_h74_prefixed_tables:h74_operator_notes"):
+        module.run(
+            db_path=db_path, backup_path=backup_path, mode="paper", apply=True,
+            confirmation=module.CONFIRMATION, broker_local_converged=True,
+        )
+
+    assert module._sha256(db_path) == before
+    assert not backup_path.exists()
+
+
+def test_migration_refuses_known_retired_table_with_wrong_schema(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _migration_module()
+    db_path, backup_path = _managed_paths(monkeypatch, tmp_path)
+    _create_legacy_database(module, db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("ALTER TABLE h74_cycle_state ADD COLUMN operator_note TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(module.SafetyCheckError, match="retired_table_schema_mismatch:h74_cycle_state"):
+        module.run(
+            db_path=db_path, backup_path=backup_path, mode="paper", apply=True,
+            confirmation=module.CONFIRMATION, broker_local_converged=True,
+        )
+    assert not backup_path.exists()
+
+
+def test_migration_preserves_synthetic_canonical_trigger(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _migration_module()
+    db_path, backup_path = _managed_paths(monkeypatch, tmp_path)
+    _create_legacy_database(module, db_path)
+    original_sql = module._canonical_orders_sql
+    original_inventory = module._canonical_orders_schema_inventory
+    trigger = module.SchemaObject(
+        "trigger", "canonical_orders_touch", "CREATE TRIGGER canonical_orders_touch AFTER UPDATE ON orders BEGIN SELECT 1; END"
+    )
+    monkeypatch.setattr(module, "_canonical_orders_sql", lambda: (original_sql()[0], [*original_sql()[1], trigger]))
+    monkeypatch.setattr(module, "_canonical_orders_schema_inventory", lambda: ([*original_inventory()[0], trigger], original_inventory()[1]))
+
+    module.run(
+        db_path=db_path, backup_path=backup_path, mode="paper", apply=True,
+        confirmation=module.CONFIRMATION, broker_local_converged=True,
+    )
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='canonical_orders_touch'").fetchone()
+    finally:
+        conn.close()
+
+
+def test_migration_refuses_when_mode_run_lock_is_held(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _migration_module()
+    db_path, backup_path = _managed_paths(monkeypatch, tmp_path)
+    _create_legacy_database(module, db_path)
+    manager = module._validate_paths(db_path=db_path, backup_path=backup_path, mode="paper")[2]
+    before = module._sha256(db_path)
+    with acquire_run_lock(manager.run_lock_path_for_mode("paper")):
+        with pytest.raises(module.SafetyCheckError, match="migration_run_lock_unavailable"):
+            module.run(
+                db_path=db_path, backup_path=backup_path, mode="paper", apply=True,
+                confirmation=module.CONFIRMATION, broker_local_converged=True,
+            )
+    assert module._sha256(db_path) == before
+    assert not backup_path.exists()

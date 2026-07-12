@@ -26,6 +26,59 @@ fails closed for a non-canonical user-created `orders` index or trigger as
 unknown columns or schema objects. Investigate the source schema and write a
 separate approved change specification before attempting the migration again.
 
+The table allowlist is exactly `h74_cycle_state` and
+`daily_participation_claims`. An `h74_` prefix is never deletion authority.
+An unknown prefixed table stops apply before a backup, temporary `orders`
+table, or database mutation with `unexpected_h74_prefixed_tables:<names>`.
+Known names are also checked against their historical column contracts; a
+mismatch stops with `retired_table_schema_mismatch:<table>:...`.
+
+When `orders` must be rebuilt, the migration restores every canonical explicit
+schema object (indexes, partial/unique indexes, and triggers), then compares
+both the explicit-object and SQLite auto-index inventories before commit. The
+mode-specific run lock is held from the locked DB reconnect through source
+checks, backup, rebuild, drop, post-check, and commit. A lock conflict is
+`migration_run_lock_unavailable`.
+
+## Required operator sequence
+
+1. Create a copy of the operational DB; work on the copy first.
+2. Run the retired runtime-state cleanup dry-run.
+3. Review the reported shared virtual and pair target state.
+4. If warranted, apply runtime-state cleanup and retain its backup hash.
+5. Run this schema migration dry-run.
+6. Apply this schema migration.
+7. Verify integrity and a backup restore.
+8. Deploy the new code and perform live dry-run.
+9. Reconcile, then restart.
+10. Only then re-arm real orders.
+
+The runtime-state tool does not infer strategy ownership for
+`target_position_state`. It may clear that pair state only with
+`--clear-pair-target-state`, a flat portfolio, zero executable open lots, zero
+risky orders, broker/local convergence attestation, a verified backup, and the
+explicit confirmation. It removes only matching retired virtual rows for the
+specified pair. Orders, fills, trades, lifecycle rows, order events, broker fill
+observations, and execution-quality audit rows are protected and checked before
+and after mutation.
+
+```bash
+uv run python tools/migrations/remove_retired_strategy_runtime_state.py \
+  --mode live --pair KRW-BTC \
+  --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
+  --backup /var/backups/bithumb-bot/live/db/live.before-retired-runtime-state.20260712T103000Z.sqlite
+
+uv run python tools/migrations/remove_retired_strategy_runtime_state.py \
+  --mode live --pair KRW-BTC \
+  --db /var/lib/bithumb-bot/data/live/trades/live.sqlite \
+  --backup /var/backups/bithumb-bot/live/db/live.before-retired-runtime-state.20260712T103000Z.sqlite \
+  --broker-local-converged --clear-pair-target-state --apply \
+  --confirm REMOVE_RETIRED_STRATEGY_RUNTIME_STATE
+```
+
+Historical orders, fills, trades, and audit evidence are preserved. Unknown
+H74-prefixed tables are investigation targets, never automatically removed.
+
 ## Environment preparation
 
 Before a live migration, explicitly load the production environment containing

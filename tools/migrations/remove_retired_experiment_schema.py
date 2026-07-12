@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from collections import namedtuple
 import hashlib
 import math
 import os
@@ -24,6 +25,7 @@ from bithumb_bot.paths import (
     PathPolicyError,
     validate_runtime_root_separation,
 )
+from bithumb_bot.run_lock import RunLockError, acquire_run_lock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,8 +43,86 @@ RETIRED_ORDER_COLUMNS = frozenset(
         "daily_participation_fallback_mode",
     }
 )
-RETIRED_TABLE_PREFIXES = ("h74_",)
-RETIRED_TABLES = frozenset({"daily_participation_claims"})
+# These are the only retired tables verified against the removed implementations.
+# A familiar prefix is never enough authority to delete a table.
+RETIRED_TABLES = frozenset({"h74_cycle_state", "daily_participation_claims"})
+RETIRED_TABLE_CONTRACTS = {
+    "h74_cycle_state": {
+        "required_columns": frozenset(
+            {
+                "cycle_id",
+                "authority_hash",
+                "strategy_instance_id",
+                "pair",
+                "state",
+                "entry_client_order_id",
+                "exit_client_order_id",
+                "entry_filled_ts",
+                "scheduled_exit_ts",
+                "acquired_qty",
+                "sold_qty",
+                "locked_exit_qty",
+                "unauthorized_intermediate_order_count",
+                "updated_ts",
+            }
+        ),
+        "allowed_columns": frozenset(
+            {
+                "cycle_id",
+                "authority_hash",
+                "strategy_instance_id",
+                "pair",
+                "state",
+                "entry_client_order_id",
+                "exit_client_order_id",
+                "entry_filled_ts",
+                "scheduled_exit_ts",
+                "acquired_qty",
+                "sold_qty",
+                "locked_exit_qty",
+                "unauthorized_intermediate_order_count",
+                "updated_ts",
+                "contract_hash",
+                "h74_entry_plan_client_order_id",
+            }
+        ),
+    },
+    "daily_participation_claims": {
+        "required_columns": frozenset(
+            {
+                "id",
+                "strategy_instance_id",
+                "pair",
+                "kst_day",
+                "participation_policy_hash",
+                "daily_count_snapshot_hash",
+                "participation_decision_hash",
+                "fallback_mode",
+                "client_order_id",
+                "status",
+                "created_ts",
+                "updated_ts",
+            }
+        ),
+        "allowed_columns": frozenset(
+            {
+                "id",
+                "strategy_instance_id",
+                "pair",
+                "kst_day",
+                "participation_policy_hash",
+                "daily_count_snapshot_hash",
+                "participation_decision_hash",
+                "fallback_mode",
+                "client_order_id",
+                "status",
+                "retry_allowed",
+                "created_ts",
+                "updated_ts",
+            }
+        ),
+    },
+}
 UNSAFE_ORDER_STATUSES = frozenset(
     {
         "PENDING_SUBMIT",
@@ -58,6 +138,9 @@ UNSAFE_ORDER_STATUSES = frozenset(
 
 class SafetyCheckError(RuntimeError):
     pass
+
+
+SchemaObject = namedtuple("SchemaObject", ("object_type", "name", "sql"))
 
 
 def _quote_identifier(name: str) -> str:
@@ -125,7 +208,7 @@ def _require_safe_stop(conn: sqlite3.Connection, db_path: Path, broker_local_con
         raise SafetyCheckError("broker_local_position_convergence_operator_attestation_required")
 
 
-def _canonical_orders_sql() -> tuple[str, list[str]]:
+def _canonical_orders_sql() -> tuple[str, list[SchemaObject]]:
     """Obtain the current canonical schema from db_core without touching disk."""
     from bithumb_bot.db_core import ensure_schema
 
@@ -137,13 +220,7 @@ def _canonical_orders_sql() -> tuple[str, list[str]]:
         ).fetchone()
         if row is None or not row[0]:
             raise SafetyCheckError("canonical_orders_schema_missing")
-        indexes = [
-            str(item[0])
-            for item in canonical.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='orders' AND sql IS NOT NULL"
-            ).fetchall()
-        ]
-        return str(row[0]), indexes
+        return str(row[0]), _orders_schema_objects(canonical)
     finally:
         canonical.close()
 
@@ -158,10 +235,10 @@ def _canonical_orders_columns() -> list[str]:
         conn.close()
 
 
-def _orders_schema_objects(conn: sqlite3.Connection) -> list[dict[str, str]]:
+def _orders_schema_objects(conn: sqlite3.Connection) -> list[SchemaObject]:
     """Return explicitly defined indexes/triggers attached to ``orders``."""
     return [
-        {"type": str(row[0]), "name": str(row[1]), "sql": str(row[2])}
+        SchemaObject(object_type=str(row[0]), name=str(row[1]), sql=str(row[2]))
         for row in conn.execute(
             "SELECT type, name, sql FROM sqlite_master "
             "WHERE tbl_name='orders' AND type IN ('index', 'trigger') AND sql IS NOT NULL "
@@ -188,7 +265,7 @@ def _orders_auto_indexes(conn: sqlite3.Connection) -> list[tuple[str, tuple[obje
     return sorted(auto_indexes)
 
 
-def _canonical_orders_schema_inventory() -> tuple[list[dict[str, str]], list[tuple[str, tuple[object, ...]]]]:
+def _canonical_orders_schema_inventory() -> tuple[list[SchemaObject], list[tuple[str, tuple[object, ...]]]]:
     """Read canonical orders objects from an in-memory current schema."""
     from bithumb_bot.db_core import ensure_schema
 
@@ -204,13 +281,11 @@ def _unexpected_orders_schema_object_names(conn: sqlite3.Connection) -> list[str
     """Fail closed when a rebuild would drop non-canonical orders objects."""
     source_objects = _orders_schema_objects(conn)
     canonical_objects, canonical_auto_indexes = _canonical_orders_schema_inventory()
-    canonical_object_keys = {
-        (item["type"], item["name"], item["sql"]) for item in canonical_objects
-    }
+    canonical_object_keys = {(item.object_type, item.name, item.sql) for item in canonical_objects}
     unexpected_names = {
-        item["name"]
+        item.name
         for item in source_objects
-        if (item["type"], item["name"], item["sql"]) not in canonical_object_keys
+        if (item.object_type, item.name, item.sql) not in canonical_object_keys
     }
 
     remaining_canonical_auto = [signature for _, signature in canonical_auto_indexes]
@@ -247,6 +322,32 @@ def _require_orders_rebuild_contract(conn: sqlite3.Connection) -> dict[str, list
     if unexpected_objects:
         raise SafetyCheckError("unexpected_orders_schema_objects:" + ",".join(unexpected_objects))
     return contract
+
+
+def _retired_table_inventory(conn: sqlite3.Connection, table: str) -> dict[str, object]:
+    columns = sorted(_table_columns(conn, table))
+    return {"columns": columns, "row_count": _scalar(conn, f"SELECT COUNT(*) FROM {_quote_identifier(table)}")}
+
+
+def _retired_table_inventories(conn: sqlite3.Connection) -> dict[str, dict[str, object]]:
+    tables = _table_names(conn)
+    return {table: _retired_table_inventory(conn, table) for table in sorted(RETIRED_TABLES & tables)}
+
+
+def _require_retired_table_contract(conn: sqlite3.Connection) -> None:
+    tables = _table_names(conn)
+    unknown_h74_tables = sorted(name for name in tables if name.startswith("h74_") and name not in RETIRED_TABLES)
+    if unknown_h74_tables:
+        raise SafetyCheckError("unexpected_h74_prefixed_tables:" + ",".join(unknown_h74_tables))
+    for table in sorted(RETIRED_TABLES & tables):
+        columns = set(_table_columns(conn, table))
+        contract = RETIRED_TABLE_CONTRACTS[table]
+        missing = sorted(contract["required_columns"] - columns)
+        unexpected = sorted(columns - contract["allowed_columns"])
+        if missing or unexpected:
+            raise SafetyCheckError(
+                f"retired_table_schema_mismatch:{table}:missing={','.join(missing)}:unexpected={','.join(unexpected)}"
+            )
 
 
 def _update_length_prefixed(digest: hashlib._Hash, payload: bytes) -> None:
@@ -423,7 +524,7 @@ def _rebuild_orders(conn: sqlite3.Connection, *, contract: dict[str, list[str]])
     retired = sorted(RETIRED_ORDER_COLUMNS.intersection(source_only_columns))
     if set(retired) != source_only_columns:
         raise SafetyCheckError("orders_rebuild_removed_columns_contract_mismatch")
-    canonical_sql, canonical_indexes = _canonical_orders_sql()
+    canonical_sql, canonical_objects = _canonical_orders_sql()
     target_table = "orders__retired_schema_tmp"
     target_sql = canonical_sql.replace("CREATE TABLE IF NOT EXISTS orders", f"CREATE TABLE {target_table}", 1)
     if target_sql == canonical_sql:
@@ -460,8 +561,14 @@ def _rebuild_orders(conn: sqlite3.Connection, *, contract: dict[str, list[str]])
     _migration_checkpoint("before_orders_drop")
     conn.execute("DROP TABLE orders")
     conn.execute(f"ALTER TABLE {_quote_identifier(target_table)} RENAME TO orders")
-    for index_sql in canonical_indexes:
-        conn.execute(index_sql)
+    for schema_object in canonical_objects:
+        conn.execute(schema_object.sql)
+    source_objects = _orders_schema_objects(conn)
+    expected_objects, expected_auto_indexes = _canonical_orders_schema_inventory()
+    if source_objects != expected_objects:
+        raise SafetyCheckError("orders_schema_objects_not_restored")
+    if _orders_auto_indexes(conn) != expected_auto_indexes:
+        raise SafetyCheckError("orders_auto_index_contract_mismatch")
     after = _orders_stats(conn, table="orders", retained_columns=retained_columns)
     if after != before:
         raise SafetyCheckError("orders_rebuild_retained_data_mismatch")
@@ -478,9 +585,7 @@ def _rebuild_orders(conn: sqlite3.Connection, *, contract: dict[str, list[str]])
 
 def inspect(conn: sqlite3.Connection) -> dict[str, object]:
     tables = _table_names(conn)
-    retired_tables = sorted(
-        name for name in tables if name in RETIRED_TABLES or name.startswith(RETIRED_TABLE_PREFIXES)
-    )
+    retired_tables = sorted(RETIRED_TABLES & tables)
     retired_columns = (
         sorted(RETIRED_ORDER_COLUMNS.intersection(_table_columns(conn, "orders")))
         if "orders" in tables
@@ -494,11 +599,13 @@ def inspect(conn: sqlite3.Connection) -> dict[str, object]:
             "expected_retired_columns": [],
             "unexpected_source_columns": [],
             "removed_columns": [],
+            "retired_table_inventory": _retired_table_inventories(conn),
         }
     return {
         "retired_tables": retired_tables,
         "retired_order_columns": retired_columns,
         "removed_columns": [],
+        "retired_table_inventory": _retired_table_inventories(conn),
         **_orders_rebuild_contract(conn),
     }
 
@@ -544,65 +651,76 @@ def run(
     db_path, backup_path, manager = _validate_paths(
         db_path=db_path, backup_path=backup_path, mode=mode
     )
-    conn = sqlite3.connect(db_path)
-    try:
-        report = inspect(conn)
-        report.update({"apply": bool(apply), "db_path": str(db_path), "backup_path": str(backup_path)})
-        orders_contract = _require_orders_rebuild_contract(conn) if "orders" in _table_names(conn) else None
-        if not report["retired_tables"] and not report["retired_order_columns"]:
+    def evaluate(*, locked: bool) -> dict[str, object]:
+        conn = sqlite3.connect(db_path)
+        try:
+            report = inspect(conn)
+            report.update(
+                {
+                    "apply": bool(apply),
+                    "db_path": str(db_path),
+                    "backup_path": str(backup_path),
+                    "run_lock_acquired": locked,
+                }
+            )
+            if not apply:
+                return {**report, "status": "dry_run", "backup_created": False, "database_modified": False}
+            _require_retired_table_contract(conn)
+            orders_contract = _require_orders_rebuild_contract(conn) if "orders" in _table_names(conn) else None
+            if not report["retired_tables"] and not report["retired_order_columns"]:
+                return {**report, "status": "already_clean", "backup_created": False, "database_modified": False}
+            if confirmation != CONFIRMATION:
+                raise SafetyCheckError("explicit_confirmation_required")
+            _require_safe_stop(conn, db_path, broker_local_converged)
+            _require_sqlite_integrity(conn, source="source_database")
+            if backup_path.exists():
+                raise SafetyCheckError("backup_path_already_exists")
+            retained_columns = [name for name in _canonical_orders_columns() if name in _table_columns(conn, "orders")]
+            if not retained_columns:
+                raise SafetyCheckError("canonical_orders_copy_columns_missing")
+            manager.ensure_parent_dir(backup_path)
+            with sqlite3.connect(backup_path) as backup_conn:
+                conn.backup(backup_conn)
+            backup_sha256, backup_orders = _validate_backup(conn=conn, backup_path=backup_path, retained_columns=retained_columns)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if orders_contract is None:
+                    raise SafetyCheckError("orders_table_missing")
+                report["orders"] = _rebuild_orders(conn, contract=orders_contract)
+                for key in ("source_only_columns", "expected_retired_columns", "unexpected_source_columns", "removed_columns"):
+                    report[key] = report["orders"][key]
+                _migration_checkpoint("before_retired_table_drop")
+                removed_tables: list[str] = []
+                for table in list(report["retired_tables"]):
+                    conn.execute(f"DROP TABLE {_quote_identifier(str(table))}")
+                    removed_tables.append(str(table))
+                report["removed_tables"] = removed_tables
+                _migration_checkpoint("before_final_integrity_check")
+                _require_sqlite_integrity(conn, source="post_migration")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             return {
                 **report,
-                "status": "already_clean",
-                "backup_created": False,
-                "database_modified": False,
+                "status": "applied",
+                "backup_created": True,
+                "database_modified": True,
+                "backup_sha256": backup_sha256,
+                "backup_orders": backup_orders,
+                "foreign_key_check": "ok",
+                "integrity_check": "ok",
             }
-        if not apply:
-            return {**report, "status": "dry_run", "backup_created": False, "database_modified": False}
-        if confirmation != CONFIRMATION:
-            raise SafetyCheckError("explicit_confirmation_required")
-        _require_safe_stop(conn, db_path, broker_local_converged)
-        _require_sqlite_integrity(conn, source="source_database")
-        if backup_path.exists():
-            raise SafetyCheckError("backup_path_already_exists")
-        retained_columns = [
-            name for name in _canonical_orders_columns() if name in _table_columns(conn, "orders")
-        ]
-        if not retained_columns:
-            raise SafetyCheckError("canonical_orders_copy_columns_missing")
-        manager.ensure_parent_dir(backup_path)
-        with sqlite3.connect(backup_path) as backup_conn:
-            conn.backup(backup_conn)
-        backup_sha256, backup_orders = _validate_backup(
-            conn=conn, backup_path=backup_path, retained_columns=retained_columns
-        )
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if orders_contract is None:
-                raise SafetyCheckError("orders_table_missing")
-            report["orders"] = _rebuild_orders(conn, contract=orders_contract)
-            for key in ("source_only_columns", "expected_retired_columns", "unexpected_source_columns", "removed_columns"):
-                report[key] = report["orders"][key]
-            _migration_checkpoint("before_retired_table_drop")
-            for table in list(report["retired_tables"]):
-                conn.execute(f"DROP TABLE IF EXISTS {_quote_identifier(str(table))}")
-            _migration_checkpoint("before_final_integrity_check")
-            _require_sqlite_integrity(conn, source="post_migration")
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        return {
-            **report,
-            "status": "applied",
-            "backup_created": True,
-            "database_modified": True,
-            "backup_sha256": backup_sha256,
-            "backup_orders": backup_orders,
-            "foreign_key_check": "ok",
-            "integrity_check": "ok",
-        }
-    finally:
-        conn.close()
+        finally:
+            conn.close()
+
+    if not apply:
+        return evaluate(locked=False)
+    try:
+        with acquire_run_lock(manager.run_lock_path_for_mode(mode)):
+            return evaluate(locked=True)
+    except RunLockError as exc:
+        raise SafetyCheckError("migration_run_lock_unavailable") from exc
 
 
 def main() -> int:
