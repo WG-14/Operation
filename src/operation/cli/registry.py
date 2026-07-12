@@ -33,7 +33,6 @@ def iter_command_specs() -> Iterable[CommandSpec]:
         operation_approval,
         live_ops,
         marketdata,
-        operation_evidence,
         recovery,
         repairs,
         reports,
@@ -47,7 +46,6 @@ def iter_command_specs() -> Iterable[CommandSpec]:
     yield from recovery.command_specs()
     yield from repairs.command_specs()
     yield from reports.command_specs()
-    yield from operation_evidence.command_specs()
     yield from operation_approval.command_specs()
     yield from strategy.command_specs()
 

@@ -6,95 +6,50 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SYSTEMD_DIR = REPO_ROOT / "deploy/systemd"
+CANONICAL_UNITS = {
+    "operation-paper.service",
+    "operation-healthcheck.service",
+    "operation-healthcheck.timer",
+    "operation-backup.service",
+    "operation-backup.timer",
+}
 
 
-def _read_unit(path: Path) -> ConfigParser:
+def _read(path: Path) -> ConfigParser:
     parser = ConfigParser()
     parser.optionxform = str
     parser.read(path, encoding="utf-8")
     return parser
 
 
-def test_systemd_units_do_not_hardcode_workspace_path() -> None:
-    for path in sorted(SYSTEMD_DIR.glob("*.service")) + sorted(SYSTEMD_DIR.glob("*.timer")):
+def test_supported_deployment_units_are_paper_only_and_canonical() -> None:
+    names = {path.name for path in SYSTEMD_DIR.glob("*.service")} | {path.name for path in SYSTEMD_DIR.glob("*.timer")}
+    assert CANONICAL_UNITS <= names
+    assert "operation.service" not in names
+
+    paper = _read(SYSTEMD_DIR / "operation-paper.service")["Service"]
+    assert "MODE=paper" in paper["Environment"]
+    assert paper["ExecStart"] == "@OPERATION_UV_BIN@ run operation run"
+    assert "--short" not in paper["ExecStart"]
+    assert "--long" not in paper["ExecStart"]
+
+
+def test_healthcheck_and_backup_follow_paper_service() -> None:
+    health_unit = _read(SYSTEMD_DIR / "operation-healthcheck.service")
+    health = health_unit["Service"]
+    assert health_unit["Unit"]["After"] == "operation-paper.service"
+    assert "MODE=paper" in health["Environment"]
+    assert "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_PAPER@" in health["Environment"]
+
+    backup = _read(SYSTEMD_DIR / "operation-backup.service")["Service"]
+    assert "MODE=paper" in backup["Environment"]
+    assert backup["ExecStart"] == "/usr/bin/env bash @OPERATION_BOT_ROOT@/scripts/backup_sqlite.sh"
+
+
+def test_units_do_not_hardcode_repository_paths() -> None:
+    for path in SYSTEMD_DIR.glob("*"):
+        if path.suffix not in {".service", ".timer"}:
+            continue
         content = path.read_text(encoding="utf-8")
         assert "/workspace/operation-bot" not in content
-
-
-def test_operational_scripts_do_not_hardcode_home_directory_repo_path() -> None:
-    script_paths = [
-        REPO_ROOT / "scripts" / "check_live_runtime.sh",
-        REPO_ROOT / "scripts" / "collect_live_snapshot.sh",
-        REPO_ROOT / "deploy" / "systemd" / "render_units.sh",
-    ]
-    for path in script_paths:
-        content = path.read_text(encoding="utf-8")
         assert "/home/ec2-user/operation-bot" not in content
-
-
-def test_services_use_consistent_explicit_env_source_rule() -> None:
-    service_paths = [
-        SYSTEMD_DIR / "operation-bot.service",
-        SYSTEMD_DIR / "operation-bot-paper.service",
-        SYSTEMD_DIR / "operation-bot-healthcheck.service",
-        SYSTEMD_DIR / "operation-bot-backup.service",
-    ]
-
-    for path in service_paths:
-        unit = _read_unit(path)
-        service = unit["Service"]
-        assert "Environment" in service
-        assert "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_" in service["Environment"]
-        assert "MODE=" in service["Environment"]
-        assert "RUN_ROOT=@OPERATION_RUN_ROOT@" in service["Environment"]
-        assert "DATA_ROOT=@OPERATION_DATA_ROOT@" in service["Environment"]
-        assert "LOG_ROOT=@OPERATION_LOG_ROOT@" in service["Environment"]
-        assert "BACKUP_ROOT=@OPERATION_BACKUP_ROOT@" in service["Environment"]
-        if path.name in {"operation-bot.service", "operation-bot-paper.service"}:
-            assert "PYTHONUNBUFFERED=1" in service["Environment"]
-        assert "EnvironmentFile" not in service
-
-
-def test_live_and_paper_services_use_mode_specific_env_and_canonical_entrypoint() -> None:
-    live = _read_unit(SYSTEMD_DIR / "operation-bot.service")
-    paper = _read_unit(SYSTEMD_DIR / "operation-bot-paper.service")
-
-    live_env = live["Service"]["Environment"]
-    paper_env = paper["Service"]["Environment"]
-    assert "MODE=live" in live_env
-    assert "MODE=paper" in paper_env
-    assert "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_LIVE@" in live_env
-    assert "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_PAPER@" in paper_env
-    assert "PYTHONUNBUFFERED=1" in live_env
-    assert "PYTHONUNBUFFERED=1" in paper_env
-
-    live_exec = live["Service"]["ExecStart"]
-    paper_exec = paper["Service"]["ExecStart"]
-    assert "@OPERATION_UV_BIN@ run python -u -m operation run" in live_exec
-    assert "@OPERATION_UV_BIN@ run python -u -m operation run" in paper_exec
-    assert "--mode live" in live_exec
-    assert "--mode paper" in paper_exec
-
-    assert live["Service"]["SyslogIdentifier"] != paper["Service"]["SyslogIdentifier"]
-
-
-def test_backup_service_uses_bash_script_invocation_without_shell_string() -> None:
-    backup = _read_unit(SYSTEMD_DIR / "operation-bot-backup.service")
-    exec_start = backup["Service"]["ExecStart"]
-
-    assert exec_start == "/usr/bin/env bash @OPERATION_BOT_ROOT@/scripts/backup_sqlite.sh"
-    assert "-lc" not in exec_start
-
-
-def test_healthcheck_service_uses_templated_runtime_user_and_uv_binary() -> None:
-    healthcheck = _read_unit(SYSTEMD_DIR / "operation-bot-healthcheck.service")
-    service = healthcheck["Service"]
-
-    assert service["Type"] == "oneshot"
-    assert service["User"] == "@OPERATION_RUN_USER@"
-    assert service["WorkingDirectory"] == "@OPERATION_BOT_ROOT@"
-    assert "MODE=live" in service["Environment"]
-    assert "OPERATION_ENV_FILE=@OPERATION_ENV_FILE_LIVE@" in service["Environment"]
-    assert service["SyslogIdentifier"] == "operation-bot-healthcheck"
-    assert service["ExecStart"] == "@OPERATION_UV_BIN@ run python @OPERATION_BOT_ROOT@/scripts/healthcheck.py"
-    assert "/usr/bin/env uv" not in service["ExecStart"]

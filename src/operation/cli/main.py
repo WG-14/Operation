@@ -10,6 +10,9 @@ def main(argv: list[str] | None = None, context: AppContext | None = None) -> in
     registry = command_registry()
     parser = build_parser(registry)
     args = parser.parse_args(argv)
+    if getattr(args, "cmd", None) is None:
+        parser.print_help()
+        return 0
     app_context = context or build_default_context(argv)
     _validate_mode_and_log_live_contract(args, app_context)
     return dispatch(args, app_context, registry)
@@ -30,7 +33,7 @@ def _validate_mode_and_log_live_contract(args: object, context: AppContext) -> N
     env_summary_payload = env_summary.as_dict() if hasattr(env_summary, "as_dict") else {}
     log_live_execution_contract(
         settings,
-        caller=f"cli.main:{getattr(args, 'cmd', None) or 'ticker'}",
+        caller=f"cli.main:{getattr(args, 'cmd', None) or 'no_command'}",
         env_summary=env_summary_payload,
     )
 

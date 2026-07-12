@@ -13,7 +13,7 @@ def dispatch(
     context: AppContext,
     registry: Mapping[str, CommandSpec],
 ) -> int:
-    command_name = getattr(args, "cmd", None) or "ticker"
+    command_name = getattr(args, "cmd", None)
     spec = registry.get(command_name)
     if spec is None:
         return 2

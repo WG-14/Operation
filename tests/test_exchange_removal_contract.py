@@ -45,7 +45,11 @@ def test_package_identity_and_retired_exchange_residue_are_absent() -> None:
     import subprocess
 
     paths = subprocess.run(["git", "ls-files"], cwd=root, check=True, text=True, capture_output=True).stdout.splitlines()
-    assert not any(forbidden in (root / path).read_text(encoding="utf-8", errors="ignore").lower() for path in paths)
+    assert not any(
+        forbidden in candidate.read_text(encoding="utf-8", errors="ignore").lower()
+        for path in paths
+        if (candidate := root / path).is_file()
+    )
 
 
 def test_default_paper_market_sync_is_offline_noop() -> None:

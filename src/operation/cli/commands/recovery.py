@@ -31,27 +31,6 @@ def _diagnose_fill_trade_linkage(args: argparse.Namespace, _context) -> None:
     cmd_diagnose_fill_trade_linkage(as_json=bool(args.json), apply_safe=bool(args.apply_safe))
 
 
-def _recover_order(args: argparse.Namespace, _context) -> None:
-    from operation.operator_commands import cmd_recover_order
-
-    cmd_recover_order(
-        client_order_id=str(args.client_order_id),
-        exchange_order_id=str(args.exchange_order_id),
-        dry_run=bool(args.dry_run),
-        confirm=bool(args.yes),
-    )
-
-
-def _backfill_broker_order(args: argparse.Namespace, _context) -> None:
-    from operation.operator_commands import cmd_backfill_broker_order
-
-    cmd_backfill_broker_order(
-        exchange_order_id=str(args.exchange_order_id),
-        dry_run=bool(args.dry_run),
-        confirm=bool(args.yes),
-    )
-
-
 def command_specs() -> list[CommandSpec]:
     return [
         make_spec(
@@ -106,31 +85,6 @@ def command_specs() -> list[CommandSpec]:
             writes_db=True,
             json_output_supported=True,
         ),
-        make_spec(
-            "recover-order",
-            domain="recovery",
-            handler=_recover_order,
-            build=_build_recover_order,
-            read_only=False,
-            mutating=True,
-            requires_live=True,
-            guard_policy="operator_recovery",
-            requires_confirmation=True,
-            writes_db=True,
-            uses_broker=True,
-        ),
-        make_spec(
-            "backfill-broker-order",
-            domain="recovery",
-            handler=_backfill_broker_order,
-            build=_build_backfill_broker_order,
-            read_only=False,
-            mutating=True,
-            requires_live=True,
-            requires_confirmation=True,
-            writes_db=True,
-            uses_broker=True,
-        ),
     ]
 
 
@@ -142,15 +96,3 @@ def _build_fill_trade_linkage(parser: argparse.ArgumentParser) -> None:
         help="update only rows with exactly one safe candidate trade; ambiguous and unmatchable rows are skipped",
     )
 
-
-def _build_recover_order(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--client-order-id", required=True)
-    parser.add_argument("--exchange-order-id", required=True)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--yes", action="store_true")
-
-
-def _build_backfill_broker_order(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--exchange-order-id", required=True)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--yes", action="store_true")

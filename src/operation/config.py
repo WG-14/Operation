@@ -212,7 +212,10 @@ def resolve_strategy_name_from_env() -> str:
         return normalized
     from .compat.sma_runtime_compat import strategy_name_from_legacy_compat_env
 
-    return strategy_name_from_legacy_compat_env()
+    # An offline runtime must remain executable with an empty explicit env.
+    # This built-in strategy still passes the shared runtime-contract checks;
+    # paper execution remains bounded by its own local-only safeguards.
+    return strategy_name_from_legacy_compat_env() or "sma_with_filter"
 
 
 @dataclass(frozen=True)
@@ -478,7 +481,10 @@ def validate_runtime_strategy_set_selection(cfg: Settings) -> None:
                 live_dry_run=bool(cfg.LIVE_DRY_RUN),
                 live_real_order_armed=bool(cfg.LIVE_REAL_ORDER_ARMED),
                 approved_profile_path=approved_profile_path,
-                require_promotion_runtime=True,
+                # Paper execution is local-only and may use the documented
+                # paper-legacy parameter authority. Promotion evidence stays
+                # mandatory for every live-like startup.
+                require_promotion_runtime=live_like,
                 require_runtime_replay=live_like,
                 require_runtime_decision_adapter=True,
             )
@@ -636,6 +642,8 @@ class Settings:
     PAIR: str = resolve_market_from_env()
     INTERVAL: str = os.getenv("INTERVAL", "1m")
     EVERY: int = int(os.getenv("EVERY", "60"))  # seconds
+    HEALTH_MAX_CANDLE_AGE_SEC: int = int(os.getenv("HEALTH_MAX_CANDLE_AGE_SEC", "180"))
+    HEALTH_MAX_ERROR_COUNT: int = int(os.getenv("HEALTH_MAX_ERROR_COUNT", "3"))
 
     # strategy
     STRATEGY_NAME: str = resolve_strategy_name_from_env()
@@ -709,6 +717,11 @@ class Settings:
         "LIVE_EXECUTION_QUALITY_GATE_MODE",
         "telemetry",
     ).strip().lower() or "telemetry"
+    # Kept as explicit safety controls even while the live broker boundary is
+    # unavailable.  They are read by shared runtime validation and must never
+    # be inferred from a paper setting.
+    LIVE_DRY_RUN: bool = parse_bool_env("LIVE_DRY_RUN", "false")
+    LIVE_REAL_ORDER_ARMED: bool = parse_bool_env("LIVE_REAL_ORDER_ARMED", "false")
 
     # storage
     ENV_ROOT: str = str(PATH_MANAGER.config.env_root)
@@ -874,6 +887,9 @@ class Settings:
 
     # Live execution has no configured broker adapter.
     MAX_OPEN_ORDER_AGE_SEC: int = int(os.getenv("MAX_OPEN_ORDER_AGE_SEC", "900"))
+    OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC: int = int(
+        os.getenv("OPEN_ORDER_RECONCILE_MIN_INTERVAL_SEC", "30")
+    )
     MARKET_PREFLIGHT_BLOCK_ON_CATALOG_ERROR: bool = parse_bool_env(
         "MARKET_PREFLIGHT_BLOCK_ON_CATALOG_ERROR", ""
     )

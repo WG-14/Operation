@@ -16,9 +16,6 @@ def _settings_default(name: str):
 
 def _simple(function_name: str):
     def _handler(_args: argparse.Namespace, _context) -> int | None:
-        if function_name == "cmd_health":
-            print("[HEALTH] status=offline_ready live_broker=not_configured reason_code=LIVE_BROKER_NOT_CONFIGURED")
-            return 0
         from operation import operator_commands
 
         return getattr(operator_commands, function_name)()
@@ -85,13 +82,6 @@ def _run(args: argparse.Namespace, _context) -> None:
 
     del args
     cmd_run()
-
-
-def _live_dry_run(args: argparse.Namespace, _context) -> None:
-    from operation.operator_commands import cmd_live_dry_run
-
-    del args
-    cmd_live_dry_run()
 
 
 def _runtime_strategy_set_lint(_args: argparse.Namespace, context) -> int:
@@ -188,18 +178,6 @@ def command_specs() -> list[CommandSpec]:
             read_only=False,
             mutating=True,
             guard_policy="live_run_loop",
-            writes_db=True,
-            uses_broker=True,
-        ),
-        make_spec(
-            "live-dry-run",
-            domain="runtime",
-            handler=_live_dry_run,
-            help="run one live no-submit decision cycle",
-            description="Validate live decision flow, target_delta plan, and performance gate without broker submission.",
-            read_only=False,
-            mutating=True,
-            guard_policy="live_dry_run_loop",
             writes_db=True,
             uses_broker=True,
         ),

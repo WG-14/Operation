@@ -98,18 +98,6 @@ def command_specs() -> list[CommandSpec]:
             build=_build_strategy_plugin_validate,
             json_output_supported=True,
         ),
-        make_spec(
-            "strategy-sweep",
-            domain="strategy",
-            handler=_strategy_sweep,
-            help="run attribution-only SMA replay sweeps over local candles",
-            description=(
-                "Read-only attribution replay sweep over candles; emits signal/filter metrics "
-                "without PnL, drawdown, fill simulation, or order actions."
-            ),
-            build=_build_strategy_sweep,
-            json_output_supported=True,
-        )
     ]
 
 

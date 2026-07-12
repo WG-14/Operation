@@ -1033,6 +1033,12 @@ def compute_runtime_readiness_snapshot(conn=None) -> RuntimeReadinessSnapshot:
         blockers: list[str] = []
         categories: list[str] = []
         structured_blockers: list[dict[str, object]] = []
+        # The healthy no-incident path is a first-class state.  Initializing
+        # it before the blocker ladder prevents an empty paper ledger from
+        # falling through with an unbound recovery stage.
+        stage = "RESUME_READY"
+        operator_next_action = "run_paper_cycle"
+        recommended_command = "uv run operation run"
         if broker_position_evidence.get("balance_authority_violation") == LIVE_DRY_RUN_BROKER_TRUTH_SOURCE_VIOLATION:
             stage = "BROKER_TRUTH_SOURCE_VIOLATION"
             blockers.append(LIVE_DRY_RUN_BROKER_TRUTH_SOURCE_VIOLATION)

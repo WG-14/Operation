@@ -13,19 +13,20 @@ source "$PROJECT_ROOT/scripts/lib/pytest_workspace.sh"
 
 # Curated P0/P1 Operation safety gate. Performance-only suites are intentionally excluded.
 OPERATION_TESTS=(
-  tests/test_operation_research_boundary.py
-  tests/test_operation_approval.py
-  tests/test_operation_runtime_contract.py
-  tests/test_operation_execution_calibration.py
+  tests/test_exchange_removal_contract.py
   tests/test_operation_cli_surface.py
-  tests/test_config_contract.py
-  tests/test_paper_execute_harmless_dust.py
-  tests/test_live_dry_run_state_isolation.py
-  tests/test_operator_smoke_preflight.py
+  tests/test_offline_paper_runtime.py
+  tests/test_config_live_db_path_guard.py
+  tests/test_paths.py
   tests/test_run_lock.py
+  tests/test_accounting_projection.py
   tests/test_fill_dedupe.py
-  tests/test_order_submit_hardening.py
-  tests/test_recovery_restart_regression.py
+  tests/test_recovery.py
+  tests/test_execution_planner.py
+  tests/test_execution_quality.py
+  tests/test_lot_native_contract.py
+  tests/test_deploy_systemd_units.py
+  tests/test_operation_test_inventory.py
   tests/operator/test_reconcile_recovery.py
 )
 

@@ -1,7 +1,7 @@
 [project]
 name = "operation"
 version = "0.1.0"
-description = "Add your description here"
+description = "Safety-first offline strategy operation and execution runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
