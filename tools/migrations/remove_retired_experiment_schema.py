@@ -18,7 +18,12 @@ import struct
 import sys
 from typing import Iterable, Iterator
 
-from bithumb_bot.paths import ALLOWED_MODES, PathManager, PathPolicyError
+from bithumb_bot.paths import (
+    ALLOWED_MODES,
+    PathManager,
+    PathPolicyError,
+    validate_runtime_root_separation,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +31,9 @@ CONFIRMATION = "REMOVE_RETIRED_EXPERIMENT_SCHEMA"
 # legacy retired-schema migration only; not an active runtime feature
 RETIRED_ORDER_COLUMNS = frozenset(
     {
+        "h74_entry_plan_client_order_id",
+        "h74_position_ownership_contract_hash",
+        "h74_position_ownership_contract",
         "daily_participation_policy_hash",
         "daily_count_snapshot_hash",
         "participation_decision_hash",
@@ -150,6 +158,97 @@ def _canonical_orders_columns() -> list[str]:
         conn.close()
 
 
+def _orders_schema_objects(conn: sqlite3.Connection) -> list[dict[str, str]]:
+    """Return explicitly defined indexes/triggers attached to ``orders``."""
+    return [
+        {"type": str(row[0]), "name": str(row[1]), "sql": str(row[2])}
+        for row in conn.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE tbl_name='orders' AND type IN ('index', 'trigger') AND sql IS NOT NULL "
+            "ORDER BY type, name"
+        )
+    ]
+
+
+def _orders_auto_indexes(conn: sqlite3.Connection) -> list[tuple[str, tuple[object, ...]]]:
+    """Inventory SQLite-managed indexes separately from explicit schema objects."""
+    auto_indexes: list[tuple[str, tuple[object, ...]]] = []
+    for row in conn.execute("PRAGMA index_list(orders)"):
+        name = str(row[1])
+        sql_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+        ).fetchone()
+        if sql_row is None or sql_row[0] is not None:
+            continue
+        columns = tuple(str(column[2]) for column in conn.execute(f"PRAGMA index_info({_quote_identifier(name)})"))
+        unique = int(row[2]) if len(row) > 2 else 0
+        origin = str(row[3]) if len(row) > 3 else ""
+        partial = int(row[4]) if len(row) > 4 else 0
+        auto_indexes.append((name, (unique, origin, partial, columns)))
+    return sorted(auto_indexes)
+
+
+def _canonical_orders_schema_inventory() -> tuple[list[dict[str, str]], list[tuple[str, tuple[object, ...]]]]:
+    """Read canonical orders objects from an in-memory current schema."""
+    from bithumb_bot.db_core import ensure_schema
+
+    canonical = sqlite3.connect(":memory:")
+    try:
+        ensure_schema(canonical)
+        return _orders_schema_objects(canonical), _orders_auto_indexes(canonical)
+    finally:
+        canonical.close()
+
+
+def _unexpected_orders_schema_object_names(conn: sqlite3.Connection) -> list[str]:
+    """Fail closed when a rebuild would drop non-canonical orders objects."""
+    source_objects = _orders_schema_objects(conn)
+    canonical_objects, canonical_auto_indexes = _canonical_orders_schema_inventory()
+    canonical_object_keys = {
+        (item["type"], item["name"], item["sql"]) for item in canonical_objects
+    }
+    unexpected_names = {
+        item["name"]
+        for item in source_objects
+        if (item["type"], item["name"], item["sql"]) not in canonical_object_keys
+    }
+
+    remaining_canonical_auto = [signature for _, signature in canonical_auto_indexes]
+    for name, signature in _orders_auto_indexes(conn):
+        if signature in remaining_canonical_auto:
+            remaining_canonical_auto.remove(signature)
+        else:
+            unexpected_names.add(name)
+    return sorted(unexpected_names)
+
+
+def _orders_rebuild_contract(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Classify every source-only orders column before any mutation or backup."""
+    source_columns = set(_table_columns(conn, "orders"))
+    target_columns = set(_canonical_orders_columns())
+    source_only_columns = source_columns - target_columns
+    expected_retired_columns = source_only_columns & RETIRED_ORDER_COLUMNS
+    unexpected_source_columns = source_only_columns - RETIRED_ORDER_COLUMNS
+    return {
+        "source_only_columns": sorted(source_only_columns),
+        "expected_retired_columns": sorted(expected_retired_columns),
+        "unexpected_source_columns": sorted(unexpected_source_columns),
+    }
+
+
+def _require_orders_rebuild_contract(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    contract = _orders_rebuild_contract(conn)
+    unexpected_source_columns = contract["unexpected_source_columns"]
+    if unexpected_source_columns:
+        raise SafetyCheckError(
+            "unexpected_noncanonical_orders_columns:" + ",".join(unexpected_source_columns)
+        )
+    unexpected_objects = _unexpected_orders_schema_object_names(conn)
+    if unexpected_objects:
+        raise SafetyCheckError("unexpected_orders_schema_objects:" + ",".join(unexpected_objects))
+    return contract
+
+
 def _update_length_prefixed(digest: hashlib._Hash, payload: bytes) -> None:
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
@@ -249,9 +348,12 @@ def _path_manager_for_mode(mode: str) -> Iterator[PathManager]:
     previous_mode = os.environ.get("MODE")
     os.environ["MODE"] = mode
     try:
-        yield PathManager.from_env(PROJECT_ROOT)
+        manager = PathManager.from_env(PROJECT_ROOT)
+        if mode == "live":
+            validate_runtime_root_separation(manager.config)
+        yield manager
     except PathPolicyError as exc:
-        raise SafetyCheckError(f"invalid_mode:{exc}") from exc
+        raise SafetyCheckError(f"path_manager_policy_error:{exc}") from exc
     finally:
         if previous_mode is None:
             os.environ.pop("MODE", None)
@@ -287,7 +389,12 @@ def _validate_paths(*, db_path: Path, backup_path: Path, mode: str) -> tuple[Pat
         canonical_db = manager.primary_db_path_for_mode(normalized_mode).resolve()
         expected_db_dir = canonical_db.parent
         configured_db_raw = os.getenv("DB_PATH", "").strip()
-        configured_db = Path(configured_db_raw).expanduser().resolve() if configured_db_raw else None
+        configured_db = None
+        if configured_db_raw:
+            configured_db_candidate = Path(configured_db_raw).expanduser()
+            if not configured_db_candidate.is_absolute():
+                raise SafetyCheckError("configured_db_path_must_be_absolute")
+            configured_db = configured_db_candidate.resolve()
         if configured_db is None and resolved_db != canonical_db:
             raise SafetyCheckError("database_mode_mismatch")
         if configured_db is not None and configured_db != resolved_db:
@@ -310,9 +417,12 @@ def _migration_checkpoint(stage: str) -> None:
     """Internal test seam; production callers never supply failure injection."""
 
 
-def _rebuild_orders(conn: sqlite3.Connection) -> dict[str, object]:
+def _rebuild_orders(conn: sqlite3.Connection, *, contract: dict[str, list[str]]) -> dict[str, object]:
     source_columns = _table_columns(conn, "orders")
-    retired = sorted(RETIRED_ORDER_COLUMNS.intersection(source_columns))
+    source_only_columns = set(source_columns) - set(_canonical_orders_columns())
+    retired = sorted(RETIRED_ORDER_COLUMNS.intersection(source_only_columns))
+    if set(retired) != source_only_columns:
+        raise SafetyCheckError("orders_rebuild_removed_columns_contract_mismatch")
     canonical_sql, canonical_indexes = _canonical_orders_sql()
     target_table = "orders__retired_schema_tmp"
     target_sql = canonical_sql.replace("CREATE TABLE IF NOT EXISTS orders", f"CREATE TABLE {target_table}", 1)
@@ -334,6 +444,7 @@ def _rebuild_orders(conn: sqlite3.Connection) -> dict[str, object]:
         return {
             "rebuilt": False,
             "removed_columns": [],
+            **contract,
             "before": before,
             "after": before,
             "retained_columns": retained_columns,
@@ -357,6 +468,7 @@ def _rebuild_orders(conn: sqlite3.Connection) -> dict[str, object]:
     return {
         "rebuilt": bool(retired),
         "removed_columns": retired,
+        **contract,
         "before": before,
         "after": after,
         "retained_columns": retained_columns,
@@ -374,7 +486,21 @@ def inspect(conn: sqlite3.Connection) -> dict[str, object]:
         if "orders" in tables
         else []
     )
-    return {"retired_tables": retired_tables, "retired_order_columns": retired_columns}
+    if "orders" not in tables:
+        return {
+            "retired_tables": retired_tables,
+            "retired_order_columns": retired_columns,
+            "source_only_columns": [],
+            "expected_retired_columns": [],
+            "unexpected_source_columns": [],
+            "removed_columns": [],
+        }
+    return {
+        "retired_tables": retired_tables,
+        "retired_order_columns": retired_columns,
+        "removed_columns": [],
+        **_orders_rebuild_contract(conn),
+    }
 
 
 def _validate_backup(
@@ -422,6 +548,7 @@ def run(
     try:
         report = inspect(conn)
         report.update({"apply": bool(apply), "db_path": str(db_path), "backup_path": str(backup_path)})
+        orders_contract = _require_orders_rebuild_contract(conn) if "orders" in _table_names(conn) else None
         if not report["retired_tables"] and not report["retired_order_columns"]:
             return {
                 **report,
@@ -450,7 +577,11 @@ def run(
         )
         conn.execute("BEGIN IMMEDIATE")
         try:
-            report["orders"] = _rebuild_orders(conn)
+            if orders_contract is None:
+                raise SafetyCheckError("orders_table_missing")
+            report["orders"] = _rebuild_orders(conn, contract=orders_contract)
+            for key in ("source_only_columns", "expected_retired_columns", "unexpected_source_columns", "removed_columns"):
+                report[key] = report["orders"][key]
             _migration_checkpoint("before_retired_table_drop")
             for table in list(report["retired_tables"]):
                 conn.execute(f"DROP TABLE IF EXISTS {_quote_identifier(str(table))}")

@@ -7,6 +7,44 @@ bucket, outside the repository.
 
 legacy retired-schema migration only; not an active runtime feature
 
+## Explicit schema contract
+
+The migration removes only explicitly classified retired `orders` columns. The
+known retired H74 columns are:
+
+```text
+h74_entry_plan_client_order_id
+h74_position_ownership_contract_hash
+h74_position_ownership_contract
+```
+
+Any `orders` column that is absent from the canonical schema but not on this
+retired list fails closed as
+`unexpected_noncanonical_orders_columns:<sorted-columns>`. The migration also
+fails closed for a non-canonical user-created `orders` index or trigger as
+`unexpected_orders_schema_objects:<sorted-names>`. It never silently drops
+unknown columns or schema objects. Investigate the source schema and write a
+separate approved change specification before attempting the migration again.
+
+## Environment preparation
+
+Before a live migration, explicitly load the production environment containing
+at least:
+
+```text
+MODE
+ENV_ROOT
+RUN_ROOT
+DATA_ROOT
+LOG_ROOT
+BACKUP_ROOT
+ARCHIVE_ROOT
+DB_PATH (when used)
+```
+
+Live managed roots must be absolute, repository-external, mode-neutral, and
+must not overlap or have parent/child relationships with one another.
+
 1. Confirm the deployed revision and stop the bot service. Do not run this
    migration while the service is running or while real orders are armed.
 2. Verify a staging copy first. Do not combine code deployment and the DB
