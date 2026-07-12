@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Retire H74-era schema only after an operator establishes a safe stop point.
+"""Retire legacy experiment schema only after an operator establishes a safe stop point.
 
-This command is intentionally not part of startup migrations.  References to
-retired names in this file are legacy retired-schema migration only; not an
-active runtime feature.
+This command is intentionally not part of startup migrations. References to
+retired names in this file are legacy-schema migration only; not an active
+runtime feature.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
+import math
 import os
 from pathlib import Path
 import sqlite3
+import struct
 import sys
-from typing import Iterable
+from typing import Iterable, Iterator
+
+from bithumb_bot.paths import ALLOWED_MODES, PathManager, PathPolicyError
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIRMATION = "REMOVE_RETIRED_EXPERIMENT_SCHEMA"
 # legacy retired-schema migration only; not an active runtime feature
 RETIRED_ORDER_COLUMNS = frozenset(
@@ -46,6 +52,10 @@ class SafetyCheckError(RuntimeError):
     pass
 
 
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -55,13 +65,12 @@ def _sha256(path: Path) -> str:
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
-    return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")]
+    return [str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote_identifier(table)})")]
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:
     return {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
 
 
@@ -104,10 +113,6 @@ def _require_safe_stop(conn: sqlite3.Connection, db_path: Path, broker_local_con
     unsafe = _scalar(conn, f"SELECT COUNT(*) FROM orders WHERE status IN ({placeholders})", statuses)
     if unsafe:
         raise SafetyCheckError(f"unresolved_open_order_count={unsafe}")
-    for status in ("SUBMIT_UNKNOWN", "RECOVERY_REQUIRED", "ACCOUNTING_PENDING"):
-        count = _scalar(conn, "SELECT COUNT(*) FROM orders WHERE status=?", (status,))
-        if count:
-            raise SafetyCheckError(f"{status.lower()}_count={count}")
     if not broker_local_converged:
         raise SafetyCheckError("broker_local_position_convergence_operator_attestation_required")
 
@@ -135,19 +140,179 @@ def _canonical_orders_sql() -> tuple[str, list[str]]:
         canonical.close()
 
 
-def _orders_hash(conn: sqlite3.Connection) -> str:
+def _canonical_orders_columns() -> list[str]:
+    sql, _ = _canonical_orders_sql()
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(sql)
+        return _table_columns(conn, "orders")
+    finally:
+        conn.close()
+
+
+def _update_length_prefixed(digest: hashlib._Hash, payload: bytes) -> None:
+    digest.update(len(payload).to_bytes(8, "big"))
+    digest.update(payload)
+
+
+def _encode_sqlite_value(value: object) -> bytes:
+    """Encode SQLite values with type and length boundaries independent of repr/locale."""
+    if value is None:
+        return b"N"
+    if isinstance(value, bytes):
+        return b"B" + len(value).to_bytes(8, "big") + value
+    if isinstance(value, str):
+        encoded = value.encode("utf-8")
+        return b"T" + len(encoded).to_bytes(8, "big") + encoded
+    if isinstance(value, int):
+        return b"I" + str(value).encode("ascii")
+    if isinstance(value, float):
+        if math.isnan(value):
+            return b"Fnan"
+        return b"F" + struct.pack(">d", value)
+    raise SafetyCheckError(f"unsupported_orders_hash_value_type:{type(value).__name__}")
+
+
+def _table_rows_hash(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    columns: list[str],
+    order_by: str,
+) -> str:
+    """Hash all selected rows using explicit row and field boundaries."""
     digest = hashlib.sha256()
-    for row in conn.execute("SELECT client_order_id, status, side, qty_req, qty_filled FROM orders ORDER BY client_order_id"):
-        digest.update(repr(tuple(row)).encode("utf-8"))
-        digest.update(b"\n")
+    quoted_columns = ", ".join(_quote_identifier(column) for column in columns)
+    query = (
+        f"SELECT {quoted_columns} FROM {_quote_identifier(table)} "
+        f"ORDER BY {_quote_identifier(order_by)}"
+    )
+    for row in conn.execute(query):
+        digest.update(b"R")
+        for value in row:
+            digest.update(b"V")
+            _update_length_prefixed(digest, _encode_sqlite_value(value))
+        digest.update(b"E")
     return digest.hexdigest()
+
+
+def _orders_stats(conn: sqlite3.Connection, *, table: str, retained_columns: list[str]) -> dict[str, object]:
+    columns = _table_columns(conn, table)
+    order_by = "id" if "id" in columns else "client_order_id"
+    quoted_table = _quote_identifier(table)
+
+    def counts(column: str) -> dict[str, int]:
+        if column not in columns:
+            return {}
+        return {
+            "<NULL>" if row[0] is None else str(row[0]): int(row[1])
+            for row in conn.execute(
+                f"SELECT {_quote_identifier(column)}, COUNT(*) FROM {quoted_table} "
+                f"GROUP BY {_quote_identifier(column)} ORDER BY {_quote_identifier(column)}"
+            )
+        }
+
+    def status_count(status: str) -> int:
+        if "status" not in columns:
+            return 0
+        return _scalar(conn, f"SELECT COUNT(*) FROM {quoted_table} WHERE status=?", (status,))
+
+    return {
+        "row_count": _scalar(conn, f"SELECT COUNT(*) FROM {quoted_table}"),
+        "max_id": _scalar(conn, f"SELECT COALESCE(MAX(id), 0) FROM {quoted_table}") if "id" in columns else 0,
+        "status_counts": counts("status"),
+        "side_counts": counts("side"),
+        "exchange_order_id_non_null_count": (
+            _scalar(conn, f"SELECT COUNT(*) FROM {quoted_table} WHERE exchange_order_id IS NOT NULL")
+            if "exchange_order_id" in columns
+            else 0
+        ),
+        "submit_unknown_count": status_count("SUBMIT_UNKNOWN"),
+        "recovery_required_count": status_count("RECOVERY_REQUIRED"),
+        "accounting_pending_count": status_count("ACCOUNTING_PENDING"),
+        "retained_columns_hash": _table_rows_hash(
+            conn, table=table, columns=retained_columns, order_by=order_by
+        ),
+    }
+
+
+def _require_sqlite_integrity(conn: sqlite3.Connection, *, source: str) -> None:
+    integrity_rows = conn.execute("PRAGMA integrity_check").fetchall()
+    if integrity_rows != [("ok",)]:
+        raise SafetyCheckError(f"{source}_integrity_check_failed")
+    if conn.execute("PRAGMA foreign_key_check").fetchall():
+        raise SafetyCheckError(f"{source}_foreign_key_check_failed")
+
+
+@contextmanager
+def _path_manager_for_mode(mode: str) -> Iterator[PathManager]:
+    previous_mode = os.environ.get("MODE")
+    os.environ["MODE"] = mode
+    try:
+        yield PathManager.from_env(PROJECT_ROOT)
+    except PathPolicyError as exc:
+        raise SafetyCheckError(f"invalid_mode:{exc}") from exc
+    finally:
+        if previous_mode is None:
+            os.environ.pop("MODE", None)
+        else:
+            os.environ["MODE"] = previous_mode
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return PathManager._is_within(path, root)
+
+
+def _validate_paths(*, db_path: Path, backup_path: Path, mode: str) -> tuple[Path, Path, PathManager]:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in ALLOWED_MODES:
+        raise SafetyCheckError("invalid_mode")
+    db_path = db_path.expanduser()
+    backup_path = backup_path.expanduser()
+    if not db_path.is_absolute() or not backup_path.is_absolute():
+        raise SafetyCheckError("db_and_backup_paths_must_be_absolute")
+    resolved_db = db_path.resolve()
+    resolved_backup = backup_path.resolve()
+    project_root = PROJECT_ROOT.resolve()
+    if _is_within(resolved_db, project_root):
+        raise SafetyCheckError("database_path_inside_repository")
+    if _is_within(resolved_backup, project_root):
+        raise SafetyCheckError("backup_path_inside_repository")
+    if resolved_db == resolved_backup:
+        raise SafetyCheckError("backup_path_must_differ_from_database")
+    if not resolved_db.is_file():
+        raise SafetyCheckError("database_path_missing")
+
+    with _path_manager_for_mode(normalized_mode) as manager:
+        canonical_db = manager.primary_db_path_for_mode(normalized_mode).resolve()
+        expected_db_dir = canonical_db.parent
+        configured_db_raw = os.getenv("DB_PATH", "").strip()
+        configured_db = Path(configured_db_raw).expanduser().resolve() if configured_db_raw else None
+        if configured_db is None and resolved_db != canonical_db:
+            raise SafetyCheckError("database_mode_mismatch")
+        if configured_db is not None and configured_db != resolved_db:
+            raise SafetyCheckError("database_mode_mismatch")
+        if not _is_within(resolved_db, expected_db_dir):
+            raise SafetyCheckError("database_mode_mismatch")
+        backup_bucket = (manager.config.backup_root / normalized_mode / "db").resolve()
+        if not _is_within(resolved_backup, backup_bucket):
+            if PathManager._contains_segment(resolved_backup, "live" if normalized_mode == "paper" else "paper"):
+                raise SafetyCheckError("backup_mode_mismatch")
+            raise SafetyCheckError("backup_path_outside_managed_db_bucket")
+        if PathManager._contains_segment(resolved_db, "live" if normalized_mode == "paper" else "paper"):
+            raise SafetyCheckError("database_mode_mismatch")
+        if PathManager._contains_segment(resolved_backup, "live" if normalized_mode == "paper" else "paper"):
+            raise SafetyCheckError("backup_mode_mismatch")
+        return resolved_db, resolved_backup, manager
+
+
+def _migration_checkpoint(stage: str) -> None:
+    """Internal test seam; production callers never supply failure injection."""
 
 
 def _rebuild_orders(conn: sqlite3.Connection) -> dict[str, object]:
     source_columns = _table_columns(conn, "orders")
     retired = sorted(RETIRED_ORDER_COLUMNS.intersection(source_columns))
-    if not retired:
-        return {"rebuilt": False, "removed_columns": [], "row_count": _scalar(conn, "SELECT COUNT(*) FROM orders")}
     canonical_sql, canonical_indexes = _canonical_orders_sql()
     target_table = "orders__retired_schema_tmp"
     target_sql = canonical_sql.replace("CREATE TABLE IF NOT EXISTS orders", f"CREATE TABLE {target_table}", 1)
@@ -155,88 +320,163 @@ def _rebuild_orders(conn: sqlite3.Connection) -> dict[str, object]:
         target_sql = canonical_sql.replace("CREATE TABLE orders", f"CREATE TABLE {target_table}", 1)
     if target_sql == canonical_sql:
         raise SafetyCheckError("canonical_orders_schema_unrecognized")
-    # Canonical names are stable and come from the schema itself; obtain them from a disposable connection.
     template = sqlite3.connect(":memory:")
     try:
         template.execute(target_sql)
         target_columns = _table_columns(template, target_table)
     finally:
         template.close()
-    copy_columns = [name for name in target_columns if name in source_columns]
-    if not copy_columns:
+    retained_columns = [name for name in target_columns if name in source_columns]
+    if not retained_columns:
         raise SafetyCheckError("canonical_orders_copy_columns_missing")
-    before_count = _scalar(conn, "SELECT COUNT(*) FROM orders")
-    before_hash = _orders_hash(conn)
+    before = _orders_stats(conn, table="orders", retained_columns=retained_columns)
+    if not retired:
+        return {
+            "rebuilt": False,
+            "removed_columns": [],
+            "before": before,
+            "after": before,
+            "retained_columns": retained_columns,
+            "retained_rows_hash": str(before["retained_columns_hash"]),
+        }
     conn.execute(target_sql)
-    quoted = ", ".join(f'"{name}"' for name in copy_columns)
-    conn.execute(f"INSERT INTO {target_table} ({quoted}) SELECT {quoted} FROM orders")
-    copied_count = _scalar(conn, f"SELECT COUNT(*) FROM {target_table}")
-    if copied_count != before_count:
-        raise SafetyCheckError(f"orders_copy_row_count_mismatch:{before_count}!={copied_count}")
-    copied_hash = hashlib.sha256()
-    for row in conn.execute(
-        f"SELECT client_order_id, status, side, qty_req, qty_filled FROM {target_table} ORDER BY client_order_id"
-    ):
-        copied_hash.update(repr(tuple(row)).encode("utf-8"))
-        copied_hash.update(b"\n")
-    if copied_hash.hexdigest() != before_hash:
-        raise SafetyCheckError("orders_copy_core_hash_mismatch")
+    quoted = ", ".join(_quote_identifier(name) for name in retained_columns)
+    conn.execute(f"INSERT INTO {_quote_identifier(target_table)} ({quoted}) SELECT {quoted} FROM orders")
+    copied = _orders_stats(conn, table=target_table, retained_columns=retained_columns)
+    if copied != before:
+        raise SafetyCheckError("orders_copy_retained_data_mismatch")
+    _migration_checkpoint("after_orders_copy")
+    _migration_checkpoint("before_orders_drop")
     conn.execute("DROP TABLE orders")
-    conn.execute(f"ALTER TABLE {target_table} RENAME TO orders")
+    conn.execute(f"ALTER TABLE {_quote_identifier(target_table)} RENAME TO orders")
     for index_sql in canonical_indexes:
         conn.execute(index_sql)
-    return {"rebuilt": True, "removed_columns": retired, "row_count": before_count, "core_hash": before_hash}
+    after = _orders_stats(conn, table="orders", retained_columns=retained_columns)
+    if after != before:
+        raise SafetyCheckError("orders_rebuild_retained_data_mismatch")
+    return {
+        "rebuilt": bool(retired),
+        "removed_columns": retired,
+        "before": before,
+        "after": after,
+        "retained_columns": retained_columns,
+        "retained_rows_hash": str(before["retained_columns_hash"]),
+    }
 
 
 def inspect(conn: sqlite3.Connection) -> dict[str, object]:
     tables = _table_names(conn)
-    retired_tables = sorted(name for name in tables if name in RETIRED_TABLES or name.startswith(RETIRED_TABLE_PREFIXES))
-    retired_columns = sorted(RETIRED_ORDER_COLUMNS.intersection(_table_columns(conn, "orders"))) if "orders" in tables else []
+    retired_tables = sorted(
+        name for name in tables if name in RETIRED_TABLES or name.startswith(RETIRED_TABLE_PREFIXES)
+    )
+    retired_columns = (
+        sorted(RETIRED_ORDER_COLUMNS.intersection(_table_columns(conn, "orders")))
+        if "orders" in tables
+        else []
+    )
     return {"retired_tables": retired_tables, "retired_order_columns": retired_columns}
 
 
-def run(*, db_path: Path, backup_path: Path, apply: bool, confirmation: str, broker_local_converged: bool) -> dict[str, object]:
-    if not db_path.is_absolute() or not backup_path.is_absolute():
-        raise SafetyCheckError("db_and_backup_paths_must_be_absolute")
-    if db_path.resolve() == backup_path.resolve():
-        raise SafetyCheckError("backup_path_must_differ_from_database")
-    if not db_path.is_file():
-        raise SafetyCheckError("database_path_missing")
+def _validate_backup(
+    *, conn: sqlite3.Connection, backup_path: Path, retained_columns: list[str]
+) -> tuple[str, dict[str, object]]:
+    if not backup_path.is_file() or backup_path.stat().st_size <= 0:
+        raise SafetyCheckError("backup_integrity_check_failed")
+    source_stats = _orders_stats(conn, table="orders", retained_columns=retained_columns)
+    source_table_counts = {
+        table: _scalar(conn, f"SELECT COUNT(*) FROM {_quote_identifier(table)}")
+        for table in sorted(_table_names(conn))
+        if not table.startswith("sqlite_")
+    }
+    backup_conn = sqlite3.connect(backup_path)
+    try:
+        _require_sqlite_integrity(backup_conn, source="backup")
+        backup_stats = _orders_stats(backup_conn, table="orders", retained_columns=retained_columns)
+        backup_table_counts = {
+            table: _scalar(backup_conn, f"SELECT COUNT(*) FROM {_quote_identifier(table)}")
+            for table in sorted(_table_names(backup_conn))
+            if not table.startswith("sqlite_")
+        }
+    finally:
+        backup_conn.close()
+    if backup_table_counts != source_table_counts:
+        raise SafetyCheckError("backup_table_row_count_mismatch")
+    if backup_stats != source_stats:
+        raise SafetyCheckError("backup_orders_hash_mismatch")
+    return _sha256(backup_path), backup_stats
+
+
+def run(
+    *,
+    db_path: Path,
+    backup_path: Path,
+    mode: str,
+    apply: bool,
+    confirmation: str,
+    broker_local_converged: bool,
+) -> dict[str, object]:
+    db_path, backup_path, manager = _validate_paths(
+        db_path=db_path, backup_path=backup_path, mode=mode
+    )
     conn = sqlite3.connect(db_path)
     try:
         report = inspect(conn)
-        report.update({"apply": apply, "db_path": str(db_path), "backup_path": str(backup_path)})
+        report.update({"apply": bool(apply), "db_path": str(db_path), "backup_path": str(backup_path)})
+        if not report["retired_tables"] and not report["retired_order_columns"]:
+            return {
+                **report,
+                "status": "already_clean",
+                "backup_created": False,
+                "database_modified": False,
+            }
         if not apply:
-            return report
+            return {**report, "status": "dry_run", "backup_created": False, "database_modified": False}
         if confirmation != CONFIRMATION:
             raise SafetyCheckError("explicit_confirmation_required")
         _require_safe_stop(conn, db_path, broker_local_converged)
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        _require_sqlite_integrity(conn, source="source_database")
+        if backup_path.exists():
+            raise SafetyCheckError("backup_path_already_exists")
+        retained_columns = [
+            name for name in _canonical_orders_columns() if name in _table_columns(conn, "orders")
+        ]
+        if not retained_columns:
+            raise SafetyCheckError("canonical_orders_copy_columns_missing")
+        manager.ensure_parent_dir(backup_path)
         with sqlite3.connect(backup_path) as backup_conn:
             conn.backup(backup_conn)
-        report["backup_sha256"] = _sha256(backup_path)
+        backup_sha256, backup_orders = _validate_backup(
+            conn=conn, backup_path=backup_path, retained_columns=retained_columns
+        )
         conn.execute("BEGIN IMMEDIATE")
         try:
             report["orders"] = _rebuild_orders(conn)
+            _migration_checkpoint("before_retired_table_drop")
             for table in list(report["retired_tables"]):
-                conn.execute(f'DROP TABLE IF EXISTS "{table}"')
-            fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-            if fk_errors or integrity != "ok":
-                raise SafetyCheckError("post_migration_integrity_check_failed")
+                conn.execute(f"DROP TABLE IF EXISTS {_quote_identifier(str(table))}")
+            _migration_checkpoint("before_final_integrity_check")
+            _require_sqlite_integrity(conn, source="post_migration")
             conn.commit()
-            report["foreign_key_check"] = "ok"
-            report["integrity_check"] = str(integrity)
-            return report
         except Exception:
             conn.rollback()
             raise
+        return {
+            **report,
+            "status": "applied",
+            "backup_created": True,
+            "database_modified": True,
+            "backup_sha256": backup_sha256,
+            "backup_orders": backup_orders,
+            "foreign_key_check": "ok",
+            "integrity_check": "ok",
+        }
     finally:
         conn.close()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=sorted(ALLOWED_MODES), required=True)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--backup", type=Path, required=True)
     parser.add_argument("--apply", action="store_true", help="perform migration; default is dry-run")
@@ -245,8 +485,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = run(
-            db_path=args.db.expanduser().resolve(),
-            backup_path=args.backup.expanduser().resolve(),
+            db_path=args.db,
+            backup_path=args.backup,
+            mode=str(args.mode),
             apply=bool(args.apply),
             confirmation=str(args.confirm),
             broker_local_converged=bool(args.broker_local_converged),
